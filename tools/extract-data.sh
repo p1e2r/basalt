@@ -7,8 +7,8 @@ cd "$(dirname "$0")/.."
 VER=26.2
 mkdir -p vanilla
 if [ ! -f vanilla/server.jar ]; then
-  URL=$(curl -s https://piston-meta.mojang.com/mc/game/version_manifest_v2.json | python3 -c "import sys,json;print([v['url'] for v in json.load(sys.stdin)['versions'] if v['id']=='$VER'][0])")
-  SRV=$(curl -s "$URL" | python3 -c "import sys,json;print(json.load(sys.stdin)['downloads']['server']['url'])")
+  URL=$(curl -s https://piston-meta.mojang.com/mc/game/version_manifest_v2.json | "${PYTHON:-python3}" -c "import sys,json;print([v['url'] for v in json.load(sys.stdin)['versions'] if v['id']=='$VER'][0])")
+  SRV=$(curl -s "$URL" | "${PYTHON:-python3}" -c "import sys,json;print(json.load(sys.stdin)['downloads']['server']['url'])")
   curl -L -o vanilla/server.jar "$SRV"
 fi
 JAVA=${JAVA:-java}
