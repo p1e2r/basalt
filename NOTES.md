@@ -367,3 +367,46 @@ Measured 2026-11-23 by driving the real 26.2 client through tools/oracle-mod's c
 - Container clicks go out as `container_click(window, state_id, slot i16, button i8, mode varint, changed slots [slot, hashed stack], hashed carried)`; hashed stack = present bool, item varint, count varint, added components (type varint + int hash), removed component types. Drags are mode 5 packets: start (-999, button `type<<2`), one per slot (`type<<2|1`), end (-999, `type<<2|2`).
 - Client parity gaps found by client-input (sprint `player_command`, shift-click prediction, a swing packet per dig tick) are fixed: 0 divergences (2026-11-23).
 - Harness notes: an unfocused window never grabs the mouse, and attack/dig (`continueAttack`) needs the grab flag, so the mod sets it while in a world. The 25700-25799 port range is shared with other agents: `free_port` can race, `client-input` retries the server start.
+
+## Block placement rules (crates/server/src/game/place.rs) — measured with `basalt-check --fuzz place` against vanilla 26.2
+Placement went from 178/300 differing cases (seed 1) to 25 (all but 2 are flowing water, see "Not modelled").
+- Clicked block: a plain click toggles trapdoors, wooden/copper doors and fence gates (and runs neighbour updates);
+  sneaking with an item in hand places instead. Replaceable = tag `replaceable` (snow only at layers=1).
+- `setblock` (not `fill`) gives the new block the connection shape its neighbours imply (fence/wall/pane/bars/stairs) and
+  runs neighbour updates; it does not self-check survival (floating torches/snow/lanterns stay until a neighbour changes).
+- Neighbour updates after a placement: bush-like blocks (flowers, saplings, snow layer, carpets, crops, vines, ...) re-check
+  survival on any neighbour change; attached blocks (torches, lanterns, signs, buttons, plates, rails, doors, candles, ...)
+  only break when the update comes from their support side. Farmland under a solid block becomes dirt. Beds are placed
+  WITHOUT neighbour updates (a floating snow layer beside a new bed survives).
+- Support: `sturdy(face)` = full square face (full cubes, glass, slabs by type, stairs: bottom/top half + the face the stair
+  FACES; not farmland/soul sand/mud/leaves). `center_support` additionally accepts fence/wall/bars tops and chest undersides:
+  torches, candles, sea pickles, lanterns, pressure plates, hanging-sign ceilings use it. Plants use the `supports_*` block tags
+  (vegetation, crops, cactus, sugar cane, bamboo, ...). Doors/rails/repeaters/pressure plates/carpets/cake etc. as in vanilla.
+  Wall signs need a sturdy face (a fence is refused); wall banners only need a solid block (farmland ok); wall hanging signs also
+  accept the side of stairs (not slabs).
+- Facing: stairs = look direction; trapdoor = clicked side face (cursor.y>0.5 -> top) unless the clicked block was replaced, then
+  the opposite of the look direction (half = top unless clicking the top face); anvil = clockwise of look; decorated pot / fence
+  gate / door / bed = look; dispenser/dropper/piston = opposite of the NEAREST look direction (f32 ordering, exact ties keep
+  down, up, north, south, west, east); observer = the nearest look direction itself; shulker box / end rod / lightning rod /
+  amethyst = clicked face; hopper = opposite of a side face else down.
+- StandingAndWall items (torch, sign, banner, skull, coral fan): a side click attaches to the clicked block (wall variant) when it
+  survives (skulls: always); otherwise the look directions are walked: DOWN tries the standing variant, others the wall variant.
+  Skulls never use the walk for a non-side click. Rotation: signs/banners `floor((yaw+180)*16/360+0.5)&15`, skulls `floor(yaw*16/360+0.5)&15`.
+- Buttons/levers/grindstone/ladder/tripwire hook: the clicked face's candidate is tried first, then the look-direction walk.
+  Grindstone accepts any non-replaceable neighbour; buttons need a sturdy face.
+- Hanging sign: walk the look directions (DOWN skipped): UP = ceiling variant (rotation as signs, attached=true), horizontals =
+  wall variant facing away from the look direction (never along the clicked face's axis).
+- Doors: both halves, hinge from the two side columns (solid blocks / neighbouring door) else from the cursor; lower half needs a
+  sturdy top below. Beds: head one block ahead, both cells replaceable, no support needed. Tall plants need the upper cell free.
+- Connections: fences connect to same-kind fences, perpendicular gates and sturdy faces (not leaves/pumpkins/shulkers); panes and
+  bars to sturdy faces, walls, panes/bars; walls to sturdy faces, walls, panes/bars (low/tall by the block above; `up` false only for a
+  straight line without a post-override block above); stairs shape (outer/inner corners) from front/back stair neighbours.
+- Waterlogged only when the cell is a water SOURCE (the coral/pickle defaults are waterlogged=true and must be reset). Leaves
+  placed by a player are `persistent=true`. Concrete powder placed in/next to water becomes concrete. Gravity blocks over open
+  space fall (resolved instantly, no falling-block entity yet). Farmland item under a solid block becomes dirt.
+- Slabs: bottom/top by face and cursor.y>0.5; clicking the matching face of a single slab of the same block makes a double slab.
+- Not modelled (known divergences): flowing water spreading from placed/`setblock`ed sources (M6 fluids), random-tick farmland
+  drying, bell attachment, hanging sign placed on top of a block (rotation=0/attached=false), random vine/propagule ages.
+- Crafting table window, shift-click from the player inventory (slots 10..45): the 3x3 grid is tried first (merge, then empty
+  cells); if anything fits there the rest stays in the source slot (no fallback to the other inventory section). Shield (offhand
+  equippable) shift-clicks into the offhand slot first.

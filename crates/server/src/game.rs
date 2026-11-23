@@ -11,6 +11,7 @@ mod inv;
 mod items;
 mod mob;
 mod path;
+mod place;
 mod spawn;
 mod track;
 
@@ -172,12 +173,7 @@ fn parse_time_arg(s: &str) -> Option<i32> {
 fn horizontal_facing(yaw: f32) -> &'static str {
     match (((yaw.rem_euclid(360.0) + 45.0) / 90.0) as i32) & 3 { 0 => "south", 1 => "west", 2 => "north", _ => "east" }
 }
-fn opposite(f: &str) -> &'static str { match f { "south" => "north", "north" => "south", "east" => "west", "west" => "east", "up" => "down", _ => "up" } }
 
-fn replaceable(state: u32) -> bool {
-    if state == 0 { return true; }
-    matches!(BlockState(state).name(), "air" | "cave_air" | "void_air" | "water" | "lava" | "short_grass" | "fern" | "dead_bush" | "seagrass" | "tall_seagrass" | "snow" | "vine" | "fire" | "structure_void" | "light" | "tall_grass" | "large_fern" | "bubble_column")
-}
 
 impl Game {
     pub fn new(sh: Arc<Shared>, gen: Arc<dyn Generator>) -> Game {
@@ -704,51 +700,34 @@ impl Game {
             return;
         }
         let p = &self.players[&eid];
+        // doors / trapdoors / fence gates: a plain click toggles them (sneaking with an item in hand places instead)
+        if p.gamemode != 3 && !(p.sneaking && p.inv[36 + p.held].count > 0) && self.use_block(b) { return; }
+        let p = &self.players[&eid];
         if p.gamemode == 3 || p.gamemode == 2 { return; }
         let slot = 36 + p.held; let st = p.inv[slot];
         if st.count <= 0 { return; }
         let Some(item_name) = reg::ITEM.get(st.item as usize) else { return };
-        let Some(mut state) = block_default(item_name).or_else(|| block_for_item(item_name)) else { return };
-        let clicked = self.world.get_block(b[0], b[1], b[2]);
-        let t = if replaceable(clicked) && BlockState(clicked).name() != "water" { b } else { [b[0] + FACE[face][0], b[1] + FACE[face][1], b[2] + FACE[face][2]] };
-        if !replaceable(self.world.get_block(t[0], t[1], t[2])) { return; }
+        let Some(state) = block_default(item_name).or_else(|| block_for_item(item_name)) else { return };
+        let (yaw, pitch, sneaking) = (p.yaw, p.pitch, p.sneaking);
+        let clicked = BlockState(self.world.get_block(b[0], b[1], b[2]));
+        let replacing = self.replaceable_for(clicked) && clicked.name() != "water";
+        let click = place::Click { face, cursor, yaw, pitch, replacing_clicked: replacing };
+        let merging = clicked.get("type").is_some() && clicked.block().kind.ends_with("slab") && self.placement(state, b, &click).is_some_and(|v| BlockState(v[0].1).get("type") == Some("double"));
+        let t = if replacing || merging { b } else { [b[0] + FACE[face][0], b[1] + FACE[face][1], b[2] + FACE[face][2]] };
+        if !merging && !self.replaceable_for(BlockState(self.world.get_block(t[0], t[1], t[2]))) { return; }
         if t[1] < basalt_world::MIN_Y || t[1] >= basalt_world::MIN_Y + basalt_world::HEIGHT { return; }
-        // don't place inside a player
-        for o in self.players.values() {
-            let (lo, hi) = ([o.pos[0] - 0.3, o.pos[1], o.pos[2] - 0.3], [o.pos[0] + 0.3, o.pos[1] + 1.8, o.pos[2] + 0.3]);
-            if (0..3).all(|i| (t[i] as f64) < hi[i] && (t[i] as f64 + 1.0) > lo[i]) && BlockState(state).block().kind != "flower" { return; }
+        let Some(mut blocks) = self.placement(state, t, &click) else { return };
+        // don't place a colliding block inside a player
+        if basalt_world::props::props(blocks[0].1).blocks_motion() {
+            for o in self.players.values() {
+                let (lo, hi) = ([o.pos[0] - 0.3, o.pos[1], o.pos[2] - 0.3], [o.pos[0] + 0.3, o.pos[1] + 1.8, o.pos[2] + 0.3]);
+                if (0..3).all(|i| (t[i] as f64) < hi[i] && (t[i] as f64 + 1.0) > lo[i]) { return; }
+            }
         }
-        // orientation for common block shapes
-        let blk = BlockState(state).block();
-        let has = |k: &str| blk.props.iter().any(|(n, _)| *n == k);
-        let look = horizontal_facing(p.yaw);
-        let sneaking = p.sneaking;
-        let nearest_look = { let (y, pi) = ((p.yaw as f64).to_radians(), (p.pitch as f64).to_radians()); let v = [-y.sin() * pi.cos(), -pi.sin(), y.cos() * pi.cos()];
-            let a = (0..3).max_by(|&i, &j| v[i].abs().partial_cmp(&v[j].abs()).unwrap_or(std::cmp::Ordering::Equal)).unwrap_or(2);
-            match (a, v[a] > 0.0) { (0, true) => "east", (0, false) => "west", (1, true) => "up", (1, false) => "down", (_, true) => "south", _ => "north" } };
-        let face_dir = ["down", "up", "north", "south", "west", "east"][face];
-        if has("axis") { state = with_prop(state, "axis", match face { 0 | 1 => "y", 2 | 3 => "z", _ => "x" }); }
-        if has("facing") {
-            let vertical_ok = blk.props.iter().find(|(n, _)| *n == "facing").map(|(_, v)| v.contains(&"up")).unwrap_or(false);
-            let f = if blk.name == "barrel" { opposite(nearest_look) }
-                else if vertical_ok && matches!(blk.kind, "piston" | "dispenser" | "observer" | "barrel" | "end_rod" | "lightning_rod" | "amethyst_cluster") { face_dir }
-                else if blk.kind == "wall_torch" || blk.name.ends_with("wall_sign") || blk.kind == "ladder" { face_dir }
-                else if matches!(blk.kind, "stair" | "door" | "trapdoor" | "fence_gate" | "bed" | "button" | "lever") { look } else { opposite(look) };
-            state = with_prop(state, "facing", f);
-        }
-        if has("half") && blk.kind == "stair" || blk.kind == "trapdoor" { state = with_prop(state, "half", if face == 0 || (face > 1 && cursor[1] > 0.5) { "top" } else { "bottom" }); }
-        if blk.kind == "slab" { state = with_prop(state, "type", if face == 0 || (face > 1 && cursor[1] > 0.5) { "top" } else { "bottom" }); }
-        // torches on walls become wall torches
-        if face >= 2 && matches!(blk.name, "torch" | "soul_torch" | "redstone_torch" | "copper_torch") {
-            if let Some(ws) = block_default(&blk.name.replace("torch", "wall_torch")) { state = with_prop(ws, "facing", face_dir); }
-        }
-        if face < 2 && matches!(blk.name, "torch" | "soul_torch" | "redstone_torch" | "copper_torch") && face == 0 { return; }
-        if BlockState(self.world.get_block(t[0], t[1], t[2])).name() == "water" && has("waterlogged") { state = with_prop(state, "waterlogged", "true"); }
-        if matches!(blk.name, "chest" | "trapped_chest") { state = self.chest_placed(t, state, sneaking, face); }
-        self.set_block(t[0], t[1], t[2], state);
-        if blk.kind == "door" || blk.name.ends_with("_door") {
-            if replaceable(self.world.get_block(t[0], t[1] + 1, t[2])) { self.set_block(t[0], t[1] + 1, t[2], with_prop(state, "half", "upper")); }
-        }
+        if matches!(BlockState(state).name(), "chest" | "trapped_chest") { blocks[0].1 = self.chest_placed(t, blocks[0].1, sneaking, face); }
+        for (q, s) in &blocks { self.set_block(q[0], q[1], q[2], *s); }
+        // beds are placed without neighbour shape updates (measured: a floating snow layer beside a new bed survives)
+        if BlockState(state).block().kind != "bed" { for (q, _) in &blocks { self.update_neighbors(*q, 0); } }
         let p = self.players.get_mut(&eid).unwrap();
         if p.gamemode != 1 { p.inv[slot].count -= 1; if p.inv[slot].count <= 0 { p.inv[slot] = Stack::default(); } Self::send_window(p); }
     }
@@ -861,7 +840,7 @@ impl Game {
                         let (lo, hi) = if n == 3 { ([c[0], c[1], c[2]], [c[0], c[1], c[2]]) } else { ([c[0].min(c[3]), c[1].min(c[4]), c[2].min(c[5])], [c[0].max(c[3]), c[1].max(c[4]), c[2].max(c[5])]) };
                         let vol = (hi[0] - lo[0] + 1) as i64 * (hi[1] - lo[1] + 1) as i64 * (hi[2] - lo[2] + 1) as i64;
                         if vol > 32768 { reply(self, format!("Too many blocks ({vol} > 32768)")); return; }
-                        for x in lo[0]..=hi[0] { for y in lo[1]..=hi[1] { for z in lo[2]..=hi[2] { self.ensure_chunk(x >> 4, z >> 4); self.set_block(x, y, z, st); } } }
+                        for x in lo[0]..=hi[0] { for y in lo[1]..=hi[1] { for z in lo[2]..=hi[2] { self.ensure_chunk(x >> 4, z >> 4); if n == 3 { self.set_block_shaped(x, y, z, st); } else { self.set_block(x, y, z, st); } } } }
                         reply(self, format!("Changed {vol} block(s)"));
                     }
                     _ => reply(self, format!("Usage: /{} <x y z{}> <block[props]>", args[0], if n == 6 { " x y z" } else { "" })),

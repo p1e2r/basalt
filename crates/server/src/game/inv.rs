@@ -123,6 +123,22 @@ impl Game {
         if let Some(p) = self.players.get_mut(&eid) { Self::send_window(p); }
     }
 
+    /// Move a stack into the crafting table grid (merge first, then empty cells). Returns (leftover, anything moved).
+    fn move_into_grid(&mut self, eid: i32, mut s: Stack) -> (Stack, bool) {
+        let max = self.max_stack(s.item);
+        let p = self.players.get_mut(&eid).unwrap();
+        let before = s.count;
+        for pass in 0..2 {
+            for t in p.table_grid.iter_mut() {
+                if s.count == 0 { break; }
+                if pass == 0 && t.count > 0 && t.item == s.item && t.count < max { let n = (max - t.count).min(s.count); t.count += n; s.count -= n; }
+                if pass == 1 && t.count == 0 { let n = max.min(s.count); *t = Stack { count: n, ..s }; s.count -= n; }
+            }
+        }
+        if s.count == 0 { s = Stack::default(); }
+        (s, s.count != before)
+    }
+
     /// Move a stack into the inventory range [lo, hi) (merge first, then empty slots). Returns leftover.
     fn move_into(&mut self, eid: i32, mut s: Stack, ranges: &[(usize, usize)]) -> Stack {
         let max = self.max_stack(s.item);
@@ -221,11 +237,15 @@ impl Game {
                         let mut ranges = main_hot(win, from);
                         if win == Window::Inventory && from.map(|i| i >= 9).unwrap_or(false) {
                             if let Some(eq) = self.data.item(s.item).and_then(|i| i.equip_slot.clone()) {
-                                let a = match eq.as_str() { "head" => 5, "chest" => 6, "legs" => 7, "feet" => 8, _ => 0 };
+                                let a = match eq.as_str() { "head" => 5, "chest" => 6, "legs" => 7, "feet" => 8, "offhand" => 45, _ => 0 };
                                 if a != 0 && self.players[&eid].inv[a].count == 0 { ranges.insert(0, (a, a + 1)); }
                             }
                         }
-                        let left = self.move_into(eid, s, &ranges);
+                        // crafting table: shift-clicking from the player inventory fills the 3x3 grid first; if anything fit there
+                        // the rest stays in the source slot (no fallback to the other inventory section)
+                        let to_grid = matches!(win, Window::Crafting(_)) && matches!(l, Loc::Inv(_));
+                        let (s, moved) = if to_grid { self.move_into_grid(eid, s) } else { (s, false) };
+                        let left = if moved { s } else { self.move_into(eid, s, &ranges) };
                         self.players.get_mut(&eid).unwrap().set(l, left);
                     }
                 }
