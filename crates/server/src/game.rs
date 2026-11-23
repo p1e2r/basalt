@@ -17,6 +17,7 @@ mod place;
 mod randomtick;
 mod spawn;
 mod track;
+mod xporb;
 
 use crate::conn::Shared;
 use crate::gen::{GenPool, Generator};
@@ -96,7 +97,9 @@ struct Player {
     /// furnace properties last sent to this player (container_set_data diffing)
     data_sent: [i32; 4],
     /// experience points (total)
-    xp: i32,
+    /// experience: level, progress into it (0..1, vanilla keeps a float), points ever gained (the
+    /// total set_experience reports; level commands leave it alone — measured, m5_xp_command)
+    xp_level: i32, xp_progress: f32, xp: i32,
     // environment
     air: i32,
     fire_ticks: i32,
@@ -143,6 +146,7 @@ pub struct Game {
     gravity_checks: Vec<(u64, [i32; 3])>,
     /// gamerule random_tick_speed (vanilla default 3)
     random_tick_speed: i32,
+    orbs: HashMap<i32, xporb::Orb>,
     /// container block entities of loaded chunks (chests, barrels, furnaces)
     bes: HashMap<[i32; 3], container::Be>,
     path_budget: u32,
@@ -185,7 +189,7 @@ impl Game {
         let world = World::new(dir.as_ref().map(|d| d.join("region")));
         let player_type = registry_id(reg::ENTITY_TYPE, "player").unwrap_or(0);
         let data = sh.data.clone();
-        let mut g = Game { sh, world, gen: GenPool::new(gen), players: HashMap::new(), tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir, data, commands_body: None, weather: Weather::default(), items: HashMap::new(), mobs: HashMap::new(), arrows: HashMap::new(), fallers: HashMap::new(), gravity_checks: Vec::new(), random_tick_speed: 3, bes: HashMap::new(), path_budget: 0, no_spawning: false, rng: rand::rngs::StdRng::from_entropy() };
+        let mut g = Game { sh, world, gen: GenPool::new(gen), players: HashMap::new(), tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir, data, commands_body: None, weather: Weather::default(), items: HashMap::new(), mobs: HashMap::new(), arrows: HashMap::new(), fallers: HashMap::new(), gravity_checks: Vec::new(), random_tick_speed: 3, orbs: HashMap::new(), bes: HashMap::new(), path_budget: 0, no_spawning: false, rng: rand::rngs::StdRng::from_entropy() };
         g.no_spawning = g.sh.cfg.no_spawning;
         g.commands_body = crate::commands::build_packet(&g.sh.cfg.data_dir, crate::commands::IMPLEMENTED);
         if g.commands_body.is_none() { log::warn!("no reports/commands.json: using the built-in command tree"); }
@@ -214,7 +218,7 @@ impl Game {
         let Some(d) = &self.dir else { return };
         let inv: Vec<_> = p.inv.iter().enumerate().filter(|(_, s)| s.count > 0).map(|(i, s)| serde_json::json!([i, s.item, s.count, s.damage, s.ench.iter().filter(|e| e.1 > 0).map(|e| [e.0 as u32, e.1 as u32]).collect::<Vec<_>>()])).collect();
         let j = serde_json::json!({ "pos": p.pos, "yaw": p.yaw, "pitch": p.pitch, "gamemode": p.gamemode, "held": p.held, "inv": inv, "flying": p.flying,
-            "xp": p.xp, "health": p.health, "food": p.food, "saturation": p.saturation, "dead": p.dead, "air": p.air, "fire": p.fire_ticks,
+            "xp": p.xp, "xp_level": p.xp_level, "xp_progress": p.xp_progress, "health": p.health, "food": p.food, "saturation": p.saturation, "dead": p.dead, "air": p.air, "fire": p.fire_ticks,
             "effects": p.effects.iter().map(|(id, (a, t))| [*id as i64, *a as i64, *t as i64]).collect::<Vec<_>>() });
         let _ = std::fs::create_dir_all(d.join("players"));
         let _ = std::fs::write(d.join("players").join(format!("{}.json", p.uuid)), j.to_string());
@@ -228,6 +232,10 @@ impl Game {
         p.gamemode = v["gamemode"].as_u64().unwrap_or(p.gamemode as u64) as u8; p.held = v["held"].as_u64().unwrap_or(0).min(8) as usize;
         p.flying = v["flying"].as_bool().unwrap_or(false);
         p.xp = v["xp"].as_i64().unwrap_or(0) as i32;
+        match (v["xp_level"].as_i64(), v["xp_progress"].as_f64()) {
+            (Some(l), Some(pr)) => { p.xp_level = l as i32; p.xp_progress = pr as f32; }
+            _ => { let (l, pr) = container::xp_level(p.xp); p.xp_level = l; p.xp_progress = pr; }
+        }
         p.health = v["health"].as_f64().unwrap_or(20.0) as f32; p.food = v["food"].as_i64().unwrap_or(20) as i32;
         p.saturation = v["saturation"].as_f64().unwrap_or(5.0) as f32; p.dead = v["dead"].as_bool().unwrap_or(false);
         p.air = v["air"].as_i64().unwrap_or(env::MAX_AIR as i64) as i32; p.fire_ticks = v["fire"].as_i64().unwrap_or(0) as i32;
@@ -418,7 +426,7 @@ impl Game {
             last_sent_pos: ([0.0; 3], 0.0, 0.0), sneaking: false,
             dead: false, health: 20.0, food: 20, saturation: 5.0, exhaustion: 0.0, fall_start: None, hurt_cooldown: 0, regen_timer: 0,
             using: None, sprinting: false, jump_held: false, dig_start: None, delayed_dig: None, cursor: Stack::default(), craft_result: Stack::default(),
-            table_grid: [Stack::default(); 9], window: inv::Window::Inventory, next_window: 0, state_id: 0, drag: (0, Vec::new()), seen_items: HashSet::new(), cont_items: Vec::new(), data_sent: [-1; 4], xp: 0,
+            table_grid: [Stack::default(); 9], window: inv::Window::Inventory, next_window: 0, state_id: 0, drag: (0, Vec::new()), seen_items: HashSet::new(), cont_items: Vec::new(), data_sent: [-1; 4], xp_level: 0, xp_progress: 0.0, xp: 0,
             air: env::MAX_AIR, fire_ticks: 0, ticks_frozen: 0, fire_exposure: 0, effects: HashMap::new(), prev_tick_pos: [0.0; 3], seen: HashSet::new(), last_attack_tick: 0,
         };
         self.load_player(&mut p);
@@ -703,8 +711,10 @@ impl Game {
         if !creative {
             if let Some(p) = self.players.get_mut(&eid) { p.exhaustion += 0.005; }
             if basalt_game::hardness(BlockState(old).name()) > 0.0 { self.wear_held(eid, 1); }
-            let drops = if self.data.can_harvest(old, held) { self.data.block_drops(old, held, false, 0, &mut self.rng) } else { Vec::new() };
+            let harvest = self.data.can_harvest(old, held);
+            let drops = if harvest { self.data.block_drops(old, held, false, 0, &mut self.rng) } else { Vec::new() };
             self.drop_at_block(b, drops);
+            if harvest { let xp = xporb::ore_xp(old, &mut self.rng); if xp > 0 { self.spawn_xp([b[0] as f64 + 0.5, b[1] as f64 + 0.5, b[2] as f64 + 0.5], xp); } }
             // doors: the other half goes too
             if BlockState(old).get("half").is_some() && (BlockState(old).block().kind == "door" || BlockState(old).name().ends_with("_door")) {
                 let oy = if BlockState(old).get("half") == Some("upper") { -1 } else { 1 };
@@ -796,6 +806,7 @@ impl Game {
         self.tick_mobs();
         self.tick_arrows();
         self.tick_falling();
+        self.tick_orbs();
         self.tick_random();
         self.tick_spawning();
         self.broadcast_mob_moves();

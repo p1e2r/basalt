@@ -75,6 +75,7 @@ impl Game {
             let vel = [self.rng.gen_range(-0.1..0.1), 0.2, self.rng.gen_range(-0.1..0.1)];
             self.spawn_item([pos[0], pos[1] + 0.3, pos[2]], vel, Stack { item, count, damage: 0, ench: NO_ENCH }, 10);
         }
+        if by_player.is_some() { let xp = super::xporb::mob_xp(kind.name(), &mut self.rng); if xp > 0 { self.spawn_xp(pos, xp); } }
     }
 
     /// Serverbound attack (or interact-attack) from a player.

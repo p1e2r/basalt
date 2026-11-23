@@ -204,6 +204,8 @@ pub struct Game {
     cmd_tree: Option<suggest::Tree>,
     sug: Sug,
     hp: f32, pub food: i32,
+    /// experience bar progress 0..1 and level (set_experience)
+    pub xp: (f32, i32),
     hotbar: [ItemStack; 9], held: u8,
     inventory: Vec<ItemStack>,
     inv_state: i32,
@@ -294,7 +296,7 @@ impl Game {
         let mut g = Game {
             gpu, assets, rules, ui, entity_atlas, biomes, dim_types: Vec::new(), world: World::new(-64, 384), player: Player::new(), mesher,
             dirty: HashMap::new(), in_flight: HashSet::new(), events: rx, out: otx, entities: HashMap::new(), player_names: HashMap::new(), my_eid: 0, name: o.name,
-            chat: Vec::new(), chat_input: None, cmd_tree: None, sug: Sug::default(), hp: 20.0, food: 20, hotbar: Default::default(), held: 0, inventory: vec![ItemStack::default(); 46], inv_state: 0, carried: ItemStack::default(), day_time: 6000,
+            chat: Vec::new(), chat_input: None, cmd_tree: None, sug: Sug::default(), hp: 20.0, food: 20, xp: (0.0, 0), hotbar: Default::default(), held: 0, inventory: vec![ItemStack::default(); 46], inv_state: 0, carried: ItemStack::default(), day_time: 6000,
             spawned: false, loaded_sent: false, connected: false, keys: HashSet::new(), mouse: [false; 2], mouse_pos: (0.0, 0.0), slider_drag: None, last_tick: Instant::now(),
             last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, sprint_sent: false, sprinting: false, sprint_trigger: 0, fwd_was: false, sprint_key_was: false, sprint_latch: false, jump_tick: None, particles: Default::default(), equip: (1.0, 1.0), equip_for: -1, held_name: (String::new(), 0), splash: String::new(), menu_t0: Instant::now(), pings: HashMap::new(), ping_chan: mpsc::channel(), icon_slots: HashMap::new(), ping_rounds: 0, worlds: Vec::new(), integrated: None, sp_world: None, step_dist: 0.0,
             last_place: Instant::now(), debug: false, disconnected: None, death_msg: None, respawn_at: None, auto_respawn: o.auto_respawn,
@@ -414,6 +416,7 @@ impl Game {
             }
             Event::Chat(s) => { println!("[chat] {s}"); self.chat.push((s, Instant::now())); if self.chat.len() > 100 { self.chat.remove(0); } }
             Event::Health { hp, food } => { self.hp = hp; self.food = food; }
+            Event::Experience { progress, level, total: _ } => { self.xp = (progress, level); }
             Event::GameMode(g) => { self.player.gamemode = g; self.player.flying = g == 3 || (g == 1 && self.player.flying); }
             Event::Time { day, .. } => self.day_time = day,
             Event::HeldSlot(s) => self.held = s.min(8),
@@ -1088,8 +1091,18 @@ impl Game {
             }
             // hearts + food (survival / adventure)
             if self.player.gamemode == 0 || self.player.gamemode == 2 {
-                // experience bar (level 0) and the rows above it, as laid out by vanilla
+                // experience bar and level, as laid out by vanilla: 182x5 bar 29 above the bottom,
+                // level number in green with a black outline above it
                 a.sprite(ui, "experience_bar_background", hx, h - 29.0 * s, s);
+                let fill = (self.xp.0.clamp(0.0, 1.0) * 183.0).floor();
+                if fill > 0.0 { a.region(ui, "experience_bar_progress", hx, h - 29.0 * s, 0.0, 0.0, fill, 5.0, s); }
+                if self.xp.1 > 0 {
+                    let t = self.xp.1.to_string();
+                    let tx = ((w / s - a.text_width(&t, 1.0)) / 2.0).floor();
+                    let ty = h / s - 35.0;
+                    for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] { a.text_ex(ui, &t, (tx + dx) * s, (ty + dy) * s, s, [0, 0, 0, 255], false); }
+                    a.text_ex(ui, &t, tx * s, ty * s, s, [128, 255, 32, 255], false);
+                }
                 let y = h - 39.0 * s;
                 for i in 0..10 {
                     let x = hx + i as f32 * 8.0 * s;
@@ -1223,6 +1236,7 @@ impl Game {
                     let name = entity::type_name(e.kind);
                     if name == "item" { entity::build_item(&self.assets, e, a, light, &mut fd.items3d); continue; }
                     if name == "falling_block" { entity::build_falling_block(&self.assets, e, a, light, &mut fd.items3d); continue; }
+                    if name == "experience_orb" { entity::build_orb(&self.entity_atlas, e, a, self.player.yaw, self.player.pitch, light, &mut fd.skinned); continue; }
                     if !entity::build_model(&self.entity_atlas, e, a, light, &mut fd.skinned) {
                         let (bw, bh, color) = entity::dims(e.kind);
                         let hw = bw / 2.0;

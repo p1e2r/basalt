@@ -96,6 +96,7 @@ impl Entity {
                 (0, Meta::Byte(b)) => self.flags = *b,
                 (6, Meta::Int(p)) => self.pose = *p,
                 (8, Meta::Item(it)) if name == "item" => self.item = Some(it.clone()),
+                (8, Meta::Int(v)) if name == "experience_orb" => self.data = *v,
                 (9, Meta::Float(h)) => { self.health = Some(*h); if *h <= 0.0 && self.death == 0 { self.death = 1; } }
                 (15, Meta::Byte(b)) => self.mob_flags = *b,
                 (16, Meta::Bool(b)) => self.baby = *b,
@@ -166,7 +167,7 @@ pub const SKINS: [&str; 9] = ["alex", "ari", "efe", "kai", "makena", "noor", "st
 impl EntityAtlas {
     pub fn build(a: &Assets) -> EntityAtlas {
         let mut names: Vec<String> = vec!["zombie/zombie", "zombie/husk", "zombie/drowned", "skeleton/skeleton", "skeleton/stray", "creeper/creeper", "spider/spider", "spider/cave_spider",
-            "cow/cow_temperate", "cow/mooshroom_red", "pig/pig_temperate", "sheep/sheep", "sheep/sheep_wool", "chicken/chicken_temperate", "projectiles/arrow"].into_iter().map(String::from).collect();
+            "cow/cow_temperate", "cow/mooshroom_red", "pig/pig_temperate", "sheep/sheep", "sheep/sheep_wool", "chicken/chicken_temperate", "projectiles/arrow", "experience_orb"].into_iter().map(String::from).collect();
         for s in SKINS { names.push(format!("player/wide/{s}")); names.push(format!("player/slim/{s}")); }
         let (w, h) = (1024u32, 512u32);
         let mut rgba = vec![0u8; (w * h * 4) as usize];
@@ -599,6 +600,32 @@ pub fn first_person_item(a: &Assets, item: i32, eye: Vec3, yaw: f32, pitch: f32,
         if !opaque(x, y - 1) { quad([[mx0, my1, z0], [mx0, my1, z1], [mx1, my1, z1], [mx1, my1, z0]], uv, 1.0, tc); }
         if !opaque(x, y + 1) { quad([[mx0, my0, z1], [mx0, my0, z0], [mx1, my0, z0], [mx1, my0, z1]], uv, 0.5, tc); }
     } }
+}
+
+/// Experience orb: a camera-facing sprite from the 4x4 orb sheet, bigger for bigger values,
+/// pulsing between green and yellow (colour and size by eye against the vanilla client).
+pub fn build_orb(atlas: &EntityAtlas, e: &Entity, alpha: f32, yaw: f32, pitch: f32, light: [u8; 2], out: &mut MeshData) {
+    let Some(r) = atlas.rects.get("experience_orb").copied() else { return };
+    let icon = [2477, 1237, 617, 307, 149, 73, 37, 17, 7, 3].iter().position(|v| e.data >= *v).map(|i| 10 - i).unwrap_or(0) as u32;
+    let (u0, v0) = (r[0] + icon % 4 * 16, r[1] + icon / 4 * 16);
+    let (aw, ah) = (atlas.w as f32, atlas.h as f32);
+    let uv = [u0 as f32 / aw, v0 as f32 / ah, (u0 + 16) as f32 / aw, (v0 + 16) as f32 / ah];
+    let p = e.render_pos(alpha);
+    let t = e.age as f32 + alpha;
+    let c = Vec3::new(p[0] as f32, p[1] as f32 + 0.1, p[2] as f32);
+    let (y, pt) = (yaw.to_radians(), pitch.to_radians());
+    let right = Vec3::new(-y.cos(), 0.0, -y.sin());
+    let fwd = Vec3::new(-y.sin() * pt.cos(), -pt.sin(), y.cos() * pt.cos());
+    let up = right.cross(fwd).normalize();
+    let half = 0.15;
+    let (rr, uu) = (right * half, up * half);
+    let pulse = ((t / 4.0).sin() + 1.0) * 0.5;
+    let col = [(128.0 + 127.0 * pulse) as u8, 255, 32, 255];
+    let pts = [c - rr + uu, c - rr - uu, c + rr - uu, c + rr + uu];
+    let uvs = [[uv[0], uv[1]], [uv[0], uv[3]], [uv[2], uv[3]], [uv[2], uv[1]]];
+    let b = out.verts.len() as u32;
+    for i in 0..4 { out.verts.push(Vertex { pos: pts[i].to_array(), uv: uvs[i], color: col, light: [light[0].max(200), light[1].max(200), 0, 0] }); }
+    out.idx.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3, b, b + 2, b + 1, b, b + 3, b + 2]);
 }
 
 #[cfg(test)]

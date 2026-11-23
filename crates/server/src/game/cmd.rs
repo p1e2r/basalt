@@ -661,6 +661,9 @@ impl Game {
                 self.set_weather(kind, ticks);
                 self.ok(eid, &format!("commands.weather.set.{kind}"), vec![]);
             }
+            path if path.starts_with("experience ") || path.starts_with("xp ") => {
+                self.cmd_experience(eid, p)?
+            }
             path if path.starts_with("gamerule ") => {
                 // only the rules Basalt acts on; others are reported as unsupported
                 let rule = p.path[1].trim_start_matches("minecraft:").to_string();
@@ -1429,6 +1432,83 @@ impl Game {
     }
 
     // ------------------------------------------------------------ /clear
+
+    /// /experience (alias /xp) add|set|query, points or levels, with vanilla's reply keys.
+    /// /experience (alias /xp) add|set|query, points or levels, with vanilla's reply keys and
+    /// vanilla's model (level + float progress; the point counter only grows with added points).
+    fn cmd_experience(&mut self, eid: i32, p: &Parsed) -> R<()> {
+        use super::container::{add_points, xp_cost};
+        let op = p.path[1].as_str();
+        let levels = p.path.iter().any(|w| w == "levels");
+        let targets: Vec<i32> = self
+            .resolve(eid, p.arg("target"), false)?
+            .into_iter()
+            .filter_map(|t| {
+                if let Target::Player(e) = t {
+                    Some(e)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let unit = if levels { "levels" } else { "points" };
+        if op == "query" {
+            let t = targets[0];
+            let pl = &self.players[&t];
+            let v = if levels {
+                pl.xp_level
+            } else {
+                (pl.xp_progress * xp_cost(pl.xp_level) as f32) as i32
+            };
+            let n = self.display_name(Target::Player(t));
+            self.ok(
+                eid,
+                &format!("commands.experience.query.{unit}"),
+                vec![n, s(v)],
+            );
+            return Ok(());
+        }
+        let amount: i32 = p.arg("amount").parse().unwrap_or(0);
+        for &t in &targets {
+            let Some(pl) = self.players.get_mut(&t) else {
+                continue;
+            };
+            match (op, levels) {
+                ("add", false) => add_points(pl, amount),
+                ("add", true) => {
+                    pl.xp_level += amount;
+                    if pl.xp_level < 0 {
+                        pl.xp_level = 0;
+                        pl.xp_progress = 0.0;
+                        pl.xp = 0;
+                    }
+                }
+                ("set", true) => pl.xp_level = amount.max(0),
+                _ => {
+                    if amount > xp_cost(pl.xp_level) {
+                        return Err(err("commands.experience.set.points.invalid", &[]));
+                    }
+                    pl.xp_progress = amount.max(0) as f32 / xp_cost(pl.xp_level) as f32;
+                }
+            }
+            Self::send_xp(pl);
+        }
+        if targets.len() == 1 {
+            let n = self.display_name(Target::Player(targets[0]));
+            self.ok(
+                eid,
+                &format!("commands.experience.{op}.{unit}.success.single"),
+                vec![s(amount), n],
+            );
+        } else {
+            self.ok(
+                eid,
+                &format!("commands.experience.{op}.{unit}.success.multiple"),
+                vec![s(amount), s(targets.len())],
+            );
+        }
+        Ok(())
+    }
 
     fn cmd_clear(&mut self, eid: i32, p: &Parsed) -> R<()> {
         let targets = if p.has("targets") {

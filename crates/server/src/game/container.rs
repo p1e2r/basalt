@@ -204,6 +204,31 @@ fn with(state: u32, k: &str, v: &str) -> u32 {
     BlockState(state).with(k, v).map(|s| s.0).unwrap_or(state)
 }
 
+/// Points needed to go from `level` to `level + 1`.
+pub fn xp_cost(level: i32) -> i32 {
+    if level < 15 {
+        2 * level + 7
+    } else if level < 30 {
+        5 * level - 38
+    } else {
+        9 * level - 158
+    }
+}
+
+/// Vanilla-style point gain: the total counter grows, progress fills and rolls over into levels.
+pub(super) fn add_points(p: &mut super::Player, points: i32) {
+    p.xp = p.xp.saturating_add(points).max(0);
+    p.xp_progress += points as f32 / xp_cost(p.xp_level) as f32;
+    while p.xp_progress >= 1.0 {
+        let rest = (p.xp_progress - 1.0) * xp_cost(p.xp_level) as f32;
+        p.xp_level += 1;
+        p.xp_progress = rest / xp_cost(p.xp_level) as f32;
+    }
+    if p.xp_progress < 0.0 {
+        p.xp_progress = 0.0;
+    }
+}
+
 /// Experience level and progress (0..1) of a point total (public formulas: 2n+7 / 5n-38 / 9n-158 per level).
 pub fn xp_level(total: i32) -> (i32, f32) {
     let (mut level, mut rem) = (0, total.max(0));
@@ -1328,14 +1353,13 @@ impl Game {
         let Some(p) = self.players.get_mut(&eid) else {
             return;
         };
-        p.xp += points;
+        add_points(p, points);
         Self::send_xp(p);
     }
 
     pub(super) fn send_xp(p: &super::Player) {
-        let (level, progress) = xp_level(p.xp);
         let mut w = Writer::with_id(cb::SET_EXPERIENCE);
-        w.f32(progress).varint(level).varint(p.xp);
+        w.f32(p.xp_progress).varint(p.xp_level).varint(p.xp);
         p.send(w);
     }
 

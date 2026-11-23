@@ -58,6 +58,8 @@ pub static ALL: &[Spec] = &[
     spec!("M5", "m5_skeleton_arrow", m5::skeleton_arrow, Flat, Both, true, "skeleton arrow from 10 blocks ~3 damage"),
     spec!("M5", "m5_creeper", m5::creeper, Flat, Both, true, "creeper Fuse:0 at 4.36 blocks: 5.157 damage, knockback 0.274"),
     spec!("M5", "m5_cow_loot", m5::cow_loot, Flat, Both, true, "cow killed by player: 1-3 beef, 0-2 leather"),
+    spec!("M5", "m5_xp_command", m5::xp_command, Flat, Both, true, "/xp add|set|query points and levels: replies and set_experience totals"),
+    spec!("M5", "m5_xp_orbs", m5::xp_orbs, Flat, Both, true, "player kills drop experience orbs (cow 1-3); collected by walking onto them"),
     spec!("M5", "m5_sheep_loot", m5::sheep_loot, Flat, Both, true, "red sheep drops 1 red wool; sheared sheep none"),
     spec!("M5", "m5_undead_sun", m5::undead_sun, Flat, Both, true, "zombie under noon sky catches fire and takes damage"),
     spec!("Env", "env_drowning", env::drowning, Flat, Both, true, "air drains 1/tick, 2 damage at -20, then every 20 ticks; refill +4/tick"),

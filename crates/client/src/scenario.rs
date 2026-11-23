@@ -14,7 +14,7 @@ use winit::keyboard::KeyCode;
 const W: u32 = 854;
 const H: u32 = 480;
 
-pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer", "falling_block", "sprint"];
+pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer", "falling_block", "sprint", "xp_bar"];
 
 enum Outcome { Pass(String), Skip(String) }
 
@@ -40,7 +40,7 @@ pub fn run(args: &Args, assets: Arc<Assets>, name: &str) -> Result<bool> {
         let t = Instant::now();
         let r = match s {
             "edge_chunks" => edge_chunks(&ctx), "inventory" => inventory(&ctx), "crafting_table" => crafting_table(&ctx), "death" => death(&ctx),
-            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "falling_block" => falling_block(&ctx), "sprint" => sprint(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx),
+            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "falling_block" => falling_block(&ctx), "sprint" => sprint(&ctx), "xp_bar" => xp_bar(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx),
             other => Err(anyhow!("unknown scenario {other} (known: {})", ALL.join(", "))),
         };
         let secs = t.elapsed().as_secs_f32();
@@ -1158,4 +1158,27 @@ fn sprint(c: &Ctx) -> Result<Outcome> {
     hold_key(&mut g, KeyCode::Space, true); ticks(&mut g, 1)?; hold_key(&mut g, KeyCode::Space, false); ticks(&mut g, 1)?;
     if g.player.flying == before { bail!("double-tap jump did not toggle flying"); }
     Ok(Outcome::Pass("double-tap, slow double-tap, key hold/outlive/toggle, food 6, wall, sneak keeps sprint, double-tap fly".into()))
+}
+
+/// set_experience drives the XP bar and the green level number above the hotbar.
+fn xp_bar(c: &Ctx) -> Result<Outcome> {
+    let mut g = c.game("xpbar")?;
+    join(&mut g)?;
+    cmd(&mut g, "gamemode survival");
+    cmd(&mut g, "xp set @s 0 levels");
+    cmd(&mut g, "xp set @s 0 points");
+    wait(&mut g, 0.5)?;
+    let before = capture(&mut g)?;
+    cmd(&mut g, "xp add @s 20 points");
+    if !wait_until(&mut g, 3.0, |g| g.xp.1 == 2)? { bail!("level after 20 points: {:?} (vanilla 2)", g.xp); }
+    wait(&mut g, 0.2)?;
+    let after = capture(&mut g)?;
+    save(&g, &after, "xp_bar");
+    let s = g.gui_scale() as i32;
+    let (w, h) = (W as i32, H as i32);
+    let bar = diff_count(&before, &after, w / 2 - 91 * s, h - 29 * s, w / 2 + 91 * s, h - 24 * s);
+    let num = diff_count(&before, &after, w / 2 - 10 * s, h - 37 * s, w / 2 + 10 * s, h - 28 * s);
+    if bar < 20 { bail!("XP bar fill not drawn ({bar} px)"); }
+    if num < 10 { bail!("level number not drawn ({num} px)"); }
+    Ok(Outcome::Pass(format!("level {} progress {:.2}; bar {bar}px, number {num}px", g.xp.1, g.xp.0)))
 }

@@ -201,3 +201,53 @@ pub fn undead_sun(ctx: &mut Ctx) -> Result<()> {
     ctx.check(h.map(|h| h < 20.0).unwrap_or(false), format!("burning zombie not losing health ({h:?})"));
     Ok(())
 }
+
+/// Experience orbs: a cow killed by a player drops 1-3 XP as experience_orb entities, coal ore
+/// mined with a pickaxe drops 0-2; standing on them collects them (set_experience). Also: the
+/// orb's add_entity data field and its value in entity data, recorded as metrics for the diff.
+pub fn xp_orbs(ctx: &mut Ctx) -> Result<()> {
+    let (bot, _o) = roofed(ctx, 8, 5)?;
+    bot.cmd_reply("xp set @s 0 points")?;
+    give(&bot, "diamond_sword", 1)?;
+    hold(&bot, "diamond_sword")?;
+    let me = bot.st().pos();
+    let (eid, _) = summon(&bot, "cow", [me[0] + 1.5, Y as f64, me[2]], "{NoAI:1b}")?;
+    let xp0 = bot.st().xp_total;
+    kill_with_sword(&bot, eid)?;
+    let orb = bot.wait_until(Duration::from_secs(3), |s| s.entities.values().any(|e| e.kind == "experience_orb") || s.xp_total > xp0);
+    let kinds: Vec<&str> = bot.st().entities.values().map(|e| e.kind).collect();
+    ctx.check(orb, format!("no experience orb from a cow killed by a player (entities {kinds:?}, xp {})", bot.st().xp_total));
+    bot.wait_until(Duration::from_secs(3), |s| s.entities.values().any(|e| e.kind == "experience_orb"));
+    let n_orbs = { let s = bot.st(); s.entities.values().chain(s.removed.iter()).filter(|e| e.kind == "experience_orb").count() };
+    let meta: Vec<String> = { let s = bot.st(); s.entities.values().chain(s.removed.iter()).filter(|e| e.kind == "experience_orb").map(|e| format!("{:?} vel {:?}", e.meta, e.spawn_vel)).collect() };
+    ctx.note(format!("orbs {n_orbs}: {meta:?}"));
+    // walk onto the orbs
+    let p = bot.st().pos();
+    bot.tp([p[0] + 1.5, p[1], p[2]])?;
+    let got = bot.wait_until(Duration::from_secs(6), |s| s.xp_total > xp0 && !s.entities.values().any(|e| e.kind == "experience_orb"));
+    let gained = bot.st().xp_total - xp0;
+    ctx.check(got, format!("orbs not collected (xp {} -> {})", xp0, bot.st().xp_total));
+    ctx.check((1..=3).contains(&gained), format!("cow gave {gained} xp (vanilla 1-3)"));
+    ctx.metric("cow_xp_in_range", (1..=3).contains(&gained) as u8 as f64, 0.0);
+    let orbs_after = { let s = bot.st(); s.entities.values().chain(s.removed.iter()).filter(|e| e.kind == "experience_orb").count() };
+    ctx.metric("cow_orbs_1_to_3", (1..=3).contains(&orbs_after) as u8 as f64, 0.0);
+    let _ = n_orbs;
+    Ok(())
+}
+
+/// /xp (experience) add/set/query points and levels: reply keys + arguments and the totals sent
+/// with set_experience, vanilla vs Basalt.
+pub fn xp_command(ctx: &mut Ctx) -> Result<()> {
+    let bot = ctx.bot()?;
+    let mut log = Vec::new();
+    for c in ["xp set @s 0 points", "xp add @s 20 points", "xp query @s levels", "xp query @s points", "xp add @s 3 levels", "xp query @s levels", "xp set @s 4 points", "xp set @s 500 points", "xp set @s 0 levels", "xp query @s points"] {
+        let r = bot.cmd_reply(c)?;
+        bot.wait_ticks(2);
+        let total = bot.st().xp_total;
+        let key = r.first().map(|l| format!("{} {:?}", l.key.clone().unwrap_or_default(), l.args)).unwrap_or_default();
+        log.push(format!("{c} -> {key} total {total}"));
+        ctx.metric(&format!("total_after_{}", c.replace(' ', "_").replace('@', "")), total as f64, 0.0);
+    }
+    ctx.note(log.join(" | "));
+    Ok(())
+}

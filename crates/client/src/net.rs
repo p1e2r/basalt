@@ -47,6 +47,7 @@ pub enum Event {
     OpenScreen { window: i32, menu: i32, title: String },
     CloseScreen(i32),
     ContainerData { window: i32, id: i16, value: i16 },
+    Experience { progress: f32, level: i32, total: i32 },
     AddEntity { id: i32, uuid: Uuid, kind: i32, pos: [f64; 3], vel: [f64; 3], yaw: f32, pitch: f32, head_yaw: f32, data: i32 },
     MoveEntity { id: i32, delta: [f64; 3], rot: Option<(f32, f32)>, on_ground: bool },
     TeleportEntity { id: i32, pos: [f64; 3], yaw: f32, pitch: f32, on_ground: bool },
@@ -290,6 +291,7 @@ fn handle_play(id: i32, data: &[u8], tx: &Sender<Event>, players: &mut HashMap<U
         }
         cb::DISGUISED_CHAT => Event::Chat(crate::lang::text(&r.nbt()?)),
         cb::SET_HEALTH => { let hp = r.f32()?; let food = r.varint()?; Event::Health { hp, food } }
+        cb::SET_EXPERIENCE => { let progress = r.f32()?; let level = r.varint()?; let total = r.varint()?; Event::Experience { progress, level, total } }
         cb::GAME_EVENT => { let e = r.u8()?; let v = r.f32()?; if e == 3 { Event::GameMode(v as u8) } else { return Ok(()) } }
         cb::SET_TIME => {
             let game = r.i64()?; let n = r.varint()?; let mut day = game;
