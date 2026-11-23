@@ -41,9 +41,9 @@ fn scenario_paths(id: &str) -> Vec<&'static str> {
     p.extend(["crates/check/src/scenarios/mod.rs", "crates/check/src/scenarios/util.rs"]);
     let by_prefix: &[(&str, &[&str])] = &[
         ("m1_", &["crates/check/src/scenarios/m1.rs", "crates/server/src/game/track.rs"]),
-        ("m2_", &["crates/check/src/scenarios/m1.rs", "crates/server/src/game/track.rs", "crates/server/src/commands.rs"]),
+        ("m2_", &["crates/check/src/scenarios/m1.rs", "crates/server/src/game/track.rs", "crates/server/src/commands.rs", "crates/server/src/cmdparse.rs", "crates/server/src/game/cmd.rs"]),
         ("m3_", &["crates/check/src/scenarios/m3.rs", "crates/worldgen/**"]),
-        ("m4_", &["crates/check/src/scenarios/m4.rs", "crates/game/**", "crates/server/src/game/{inv,items,health,combat,env,explosion}.rs"]),
+        ("m4_", &["crates/check/src/scenarios/m4.rs", "crates/game/**", "crates/server/src/game.rs", "crates/server/src/game/{inv,items,health,combat,env,explosion}.rs"]),
         ("m5_", &["crates/check/src/scenarios/m5.rs", "crates/game/**", "crates/server/src/game/{mob,ai,path,arrow,combat,explosion,spawn,health,track,items}.rs"]),
         ("m6_", &["crates/check/src/scenarios/m6.rs"]),
         ("env_", &["crates/check/src/scenarios/env.rs", "crates/game/**", "crates/server/src/game/{env,health}.rs"]),
@@ -58,8 +58,8 @@ fn fuzz_paths(id: &str) -> Vec<&'static str> {
     p.extend(["crates/check/src/fuzz/mod.rs", "crates/check/src/fuzz/arena.rs", "crates/check/known-divergences.txt"]);
     match id {
         "clicks" => p.extend(["crates/check/src/fuzz/clicks.rs", "crates/game/**", "crates/server/src/game/inv.rs", "crates/server/src/game/items.rs"]),
-        "commands" => p.extend(["crates/check/src/fuzz/commands.rs", "crates/server/src/commands.rs", "crates/game/**", "crates/server/src/game/{mob,env,health}.rs"]),
-        "dig" => p.extend(["crates/check/src/fuzz/dig.rs", "crates/game/**", "crates/server/src/game/{items,health}.rs"]),
+        "commands" => p.extend(["crates/check/src/fuzz/commands.rs", "crates/server/src/commands.rs", "crates/server/src/cmdparse.rs", "crates/server/src/game/cmd.rs", "crates/game/**", "crates/server/src/game/{mob,env,health}.rs"]),
+        "dig" => p.extend(["crates/check/src/fuzz/dig.rs", "crates/game/**", "crates/server/src/game.rs", "crates/server/src/game/{items,health}.rs"]),
         "place" => p.extend(["crates/check/src/fuzz/place.rs", "crates/game/**", "crates/server/src/game/items.rs"]),
         _ => {}
     }

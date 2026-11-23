@@ -101,6 +101,55 @@ pub fn commands(ctx: &mut Ctx) -> Result<()> {
     Ok(())
 }
 
+/// Inputs vanilla accepts / rejects (keys observed on vanilla 26.2 by the `commands` fuzzer): the first reply line's key.
+pub fn command_forms(ctx: &mut Ctx) -> Result<()> {
+    let bot = ctx.bot()?;
+    let p = bot.st().pos();
+    let at = [p[0].floor() as i32 + 2, p[1].floor() as i32 + 2, p[2].floor() as i32];
+    let set = format!("setblock {} {} {} stone", at[0], at[1], at[2]);
+    bot.cmd_reply(&set)?;
+    let cases: Vec<(String, &str)> = vec![
+        ("tp @s".into(), "commands.teleport.success.entity.single"),
+        ("tp @s @s".into(), "commands.teleport.success.entity.single"),
+        ("tp ~ ~ ~ 90".into(), "command.unknown.argument"),
+        ("time set 368t".into(), "commands.time.set.absolute"),
+        ("time set 2s".into(), "commands.time.set.absolute"),
+        ("time set 1x".into(), "commands.time.no_time_marker_found"),
+        ("time set noon".into(), "commands.time.set.time_marker"),
+        ("gamemode 1".into(), "argument.gamemode.invalid"),
+        ("gamemode s".into(), "argument.gamemode.invalid"),
+        ("enchant sharpness".into(), "command.unknown.command"),
+        ("help foo".into(), "commands.help.failed"),
+        ("effect clear".into(), "commands.effect.clear.everything.failed"),
+        ("give @s stone 1 2".into(), "command.unknown.argument"),
+        ("kill @s @s".into(), "command.unknown.argument"),
+        ("list foo".into(), "command.unknown.argument"),
+        ("save-all foo".into(), "command.unknown.argument"),
+        ("weather rain -5".into(), "argument.time.tick_count_too_low"),
+        ("clear @s stone -1".into(), "argument.integer.low"),
+        ("give @s[limit=1] stone".into(), "argument.entity.options.inapplicable"),
+        ("kill @e[limit=0]".into(), "argument.entity.options.limit.toosmall"),
+        (set.clone(), "commands.setblock.failed"),
+        (format!("setblock {} {} {} stone keep", at[0], at[1], at[2] + 1), "commands.setblock.success"),
+        (format!("setblock {} {} {} air", at[0], at[1], at[2]), "commands.setblock.success"),
+        (format!("setblock {} {} {} air", at[0], at[1], at[2] + 1), "commands.setblock.success"),
+    ];
+    for (cmd, key) in &cases {
+        let r = bot.cmd_reply(cmd)?;
+        let got = r.first().and_then(|t| t.key.clone()).unwrap_or_default();
+        ctx.check(got == *key, format!("`{cmd}`: key {got:?}, vanilla {key:?}"));
+    }
+    ctx.bot()?; // still connected
+    bot.cmd_reply("time set day")?;
+    // /kill kills a creative player (vanilla), who then respawns
+    ctx.gamemode(&bot, "creative")?;
+    bot.cmd("kill");
+    ctx.check(bot.wait_until(Duration::from_secs(5), |s| s.dead), "/kill did not kill the creative player");
+    bot.respawn();
+    ctx.check(bot.wait_until(Duration::from_secs(5), |s| !s.dead), "respawn after /kill");
+    Ok(())
+}
+
 pub fn movement(ctx: &mut Ctx) -> Result<()> {
     let bot = ctx.bot()?;
     let o = ctx.arena(&bot, 20, 8, 6)?;

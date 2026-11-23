@@ -45,6 +45,23 @@ fn loads() {
     assert!(g.tags.item_has("minecraft:planks", it("oak_planks")));
 }
 
+/// First server-tick count the vanilla 26.2 server accepts a stop at (crates/check `--fuzz dig` scans, fresh state).
+#[test]
+fn dig_accept_thresholds_match_vanilla() {
+    let g = gd();
+    let n = |b: &str, held: Option<&str>| GameData::dig_accept_ticks(g.dig_progress(st(b), held.map(it), true, false).unwrap());
+    assert_eq!(n("stone", None), 104);
+    assert_eq!(n("oak_planks", None), 41);
+    assert_eq!(n("white_wool", None), 16);
+    assert_eq!(n("stone", Some("wooden_pickaxe")), 15);
+    assert_eq!(n("stone", Some("stone_pickaxe")), 4);
+    assert_eq!(n("stone", Some("iron_pickaxe")), 0);
+    assert_eq!(n("glass", None), 1);
+    assert_eq!(n("dirt", None), 7);
+    // 5x slower in the air: glass by hand 9 -> 45 ticks, first accepted at 31
+    assert_eq!(GameData::dig_accept_ticks(g.dig_progress(st("glass"), None, false, false).unwrap()), 31);
+}
+
 #[test]
 fn dig_times() {
     let g = gd();

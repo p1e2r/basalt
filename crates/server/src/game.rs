@@ -580,6 +580,18 @@ impl Game {
         Ok(())
     }
 
+    /// Server-side "standing on the floor": a motion-blocking block directly under the feet (any corner of the
+    /// 0.6-wide box) with the feet within 1/1000 of a full block top, or of a half-block top (slabs).
+    fn standing_on_floor(&self, pos: [f64; 3]) -> bool {
+        let below = pos[1] - 0.001;
+        let by = below.floor() as i32;
+        let frac = pos[1] - by as f64;
+        if !(frac >= 0.999 || (frac - 0.5).abs() <= 0.001) { return false; }
+        [(-0.3, -0.3), (0.3, -0.3), (-0.3, 0.3), (0.3, 0.3)].iter().any(|(dx, dz)| {
+            basalt_world::props::props(self.world.get_block((pos[0] + dx).floor() as i32, by, (pos[2] + dz).floor() as i32)).blocks_motion()
+        })
+    }
+
     fn dig(&mut self, eid: i32, status: i32, b: [i32; 3]) {
         match status {
             3 | 4 => { // drop held stack / one item
@@ -611,17 +623,19 @@ impl Game {
         let held = { let s = p.inv[36 + p.held]; (s.count > 0).then_some(s.item) };
         let feet = self.world.get_block(p.pos[0].floor() as i32, (p.pos[1] + 1.62).floor() as i32, p.pos[2].floor() as i32);
         let in_water = basalt_world::props::props(feet).has_fluid();
-        let ticks = self.data.dig_ticks(old, held, p.on_ground, in_water);
+        // vanilla ignores the client's on_ground flag here: a bot that claims "airborne" while standing on the floor
+        // digs at the ground rate, one that is really above the floor digs 5x slower (measured by crates/check --fuzz dig)
+        let on_ground = self.standing_on_floor(p.pos);
+        let delta = self.data.dig_progress(old, held, on_ground, in_water);
         let breaks = if creative { status == 0 } else {
-            match (status, ticks) {
+            match (status, delta) {
                 (_, None) => false,
-                (0, Some(0)) => true,
+                (0, Some(d)) if d >= 1.0 => true,
                 (0, Some(_)) => { self.players.get_mut(&eid).unwrap().dig_start = Some((b, self.tick)); false }
                 (1, _) => { self.players.get_mut(&eid).unwrap().dig_start = None; false }
-                (2, Some(t)) => {
+                (2, Some(d)) => {
                     let started = self.players.get_mut(&eid).unwrap().dig_start.take();
-                    // allow some latency slack; reject clearly-too-fast breaks
-                    let ok = matches!(started, Some((sb, t0)) if sb == b && (self.tick - t0) as f64 + 6.0 >= t as f64 * 0.7);
+                    let ok = matches!(started, Some((sb, t0)) if sb == b && basalt_game::GameData::dig_accepts(d, self.tick - t0));
                     if !ok { let st = old; self.players[&eid].send({ let mut w = Writer::with_id(cb::BLOCK_UPDATE); w.position(b[0], b[1], b[2]).varint(st as i32); w }); }
                     ok
                 }

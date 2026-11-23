@@ -48,6 +48,47 @@ pub fn dig_timing(ctx: &mut Ctx) -> Result<()> {
     Ok(())
 }
 
+/// One stop-after-`w`-ticks attempt on a fresh block at `b`; did the server break it?
+fn dig_attempt(bot: &Bot, b: [i32; 3], block: &str, w: u32) -> Result<bool> {
+    setblock(bot, b, block)?;
+    bot.wait_ticks(2);
+    bot.player_action(0, b, 1);
+    bot.swing();
+    bot.wait_ticks(w);
+    bot.player_action(2, b, 1);
+    let broke = bot.wait_until(Duration::from_millis(500), |s| s.world.name(b[0], b[1], b[2]) == "air");
+    if !broke { bot.player_action(1, b, 1); bot.wait_ticks(2); }
+    Ok(broke)
+}
+
+/// The server accepts a stop once `progress_per_tick * (ticks + 1) >= 0.7`, regardless of the client's on_ground
+/// flag, and 5x slower when really above the floor. Thresholds measured on vanilla 26.2 (crates/check --fuzz dig):
+/// stone by hand (150 ticks) first accepts at 104, wool by hand (24) at 16. Vanilla keeps the dig state of a
+/// rejected stop (the next attempt then gets a head start), so rejects are only asserted on fresh state: first
+/// thing in the scenario, or right after an accepted break.
+pub fn dig_accept(ctx: &mut Ctx) -> Result<()> {
+    let (bot, o) = survival_arena(ctx, 8, 8)?;
+    bot.set_held(0);
+    let b = [o[0] + 4, Y, o[2] + 2];
+    bot.look_at([b[0] as f64 + 0.5, b[1] as f64 + 0.5, b[2] as f64 + 0.5]); bot.wait_ticks(2);
+    ctx.check(!dig_attempt(&bot, b, "stone", 98)?, "stone by hand accepted after 98 ticks (vanilla first accepts at 104)");
+    ctx.check(dig_attempt(&bot, b, "stone", 108)?, "stone by hand rejected after 108 ticks");
+    // fresh state after the accepted break: wool by hand needs 16 ticks
+    ctx.check(!dig_attempt(&bot, b, "white_wool", 12)?, "wool by hand accepted after 12 ticks (vanilla first accepts at 16)");
+    ctx.check(dig_attempt(&bot, b, "white_wool", 20)?, "wool by hand rejected after 20 ticks");
+    // a client that claims to be airborne while standing on the floor is dug at the ground rate
+    bot.set_frozen(true); bot.st().body.on_ground = false; bot.wait_ticks(3);
+    ctx.check(dig_attempt(&bot, b, "white_wool", 22)?, "wool rejected after 22 ticks: the on_ground flag claimed airborne was trusted");
+    // really above the floor: 5x slower (glass by hand: 9 ticks on the floor, first accepts at 31 in the air)
+    let p = bot.st().body.pos;
+    bot.tp([p[0], p[1] + 6.0, p[2]])?;
+    bot.set_frozen(true); bot.st().body.on_ground = false; bot.wait_ticks(3);
+    let b2 = [b[0], b[1] + 6, b[2]];
+    ctx.check(!dig_attempt(&bot, b2, "glass", 14)?, "glass dug at the ground rate while above the floor");
+    bot.set_frozen(false);
+    Ok(())
+}
+
 pub fn drops_pickup(ctx: &mut Ctx) -> Result<()> {
     let (bot, o) = survival_arena(ctx, 8, 8)?;
     let b = [o[0] + 3, Y, o[2] + 2];
