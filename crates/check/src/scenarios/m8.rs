@@ -481,3 +481,117 @@ pub fn nether_persistence(ctx: &mut Ctx) -> Result<()> {
     ctx.check(path.exists(), format!("{} missing", path.display()));
     Ok(())
 }
+
+/// Where a new exit portal is built: from overworld portals at several x/z/y, creative step-in,
+/// note the nether arrival against the ideal x/8, z/8 (measured on vanilla; see NOTES.md).
+pub fn portal_place(ctx: &mut Ctx) -> Result<()> {
+    let bot = ctx.bot()?;
+    let o = ctx.arena(&bot, 14, 14, 8)?;
+    // (x offset, z offset, frame floor y)
+    // PLACE_OFF shifts every site (in units of 8 blocks) to fresh nether ground for measuring
+    let off: i32 = std::env::var("PLACE_OFF").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let sites: [(i32, i32, i32); 4] = [
+        (off, off, 200),
+        (off, off, 100),
+        (24 + off, 40 + off, 64),
+        (48 + off, 8 + off, 150),
+    ];
+    for (k, (dx, dz, fy)) in sites.into_iter().enumerate() {
+        let fo = [o[0] + 4 + dx * 8, fy, o[2] + 6 + dz * 8];
+        ctx.gamemode(&bot, "creative")?;
+        bot.fly(true);
+        if let Ok(dir) = std::env::var("PLACE_DUMP") {
+            // snapshot the nether terrain around the ideal target before anything is built there
+            let (tx, tz) = ((fo[0] as f64 + 1.5) / 8.0, (fo[2] as f64 + 0.5) / 8.0);
+            let (tx, tz) = (tx.floor() as i32, tz.floor() as i32);
+            bot.cmd_reply(&format!("execute in minecraft:the_nether run tp @s {tx}.5 100 {tz}.5"))?;
+            wait_dim(&bot, NETHER, 10);
+            bot.wait_until(Duration::from_secs(20), |s| {
+                ((tx - 20) >> 4..=(tx + 20) >> 4)
+                    .all(|cx| ((tz - 20) >> 4..=(tz + 20) >> 4).all(|cz| s.world.chunks.contains_key(&(cx, cz))))
+            });
+            bot.wait_ticks(10);
+            let mut out = format!("target {tx} {tz} srcy {fy}\n");
+            {
+                let s = bot.st();
+                for z in tz - 18..=tz + 18 {
+                    for x in tx - 18..=tx + 19 {
+                        let mut col = String::new();
+                        for y in 0..128 {
+                            col.push_str(s.world.name(x, y, z));
+                            col.push(',');
+                        }
+                        out.push_str(&format!("{x} {z} {col}\n"));
+                    }
+                }
+            }
+            let _ = std::fs::write(format!("{dir}/{}_site{k}.txt", ctx.kind.name()), out);
+            bot.cmd_reply("execute in minecraft:overworld run tp @s 0.5 220 0.5")?;
+            wait_dim(&bot, OVERWORLD, 10);
+            bot.wait_ticks(10);
+        }
+        bot.tp([fo[0] as f64 + 1.5, (fy + 3) as f64, fo[2] as f64 - 1.5])?;
+        bot.set_frozen(true);
+        let (cx0, cx1, cz0, cz1) = ((fo[0] - 3) >> 4, (fo[0] + 6) >> 4, (fo[2] - 3) >> 4, (fo[2] + 3) >> 4);
+        bot.wait_until(Duration::from_secs(30), |s| {
+            (cx0..=cx1).all(|cx| (cz0..=cz1).all(|cz| s.world.chunks.contains_key(&(cx, cz))))
+        });
+        bot.cmd_reply(&format!("fill {} {} {} {} {} {} air", fo[0] - 2, fy, fo[2] - 3, fo[0] + 5, fy + 6, fo[2] + 2))?;
+        bot.cmd_reply(&format!("fill {} {} {} {} {} {} stone", fo[0] - 2, fy - 1, fo[2] - 3, fo[0] + 5, fy - 1, fo[2] + 2))?;
+        bot.set_frozen(false);
+        frame(&bot, [fo[0], fy - 1, fo[2]], true, 2, 3, true)?;
+        bot.cmd_reply(&format!("setblock {} {} {} minecraft:fire", fo[0] + 1, fy, fo[2]))?;
+        if !bot.wait_until(Duration::from_secs(3), |s| s.world.name(fo[0] + 2, fy + 2, fo[2]) == "nether_portal") {
+            bail!("portal {k} did not light");
+        }
+        bot.fly(false);
+        bot.tp([fo[0] as f64 + 1.5, fy as f64, fo[2] as f64 - 1.5])?;
+        bot.wait_on_ground(Duration::from_secs(3));
+        bot.wait_ticks(10);
+        bot.walk_by(0.0, 2.0, Duration::from_secs(3)).ok();
+        let went = wait_dim(&bot, NETHER, 10);
+        if !ctx.check(went, format!("site {k}: no nether")) {
+            continue;
+        }
+        bot.wait_until(Duration::from_secs(10), |s| s.world.chunks.len() > 20);
+        bot.wait_on_ground(Duration::from_secs(5));
+        let p = bot.st().body.pos;
+        let ideal = ((fo[0] as f64 + 1.5) / 8.0, (fo[2] as f64 + 0.5) / 8.0);
+        let (bx, by, bz) = (p[0].floor() as i32, p[1].floor() as i32, p[2].floor() as i32);
+        let (mut lo, mut hi) = ([i32::MAX; 3], [i32::MIN; 3]);
+        {
+            let s = bot.st();
+            for x in bx - 6..=bx + 6 {
+                for y in by - 4..=by + 5 {
+                    for z in bz - 6..=bz + 6 {
+                        if s.world.name(x, y, z) == "nether_portal" {
+                            for (i, v) in [x, y, z].into_iter().enumerate() {
+                                lo[i] = lo[i].min(v);
+                                hi[i] = hi[i].max(v);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        ctx.note(format!("site {k} built portal blocks {lo:?}..{hi:?}"));
+        ctx.note(format!(
+            "site {k} (source y {fy}): ideal ({:.2}, {}, {:.2}) arrival ({:.2}, {:.2}, {:.2}) d=({:.1}, {:.1}, {:.1})",
+            ideal.0, fy, ideal.1, p[0], p[1], p[2], p[0] - ideal.0, p[1] - fy as f64, p[2] - ideal.1
+        ));
+        ctx.metric(&format!("site{k}_arrival_y"), p[1], 0.0);
+        ctx.metric(&format!("site{k}_arrival_x"), p[0], 0.0);
+        ctx.metric(&format!("site{k}_arrival_z"), p[2], 0.0);
+        for what in ["nether_portal", "obsidian"] {
+            bot.cmd_reply(&format!(
+                "execute in minecraft:the_nether run fill {} {} {} {} {} {} air replace minecraft:{what}",
+                bx - 4, by - 2, bz - 4, bx + 4, by + 5, bz + 4
+            ))?;
+        }
+        bot.cmd_reply("execute in minecraft:overworld run tp @s 0.5 220 0.5")?;
+        wait_dim(&bot, OVERWORLD, 10);
+        bot.wait_ticks(20);
+        bot.cmd_reply(&format!("fill {} {} {} {} {} {} air", fo[0] - 2, fy - 1, fo[2] - 3, fo[0] + 5, fy + 6, fo[2] + 2))?;
+    }
+    Ok(())
+}

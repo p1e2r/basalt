@@ -89,5 +89,6 @@ pub static ALL: &[Spec] = &[
     spec!("M8", "m8_execute_in", m8::execute_in, Flat, Both, true, "execute in the_nether run tp: respawn into the nether (layout 0..256, bedrock floor/roof), seed-12345 nether columns over the wire, and back"),
     spec!("M8", "m8_portal_frames", m8::portal_frames, Flat, Both, true, "obsidian frames: fire lights 2x3..21-wide frames (x/z axis, corners optional), not 22-wide or incomplete ones; flint and steel; breaking the frame removes the portal"),
     spec!("M8", "m8_portal_travel", m8::portal_travel, Flat, Both, true, "standing in a portal: survival ~80 ticks to x/8 z/8 with a new exit portal, no bounce-back while standing, return to the same portal; creative at once"),
+    spec!("M8", "m8_portal_place", m8::portal_place, Flat, Both, true, "exit portal placement: nether arrival vs ideal x/8 z/8 for portals at several heights"),
     spec!("M8", "m8_nether_persistence", m8::nether_persistence, FlatOnDisk, BasaltOnly, false, "player + block in the nether survive a restart; nether saved in world/dimensions/minecraft/the_nether/region"),
 ];
