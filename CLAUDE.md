@@ -87,7 +87,7 @@ Read NOTES.md for verified packet formats.
       /kill @e[type=..], /mobs [r] (debug). Mobs persist in <world>/entities.json. --no-spawning.
       Missing: XP orbs, breeding, sheep eating grass, zombie reinforcements/drowned conversion,
       mob-vs-mob pushing, swimming AI beyond buoyancy, difficulty fixed at Easy.
-- [ ] M6 world logic   - [~] M7 client parity (merged; 10/10 tools/client-scenarios.sh; asset grid 0 problems; needs check-all --client: fixed after play-testing: first-person arm placement, signed head pitch, command tree + suggestions (scenarios first_person_arm/head_pitch/command_suggestions); known visual gaps vs real client = real client shows night sky on Basalt (set_time clock bug?), no clouds, no below-horizon void sky, sky tint, first-person arm/held items, XP bar, particles, glint, non-ASCII font)
+- [ ] M6 world logic   - [~] M7 client parity (merged; 10/10 tools/client-scenarios.sh; asset grid 0 problems; needs check-all --client: fixed after play-testing: first-person arm placement, signed head pitch, command tree + suggestions (scenarios first_person_arm/head_pitch/command_suggestions); known visual gaps vs real client = no clouds, no below-horizon void sky, sky tint, first-person arm/held items, XP bar, particles, glint, non-ASCII font)
 - [ ] M8 Nether/End, portals, structures
 - [ ] M9 redstone  - [ ] M10 enchant/anvil/brewing/smithing/XP  - [ ] M11 villagers/raids/AI
 - [ ] M12 bosses/endgame  - [ ] M13 commands/datapacks/advancements/scoreboards

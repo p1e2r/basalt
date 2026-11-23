@@ -188,11 +188,8 @@ real server/client over the wire.
   overrides it (default -0.45,-0.8,0.4,-0.3,-2.3,0,1); the arm points up/forward from the lower
   right. Reference silhouette: crates/client/refs/first_person_arm.txt.
 - Observed oddity (not fixed): the real client renders a night sky on Basalt even at day_time 6000.
-- **Open bug: the real client's daytime sky is dim on Basalt.** Measured (real 26.2 client, flat Basalt world, mean
-  sky RGB over the upper window): vanilla noon (147,174,236) vs Basalt noon (101,117,154), grey clouds and a black
-  horizon band; day/night curve itself is right (0..9000 constant, dusk 12000 -> (84,97,127), night 15000+ (3,3,5)) and
-  noon grass lighting matches. Ruled out: registry entry order (identical to sorted file names for all 29 registries),
-  update_tags (identical, all 15 registries), set_time byte layout (same; also tried gameTime == clock), explicit game_event
-  rain level / thunder level 0 at join, login packet fields. Still to try: biome ids in the chunk data vs the synced
-  worldgen/biome list (flat chunks use `plains`), vanilla's extra join packets (entity_event permission level, recipe book,
-  advancements), the 3-dimension list in login, light data of the camera chunk.
+- **Resolved (was "dim daytime sky"):** login and respawn carry an `isFlat` boolean (after the debug flag). Vanilla clients
+  use the world's min build height as the horizon for flat worlds and sea level (63) otherwise; a player below the horizon gets
+  a darkened sky with a black horizon band. Basalt always sent isFlat=false, so a `--flat` world (players at y=-59) looked
+  dusky/black in the real client. Now `--flat` sends isFlat=true. Generated worlds were never affected (noon sky matched
+  vanilla). Ruled out along the way: registry order, update_tags, set_time layout, weather events, login fields.

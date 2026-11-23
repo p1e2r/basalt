@@ -365,7 +365,7 @@ impl Game {
         let mut w = Writer::with_id(cb::LOGIN);
         w.i32(eid).bool(false).varint(1).str("minecraft:overworld").varint(self.sh.cfg.max_players as i32).varint(p.view).varint(p.view)
             .bool(false).bool(true).bool(false).varint(dim_type).str("minecraft:overworld").i64(self.hashed_seed())
-            .u8(p.gamemode).i8(-1).bool(false).bool(false).bool(false).varint(0).varint(63).bool(false).u8(0);
+            .u8(p.gamemode).i8(-1).bool(false).bool(self.sh.cfg.flat).bool(false).varint(0).varint(63).bool(false).u8(0);
         p.send(w);
         let mut w = Writer::with_id(cb::CHANGE_DIFFICULTY); w.u8(combat::DIFFICULTY).bool(false); p.send(w);
         Self::send_abilities(&p);

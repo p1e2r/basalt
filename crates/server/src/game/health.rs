@@ -102,6 +102,8 @@ impl Game {
         let dims = self.sh.registries.entries("minecraft:dimension_type");
         let dim_type = dims.iter().position(|d| d == "minecraft:overworld").unwrap_or(0) as i32;
         let seed_hash = self.hashed_seed();
+        // flat worlds use the min build height as their horizon (so the sky isn't darkened below y=63)
+        let flat = self.sh.cfg.flat;
         let Some(p) = self.players.get_mut(&eid) else { return };
         if !p.dead { return; }
         p.dead = false; p.health = MAX_HEALTH; p.food = 20; p.saturation = 5.0; p.exhaustion = 0.0; p.fall_start = None;
@@ -110,7 +112,7 @@ impl Game {
         p.effects.clear();
         p.pos = spawn; p.yaw = 0.0; p.pitch = 0.0;
         let mut w = Writer::with_id(cb::RESPAWN);
-        w.varint(dim_type).str("minecraft:overworld").i64(seed_hash).u8(p.gamemode).i8(-1).bool(false).bool(false).bool(false).varint(0).varint(63).u8(0);
+        w.varint(dim_type).str("minecraft:overworld").i64(seed_hash).u8(p.gamemode).i8(-1).bool(false).bool(flat).bool(false).varint(0).varint(63).u8(0);
         p.send(w);
         // the client starts a fresh level: resend chunks around the new position
         p.loaded.clear(); p.seen_items.clear(); p.seen.clear(); p.center = (i32::MAX, i32::MAX); p.batch_outstanding = false;
