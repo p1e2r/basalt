@@ -114,6 +114,24 @@ pub struct Rect { pub x: u32, pub y: u32, pub w: u32, pub h: u32 }
 
 pub struct Image { pub w: u32, pub h: u32, pub rgba: Vec<u8> }
 
+/// One bitmap font provider: its texture, the characters in each row of cells, the drawn glyph
+/// height (GUI px, default 8) and ascent (baseline offset, vanilla's line baseline is 7).
+pub struct FontPage { pub img: Image, pub chars: Vec<Vec<char>>, pub height: u32, pub ascent: i32 }
+
+fn font_pages(jar: &Jar) -> Vec<FontPage> {
+    let Some(def) = jar.json("assets/minecraft/font/include/default.json") else { return Vec::new() };
+    let mut out = Vec::new();
+    for p in def["providers"].as_array().into_iter().flatten() {
+        if p["type"].as_str() != Some("bitmap") { continue; }
+        let file = p["file"].as_str().unwrap_or("").trim_start_matches("minecraft:");
+        let Some(img) = jar.png(&format!("assets/minecraft/textures/{file}")) else { continue };
+        let chars: Vec<Vec<char>> = p["chars"].as_array().into_iter().flatten().filter_map(|r| r.as_str()).map(|r| r.chars().collect()).collect();
+        if chars.is_empty() { continue; }
+        out.push(FontPage { img, chars, height: p["height"].as_u64().unwrap_or(8) as u32, ascent: p["ascent"].as_i64().unwrap_or(7) as i32 });
+    }
+    out
+}
+
 pub struct Atlas { pub w: u32, pub h: u32, pub rgba: Vec<u8>, pub rects: HashMap<String, (Rect, u8)> }
 
 #[derive(Clone, Debug)]
@@ -129,7 +147,7 @@ impl Jar {
         let f = std::fs::File::open(path).with_context(|| format!("cannot open client jar {path} (pass --jar path/to/26.2 client.jar)"))?;
         let mut z = zip::ZipArchive::new(std::io::BufReader::new(f))?;
         let wanted = ["assets/minecraft/texts/splashes.txt", "assets/minecraft/blockstates/", "assets/minecraft/models/block/", "assets/minecraft/textures/block/", "assets/minecraft/textures/colormap/",
-            "assets/minecraft/textures/font/ascii.png", "assets/minecraft/textures/gui/", "assets/minecraft/textures/item/", "assets/minecraft/models/item/", "assets/minecraft/items/",
+            "assets/minecraft/textures/font/", "assets/minecraft/font/include/default.json", "assets/minecraft/textures/gui/", "assets/minecraft/textures/item/", "assets/minecraft/models/item/", "assets/minecraft/items/",
             "assets/minecraft/textures/entity/", "assets/minecraft/textures/environment/", "assets/minecraft/lang/en_us.json",
             "data/minecraft/dimension_type/", "data/minecraft/worldgen/biome/"];
         let mut files = HashMap::new();
@@ -521,6 +539,8 @@ pub struct Assets {
     pub biome_json: HashMap<String, Value>,
     pub dimension_types: HashMap<String, DimensionType>,
     pub font: Option<Image>,
+    /// bitmap font pages from font/include/default.json, in lookup order (first page with a char wins)
+    pub font_pages: Vec<FontPage>,
     /// title screen splash lines (texts/splashes.txt)
     pub splashes: Vec<String>,
     /// textures/gui/** keyed by path below textures/gui/ without ".png" (e.g. "sprites/hud/hotbar")
@@ -710,6 +730,7 @@ impl Assets {
             water_still: uvrect("block/water_still"), water_flow: uvrect("block/water_flow"), lava_still: uvrect("block/lava_still"), water_overlay: uvrect("block/water_overlay"), lava_flow: uvrect("block/lava_flow"),
             grass_map: jar.png("assets/minecraft/textures/colormap/grass.png"), foliage_map: jar.png("assets/minecraft/textures/colormap/foliage.png"),
             font: jar.png("assets/minecraft/textures/font/ascii.png"),
+            font_pages: font_pages(&jar),
             splashes: jar.files.get("assets/minecraft/texts/splashes.txt").map(|b| String::from_utf8_lossy(b).lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()).unwrap_or_default(),
             atlas, models, states, biome_json, dimension_types, gui, entity_tex, item_icons, item_models, item_fp, item_tint, no_model, particle, random_variant, variant_parts,
         })

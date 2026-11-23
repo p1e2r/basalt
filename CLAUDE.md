@@ -111,7 +111,7 @@ Read NOTES.md for verified packet formats.
       done: held item + equip anim, item name above hotbar, break/dig particles, menus like vanilla (blurred world /
       panorama backdrops, title with splash, pause icons, options + all sub-pages, language switching, server list pings
       with MOTD/players/ping bars/favicons); todo: singleplayer (integrated basalt-server), check-all --client group,
-      clouds, below-horizon void sky, sky tint, XP bar, glint, non-ASCII font, toasts (recipe unlocks), advancements/stats screens)
+      clouds, below-horizon void sky, sky tint, glint, unifont fallback (CJK etc.), toasts (recipe unlocks), advancements/stats screens)
 - [ ] M8 Nether/End, portals, structures
 - [ ] M9 redstone  - [ ] M10 enchant/anvil/brewing/smithing/XP  - [ ] M11 villagers/raids/AI
 - [ ] M12 bosses/endgame  - [ ] M13 commands/datapacks/advancements/scoreboards
