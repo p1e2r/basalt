@@ -90,4 +90,6 @@ game = expand(vj["arguments"]["game"]) + ["--width", "640", "--height", "360"]
 java = os.environ.get("JAVA", "java")
 cmd = [java, "-Xmx3G"] + jvm + ["net.fabricmc.loader.impl.launch.knot.KnotClient"] + game
 print("launching oracle client", ver, "game dir", game_dir, file=sys.stderr)
-sys.exit(subprocess.call(cmd, cwd=game_dir))
+os.chdir(game_dir)
+sys.stderr.flush()
+os.execvp(java, cmd)  # become the JVM so killing this process stops the client

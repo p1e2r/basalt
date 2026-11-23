@@ -10,6 +10,27 @@ real server/client over the wire.
 - Probe: target/debug/basalt-probe host:port secs dumpdir (joins, dumps clientbound).
 - Proxy: basalt-probe proxy 127.0.0.1:25570 127.0.0.1:25566 /tmp/px (logs both directions).
 
+## Vanilla client block meshing (measured with tools/oracle-mod + basalt-check client-mesh)
+- Smooth lighting: face plane = neighbour layer if the face lies on the block boundary, else the
+  block's own layer. Each corner of the unit face square averages 4 cells (centre, 2 sides,
+  diagonal): AO factor = mean of 0.2 (full-cube collidable non-glass blocks incl. leaves) / 1.0;
+  the centre cell counts too, no "both sides block the corner" rule. Sky = mean with sky-0 cells
+  taking the centre's sky; block = mean with fully dark cells (0/0) taking the centre's value.
+  Vertices interpolate the 4 corners bilinearly by position. Emitting blocks and models with
+  "ambientocclusion": false are flat-lit (light of the cull-face neighbour, else own cell), block
+  light = max(light, emission). Magma and active sculk sensors are drawn at block light 15.
+- Directional shade 0.5/1.0/0.8/0.8/0.6/0.6 (down/up/N/S/W/E) baked into the vertex colour.
+- Render layer is per quad from the alpha of the sprite *region* the face samples: any partial alpha
+  -> translucent, any zero alpha -> cutout, else solid; model textures declared
+  {"sprite", "force_translucent": true} are translucent; glass / glass_pane_top are translucent.
+- Face UVs are exact (no inset). uvlock under a pure y rotation keeps authored side-face UVs.
+- A face is culled when this block's whole solid boundary face on that side is covered by the
+  neighbour's solid face (slabs/stairs cull; beds/signs/banners/heads never occlude).
+- Redstone dust tint by power 0..15: 4C0000 700000 7A0000 840000 8E0000 990000 A30000 AD0000
+  B70000 C10000 CC0000 D60000 E00000 EA0600 F41B00 FF3200. Stems: age a -> (32a, 255-8a, 4a).
+- Emission: glow lichen 7 only with a face; trial spawner 4 (waiting) / 8 (active, ejecting) / 0;
+  vault 6 inactive / 12 otherwise.
+
 ## Verified wire formats (26.2)
 - play/login: i32 eid, bool hardcore, varint n + n dim names, varint maxPlayers,
   varint viewDist, varint simDist, bool reducedDebug, bool respawnScreen,
