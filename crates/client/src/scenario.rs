@@ -798,7 +798,7 @@ fn furnace(c: &Ctx) -> Result<Outcome> {
     tap(&mut g, KeyCode::Escape, None)?;
     wait(&mut g, 0.3)?;
     cmd(&mut g, "item replace block 340 -60 2 container.0 with iron_ore 2");
-    cmd(&mut g, "item replace block 340 -60 2 container.1 with coal 1");
+    cmd(&mut g, "item replace block 340 -60 2 container.1 with coal 2");
     wait(&mut g, 1.0)?;
     open_block(&mut g, [340, -60, 2], kind)?;
     {
@@ -814,9 +814,9 @@ fn furnace(c: &Ctx) -> Result<Outcome> {
     let (a0, a1, a2, a3) = rect(79.0, 34.0, 24.0, 16.0);
     let arrow = diff_count(&idle, &img, a0, a1, a2, a3);
     // the flame is lit (pixel count scales with the gui scale squared), the arrow partly filled
-    let min = (s * s * 20.0) as usize;
-    if flame < min { bail!("flame sprite not drawn: {flame} differing pixels (< {min})"); }
-    if arrow < min { bail!("arrow sprite not drawn: {arrow} differing pixels (< {min})"); }
+    let (min_flame, min_arrow) = ((s * s * 20.0) as usize, (s * s * 6.0) as usize); // at ~10% progress the arrow is only a few texels wide
+    if flame < min_flame { bail!("flame sprite not drawn: {flame} differing pixels (< {min_flame})"); }
+    if arrow < min_arrow { bail!("arrow sprite not drawn: {arrow} differing pixels (< {min_arrow})"); }
     // the arrow keeps growing
     let p0 = container(&g).unwrap().props[2];
     wait(&mut g, 1.0)?;
@@ -831,9 +831,9 @@ fn furnace(c: &Ctx) -> Result<Outcome> {
     let p = slot_center(&g, kind, 2); click_at(&mut g, p.0, p.1, 0)?;
     g.key(KeyCode::ShiftLeft, false, None);
     if !wait_until(&mut g, 3.0, |g| container(g).map(|c| c.slots[2].count == 0 && count_item(&c.slots[3..], ingot) == 1).unwrap_or(false))? { bail!("ingot not moved to the inventory"); }
-    // the input and fuel slots follow the server: one ore smelted, the coal burning
+    // the input and fuel slots follow the server: one ore smelted, one coal burning, one left
     let cs = container(&g).unwrap().slots.clone();
-    if cs[0].count != 1 || cs[1].count != 0 { bail!("input {:?} fuel {:?} after the first ingot", cs[0], cs[1]); }
+    if cs[0].count != 1 || cs[1].count != 1 { bail!("input {:?} fuel {:?} after the first ingot (one coal was lit, one is left)", cs[0], cs[1]); }
     tap(&mut g, KeyCode::Escape, None)?;
     Ok(Outcome::Pass(format!("furnace screen: flame {flame} + arrow {arrow}->{arrow2} px vs idle, progress {p0}->{p1}, ingot taken by shift-click")))
 }

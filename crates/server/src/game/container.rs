@@ -685,8 +685,9 @@ impl Game {
         let was_lit = be.lit > 0;
         let mut changed = false;
         // the total follows the input item whenever no progress is pending (also for contents set by commands)
-        if be.cook == 0 {
-            let want = kind.cook().and_then(|k| if be.items[0].count > 0 { self.data.cook(k, be.items[0].item) } else { None }).map(|r| r.2 as i32).unwrap_or(200);
+        // (an emptied input keeps the old total: only taking the stack out by hand resets it, see win_set)
+        if be.cook == 0 && be.items[0].count > 0 {
+            let want = kind.cook().and_then(|k| self.data.cook(k, be.items[0].item)).map(|r| r.2 as i32).unwrap_or(200);
             if be.cook_total != want { be.cook_total = want; changed = true; }
         }
         if was_lit { be.lit -= 1; }

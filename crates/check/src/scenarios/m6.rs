@@ -150,6 +150,17 @@ pub fn chest_open_close(ctx: &mut Ctx) -> Result<()> {
     bot.close_container();
     ctx.check(b2.wait_until(Duration::from_secs(2), |s| s.block_events.last().map(|e| e.1 == c && e.3 == 1).unwrap_or(false)), format!("after one close: {:?}", b2.st().block_events.last()));
     b2.close_container();
+    // a trapped chest opens the same window with the same title and animates its lid
+    let t = [o[0] + 6, Y, o[2] + 2];
+    setblock(&bot, t, "trapped_chest[facing=south]")?;
+    put(ctx, &bot, t, 2, "redstone", 9)?;
+    { let mut s = bot.st(); s.block_events.clear(); }
+    open_at(&bot, t)?;
+    let (menu, title, n) = screen(&bot);
+    ctx.check(menu == "generic_9x3" && title == "container.chest" && n == 63, format!("trapped chest window {menu} {title} {n}"));
+    ctx.check(bot.st().container[2].name() == "redstone", "trapped chest contents");
+    ctx.check(bot.wait_until(Duration::from_secs(2), |s| s.block_events.iter().any(|e| e.1 == t && e.2 == 1 && e.3 == 1)), "no lid event for the trapped chest");
+    bot.close_container();
     Ok(())
 }
 
