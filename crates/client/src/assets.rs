@@ -293,7 +293,9 @@ impl<'a> Baker<'a> {
                 if rx != 0 { for p in pos.iter_mut() { *p = rot_point(*p, 0, -(rx as f32), [8.0; 3]); } cull = rot_dir(cull, 0, -rx / 90); }
                 if ry != 0 { for p in pos.iter_mut() { *p = rot_point(*p, 1, -(ry as f32), [8.0; 3]); } cull = rot_dir(cull, 1, -ry / 90); }
                 let dir = face_normal_dir(&pos);
-                if uvlock && (rx != 0 || ry != 0) {
+                // uvlock (matches the vanilla client): under a pure y rotation side faces keep their authored
+                // UVs; otherwise the UVs follow the face position in world space
+                if uvlock && (rx != 0 || ry != 0) && !(rx == 0 && dir != UP && dir != DOWN) {
                     for i in 0..4 {
                         let p = pos[i];
                         uvs[i] = match dir { DOWN => [p[0], 16.0 - p[2]], UP => [p[0], p[2]], NORTH => [16.0 - p[0], 16.0 - p[1]], SOUTH => [p[0], 16.0 - p[1]], WEST => [p[2], 16.0 - p[1]], _ => [16.0 - p[2], 16.0 - p[1]] };
