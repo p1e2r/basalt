@@ -54,3 +54,7 @@ real server/client over the wire.
   swing varint hand; set_carried_item i16.
 - Vanilla console: vanilla/srv/run.sh pipes stdin from vanilla/srv/console.fifo
   (`echo "op Basalt" > vanilla/srv/console.fifo`).
+- Real client harness (macOS, uses the launcher's installed 26.2): `tools/run-vanilla-client.py HOST:PORT [NAME]`
+  (offline, own game dir vanilla/mcclient, quick-play join; log in vanilla/mcclient/logs/latest.log).
+  `swift tools/mc-window-shot.swift out.png` captures only the Minecraft window.
+  Proxy it through `basalt-probe proxy 127.0.0.1:25570 127.0.0.1:<server> DIR` to record both directions.
