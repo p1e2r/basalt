@@ -5,6 +5,7 @@
 //! own random seeded from the chunk's decoration seed, its global index and its step.
 
 pub mod kinds;
+pub mod misc;
 pub mod provider;
 pub mod tree;
 
@@ -73,13 +74,16 @@ impl Height {
             }
             Height::VeryBiasedToBottom(i, j, inner) => {
                 if j - i - inner + 1 <= 0 { return i; }
-                let k = r.next_int_between(i + inner, j);
-                let l = r.next_int_between(i, k - 1);
-                r.next_int_between(i, l - 1 + inner)
+                let k = mth_next_int(r, i + inner, j);
+                let l = mth_next_int(r, i, k - 1);
+                mth_next_int(r, i, l - 1 + inner)
             }
         }
     }
 }
+
+/// `Mth.nextInt(random, a, b)`: a when a >= b, else uniform in [a, b].
+pub fn mth_next_int(r: &mut R, a: i32, b: i32) -> i32 { if a >= b { a } else { r.next_int_bounded(b - a + 1) + a } }
 
 /// Block predicates.
 #[derive(Debug, Clone)]
@@ -248,7 +252,7 @@ const SUPPORT_TAGS: &[&str] = &[
     "supports_vegetation", "supports_mangrove_propagule", "supports_azalea", "supports_dry_vegetation", "overrides_mushroom_light_requirement",
     "supports_sugar_cane", "supports_sugar_cane_adjacently", "supports_cactus", "supports_lily_pad", "cannot_support_seagrass", "cannot_support_kelp",
     "cannot_support_snow_layer", "support_override_snow_layer", "supports_crops", "supports_bamboo", "supports_small_dripleaf",
-    "supports_big_dripleaf", "logs", "leaves", "substrate_overworld", "replaceable_by_mushrooms", "replaceable_by_trees", "cannot_replace_below_tree_trunk",
+    "supports_big_dripleaf", "logs", "leaves", "substrate_overworld", "replaceable_by_mushrooms", "features_cannot_replace", "lava_pool_stone_cannot_replace", "geode_invalid_blocks", "replaceable_by_trees", "cannot_replace_below_tree_trunk",
 ];
 
 impl Features {

@@ -2,6 +2,12 @@
 //!
 //! cargo run -p basalt-worldgen --release --example compare -- <region dir> <cx> <cz> <radius> [seed]
 //!
+//! The last line printed is always
+//! `RESULT seed=<seed> chunks=<n> ms_per_chunk=<t> biomes=<%> shape=<%> exact=<%> features=<%>`.
+//! Exit status: 0 on success, 2 if the region has no fully generated chunks in range,
+//! 1 on usage / IO errors. Env: DATA dir via BASALT_DATA; debugging via DETAIL, SLICE,
+//! HSLICE, BASES, PAIR, FPAIR, TOP, FTOP.
+//!
 //! Prints, per stage, the fraction of positions that match vanilla:
 //!  * shape   — solid / air / fluid category per block
 //!  * biome   — biome id per 4×4×4 cell
@@ -286,7 +292,11 @@ fn main() -> Result<()> {
             if detail { println!("chunk {cx},{cz}: shape {:.3}%", 100.0 * cok as f64 / cn as f64); }
         }
     }
-    if chunks == 0 { bail!("no fully generated vanilla chunks found in range"); }
+    if chunks == 0 {
+        println!("RESULT seed={seed} chunks=0");
+        eprintln!("no fully generated vanilla chunks found in range");
+        std::process::exit(2);
+    }
     let pct = |a: u64, b: u64| if b == 0 { 0.0 } else { 100.0 * a as f64 / b as f64 };
     println!("chunks compared: {chunks}, generation {:.1} ms/chunk", 1000.0 * gen_time / chunks as f64);
     println!("shape  (solid/air/fluid): {:.3}% of {shape_n}", pct(shape_ok, shape_n));
@@ -309,5 +319,10 @@ fn main() -> Result<()> {
     for (n, (a, b, c)) in fv.iter().take(std::env::var("FTOP").ok().and_then(|t| t.parse().ok()).unwrap_or(25)) {
         println!("    {n:<28} {a:>9} {b:>9} {c:>9}");
     }
+    // One stable, machine-parseable summary line (percentages with 3 decimals).
+    println!(
+        "RESULT seed={seed} chunks={chunks} ms_per_chunk={:.1} biomes={:.3} shape={:.3} exact={:.3} features={:.3}",
+        1000.0 * gen_time / chunks as f64, pct(bio_ok, bio_n), pct(shape_ok, shape_n), pct(blk_ok, blk_n), pct(feat_ok, feat_n)
+    );
     Ok(())
 }

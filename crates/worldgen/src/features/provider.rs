@@ -191,3 +191,22 @@ impl StateProvider {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn int_providers() {
+        let mut r = R::new(1);
+        let t = IntProvider::parse(&serde_json::json!({"type": "minecraft:trapezoid", "min": -7, "max": 7, "plateau": 0})).unwrap();
+        let w = IntProvider::parse(&serde_json::json!({"type": "minecraft:weighted_list", "distribution": [{"data": 10, "weight": 9}, {"data": 11, "weight": 1}]})).unwrap();
+        let b = IntProvider::parse(&serde_json::json!({"type": "minecraft:biased_to_bottom", "min_inclusive": 2, "max_inclusive": 5})).unwrap();
+        for _ in 0..500 {
+            assert!((-7..=7).contains(&t.sample(&mut r)));
+            assert!((10..=11).contains(&w.sample(&mut r)));
+            assert!((2..=5).contains(&b.sample(&mut r)));
+        }
+        assert_eq!(IntProvider::parse(&serde_json::json!(4)).unwrap().sample(&mut r), 4);
+    }
+}

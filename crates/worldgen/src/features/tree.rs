@@ -859,3 +859,32 @@ pub fn huge_mushroom(f: &Features, red: bool, cap: &StateProvider, stem: &StateP
     }
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn jset_follows_java_hashset_order() {
+        let mut s = JSet::default();
+        // hashCode(x,y,z) = (y + 31z) * 31 + x -> buckets 15, 1, 0 for these three.
+        s.insert((0, 1, 0));
+        s.insert((1, 0, 0));
+        s.insert((0, 0, 0));
+        assert!(!s.insert((1, 0, 0)));
+        assert_eq!(s.java_order(), vec![(0, 0, 0), (1, 0, 0), (0, 1, 0)]);
+        assert_eq!(s.sorted_by_y(), vec![(0, 0, 0), (1, 0, 0), (0, 1, 0)]);
+        // Same bucket keeps insertion order: (16,0,0) and (0,0,0) collide in a 16-slot table.
+        let mut t = JSet::default();
+        t.insert((16, 0, 0));
+        t.insert((0, 0, 0));
+        assert_eq!(t.java_order(), vec![(16, 0, 0), (0, 0, 0)]);
+    }
+
+    #[test]
+    fn fancy_tree_shape() {
+        assert_eq!(tree_shape(10, 1), -1.0);
+        assert!(tree_shape(10, 5) > 0.0);
+        assert!(trim(10, 2) && !trim(10, 1));
+    }
+}

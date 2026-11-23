@@ -255,3 +255,20 @@ fn scan(b: &[[u16; 4096]], lx: i32, lz: i32, from: i32, kind: Hm) -> i32 {
     }
     MIN_Y
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn block_flags() {
+        let s = |n: &str| BlockState::parse(n).unwrap().0 as u16;
+        assert!(flag(s("air"), F_AIR));
+        assert!(flag(s("grass_block"), F_MOTION) && flag(s("grass_block"), F_FULL));
+        assert!(!flag(s("short_grass"), F_MOTION) && flag(s("short_grass"), F_PLANT));
+        assert!(flag(s("oak_leaves"), F_LEAVES) && flag(s("oak_leaves"), F_MOTION) && !flag(s("oak_leaves"), F_FULL));
+        assert!(flag(s("water"), F_WATER) && !flag(s("water"), F_MOTION));
+        assert!(Hm::MotionBlocking.counts(s("water")) && !Hm::OceanFloor.counts(s("water")));
+        assert!(!Hm::MotionBlockingNoLeaves.counts(s("oak_leaves")));
+    }
+}

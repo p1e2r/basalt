@@ -42,6 +42,10 @@ pub enum Kind {
     HugeMushroom { red: bool, cap: StateProvider, stem: StateProvider, radius: i32, can_place_on: Pred },
     Vines,
     FallenTree(Box<super::tree::FallenTree>),
+    Lake(Box<super::misc::Lake>),
+    Spring(Box<super::misc::Spring>),
+    MonsterRoom,
+    Geode(Box<super::misc::Geode>),
 }
 
 fn rule_test(f: &Features, v: &Value) -> Result<Arc<Vec<bool>>> {
@@ -105,6 +109,10 @@ pub fn parse(f: &mut Features, ty: &str, c: &Value) -> Result<Kind> {
         "seagrass" => Kind::Seagrass(c["probability"].as_f64().unwrap_or(0.0) as f32),
         "kelp" => Kind::Kelp,
         "vines" => Kind::Vines,
+        "lake" => Kind::Lake(Box::new(super::misc::Lake::parse(f, c)?)),
+        "spring_feature" => Kind::Spring(Box::new(super::misc::Spring::parse(f, c)?)),
+        "monster_room" => Kind::MonsterRoom,
+        "geode" => Kind::Geode(Box::new(super::misc::Geode::parse(f, c)?)),
         "fallen_tree" => Kind::FallenTree(Box::new(super::tree::FallenTree::parse(f, c)?)),
         "tree" => Kind::Tree(Box::new(super::tree::Tree::parse(f, c)?)),
         "huge_red_mushroom" | "huge_brown_mushroom" => Kind::HugeMushroom {
@@ -157,6 +165,10 @@ pub fn place(f: &Features, reg: &mut Region, r: &mut R, id: usize, x: i32, y: i3
         Kind::Vines => vines(f, reg, x, y, z),
         Kind::Tree(t) => t.place(f, reg, r, x, y, z),
         Kind::FallenTree(t) => t.place(f, reg, r, x, y, z),
+        Kind::Lake(l) => l.place(f, reg, r, x, y, z),
+        Kind::Spring(s) => s.place(reg, x, y, z),
+        Kind::MonsterRoom => super::misc::monster_room(f, reg, r, x, y, z),
+        Kind::Geode(g) => g.place(f, reg, r, x, y, z),
         Kind::HugeMushroom { red, cap, stem, radius, can_place_on } => super::tree::huge_mushroom(f, *red, cap, stem, *radius, can_place_on, reg, r, x, y, z),
     }
 }
