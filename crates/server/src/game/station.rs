@@ -45,7 +45,10 @@ impl Default for St {
 
 impl Kind {
     pub fn is_station(self) -> bool {
-        matches!(self, Kind::Enchant | Kind::Anvil | Kind::Grind | Kind::Smith)
+        matches!(
+            self,
+            Kind::Enchant | Kind::Anvil | Kind::Grind | Kind::Smith
+        )
     }
     pub fn station_of_block(name: &str) -> Option<Kind> {
         Some(match name {
@@ -100,9 +103,17 @@ const BREW: &[(&str, &str, &str)] = &[
     ("awkward", "cobweb", "weaving"),
     ("awkward", "breeze_rod", "wind_charged"),
     ("night_vision", "fermented_spider_eye", "invisibility"),
-    ("long_night_vision", "fermented_spider_eye", "long_invisibility"),
+    (
+        "long_night_vision",
+        "fermented_spider_eye",
+        "long_invisibility",
+    ),
     ("fire_resistance", "fermented_spider_eye", "slowness"),
-    ("long_fire_resistance", "fermented_spider_eye", "long_slowness"),
+    (
+        "long_fire_resistance",
+        "fermented_spider_eye",
+        "long_slowness",
+    ),
     ("leaping", "fermented_spider_eye", "slowness"),
     ("long_leaping", "fermented_spider_eye", "long_slowness"),
     ("swiftness", "fermented_spider_eye", "slowness"),
@@ -164,7 +175,10 @@ pub fn brew(bottle: &str, potion: &str, ingredient: &str) -> Option<(String, Str
 }
 
 pub fn is_brew_ingredient(name: &str) -> bool {
-    matches!(name, "gunpowder" | "dragon_breath" | "redstone" | "glowstone_dust") || BREW.iter().any(|r| r.1 == name)
+    matches!(
+        name,
+        "gunpowder" | "dragon_breath" | "redstone" | "glowstone_dust"
+    ) || BREW.iter().any(|r| r.1 == name)
 }
 
 impl Game {
@@ -179,7 +193,10 @@ impl Game {
     }
     fn en_id(&self, name: &str) -> Option<u16> {
         let full = format!("minecraft:{name}");
-        self.en_names().iter().position(|n| *n == full).map(|i| i as u16)
+        self.en_names()
+            .iter()
+            .position(|n| *n == full)
+            .map(|i| i as u16)
     }
     fn item_name(&self, item: i32) -> &'static str {
         reg::ITEM.get(item as usize).copied().unwrap_or("air")
@@ -188,11 +205,18 @@ impl Game {
     // ------------------------------------------------------------ opening / closing
 
     pub(super) fn open_station(&mut self, eid: i32, pos: [i32; 3], kind: Kind) {
-        if self.players.get(&eid).map(|p| p.window != Window::Inventory).unwrap_or(true) {
+        if self
+            .players
+            .get(&eid)
+            .map(|p| p.window != Window::Inventory)
+            .unwrap_or(true)
+        {
             self.close_window(eid);
         }
         let seed: i32 = self.rng.gen();
-        let Some(p) = self.players.get_mut(&eid) else { return };
+        let Some(p) = self.players.get_mut(&eid) else {
+            return;
+        };
         p.next_window = p.next_window % 100 + 1;
         let id = p.next_window;
         let cw = Cw {
@@ -220,7 +244,9 @@ impl Game {
 
     /// Window closed: slots go back to the player (the result slot is discarded).
     pub(super) fn station_closed(&mut self, eid: i32, cw: Cw) {
-        let Some(p) = self.players.get_mut(&eid) else { return };
+        let Some(p) = self.players.get_mut(&eid) else {
+            return;
+        };
         let items = std::mem::take(&mut p.st.items);
         for (i, s) in items.into_iter().enumerate() {
             if s.count > 0 && Some(i) != cw.kind.result_slot() {
@@ -241,7 +267,11 @@ impl Game {
             Kind::Anvil => i < 2,
             Kind::Grind => {
                 i < 2
-                    && (self.data.item(s.item).map(|x| x.max_damage > 0).unwrap_or(false)
+                    && (self
+                        .data
+                        .item(s.item)
+                        .map(|x| x.max_damage > 0)
+                        .unwrap_or(false)
                         || name == "enchanted_book"
                         || !s.ench.list().is_empty())
             }
@@ -279,7 +309,10 @@ impl Game {
             Kind::Enchant => self.enchant_update(eid, cw),
             Kind::Anvil => {
                 let creative = self.players[&eid].gamemode == 1;
-                let (a, b) = (self.players[&eid].st.items[0], self.players[&eid].st.items[1]);
+                let (a, b) = (
+                    self.players[&eid].st.items[0],
+                    self.players[&eid].st.items[1],
+                );
                 let rename = self.players[&eid].st.rename.clone();
                 let (res, cost, units) = self.anvil_compute(a, b, &rename, creative);
                 let p = self.players.get_mut(&eid).unwrap();
@@ -288,7 +321,10 @@ impl Game {
                 p.st.units = units;
             }
             Kind::Grind => {
-                let (a, b) = (self.players[&eid].st.items[0], self.players[&eid].st.items[1]);
+                let (a, b) = (
+                    self.players[&eid].st.items[0],
+                    self.players[&eid].st.items[1],
+                );
                 let r = self.grind_compute(a, b);
                 self.players.get_mut(&eid).unwrap().st.items[2] = r;
             }
@@ -299,7 +335,9 @@ impl Game {
             }
             _ => {}
         }
-        let Some(p) = self.players.get_mut(&eid) else { return };
+        let Some(p) = self.players.get_mut(&eid) else {
+            return;
+        };
         p.cont_items = p.st.items.clone();
         let vals: Vec<i32> = match cw.kind {
             Kind::Enchant => {
@@ -318,7 +356,9 @@ impl Game {
                 ]
             }
             Kind::Anvil => vec![p.st.cost],
-            Kind::Smith => vec![(p.st.items[..3].iter().any(|x| x.count > 0) && p.st.items[3].count == 0) as i32],
+            Kind::Smith => vec![
+                (p.st.items[..3].iter().any(|x| x.count > 0) && p.st.items[3].count == 0) as i32,
+            ],
             _ => vec![],
         };
         for (k, v) in vals.into_iter().enumerate() {
@@ -343,9 +383,17 @@ impl Game {
                 }
                 for dy in 0..=1 {
                     let shelf = self.world.get_block(pos[0] + dx, pos[1] + dy, pos[2] + dz);
-                    let gap = self.world.get_block(pos[0] + dx / 2, pos[1] + dy, pos[2] + dz / 2);
-                    if self.data.tags.block_has("enchantment_power_provider", BlockState(shelf).name())
-                        && self.data.tags.block_has("enchantment_power_transmitter", BlockState(gap).name())
+                    let gap = self
+                        .world
+                        .get_block(pos[0] + dx / 2, pos[1] + dy, pos[2] + dz / 2);
+                    if self
+                        .data
+                        .tags
+                        .block_has("enchantment_power_provider", BlockState(shelf).name())
+                        && self
+                            .data
+                            .tags
+                            .block_has("enchantment_power_transmitter", BlockState(gap).name())
                     {
                         n += 1;
                     }
@@ -358,7 +406,11 @@ impl Game {
     fn enchant_update(&mut self, eid: i32, cw: Cw) {
         let item = self.players[&eid].st.items[0];
         let seed = self.players[&eid].st.seed;
-        let info = self.data.item(item.item).map(|i| i.enchantable).unwrap_or(0);
+        let info = self
+            .data
+            .item(item.item)
+            .map(|i| i.enchantable)
+            .unwrap_or(0);
         let mut offers = [0; 3];
         let mut clue = [-1; 3];
         let mut clue_lvl = [-1; 3];
@@ -372,7 +424,10 @@ impl Game {
             for i in 0..3 {
                 if offers[i] > 0 {
                     let mut r = rand::rngs::StdRng::seed_from_u64((seed as u32 as u64) + i as u64);
-                    let l = self.data.ench.roll(&mut r, item.item, is_book, info, offers[i]);
+                    let l = self
+                        .data
+                        .ench
+                        .roll(&mut r, item.item, is_book, info, offers[i]);
                     if let Some(pick) = l.get(r.gen_range(0..l.len().max(1))) {
                         if let Some(id) = self.en_id(&pick.0) {
                             clue[i] = id as i32;
@@ -404,10 +459,19 @@ impl Game {
         if cost <= 0 || item.count <= 0 || !item.ench.list().is_empty() {
             return;
         }
-        if !creative && (p.xp_level < cost || p.xp_level < need || lapis.count < need || self.item_name(lapis.item) != "lapis_lazuli") {
+        if !creative
+            && (p.xp_level < cost
+                || p.xp_level < need
+                || lapis.count < need
+                || self.item_name(lapis.item) != "lapis_lazuli")
+        {
             return;
         }
-        let info = self.data.item(item.item).map(|i| i.enchantable).unwrap_or(0);
+        let info = self
+            .data
+            .item(item.item)
+            .map(|i| i.enchantable)
+            .unwrap_or(0);
         let seed = p.st.seed;
         let is_book = self.item_name(item.item) == "book";
         let mut r = rand::rngs::StdRng::seed_from_u64((seed as u32 as u64) + b as u64);
@@ -447,7 +511,11 @@ impl Game {
         self.play_sound(
             "block.enchantment_table.use",
             4,
-            [pos[0] as f64 + 0.5, pos[1] as f64 + 0.5, pos[2] as f64 + 0.5],
+            [
+                pos[0] as f64 + 0.5,
+                pos[1] as f64 + 0.5,
+                pos[2] as f64 + 0.5,
+            ],
             1.0,
             pitch,
         );
@@ -459,7 +527,9 @@ impl Game {
 
     /// Experience levels change (not points): the point total stays as in vanilla's `giveExperienceLevels`.
     pub(super) fn give_levels(&mut self, eid: i32, n: i32) {
-        let Some(p) = self.players.get_mut(&eid) else { return };
+        let Some(p) = self.players.get_mut(&eid) else {
+            return;
+        };
         p.xp_level += n;
         if p.xp_level < 0 {
             p.xp_level = 0;
@@ -487,7 +557,11 @@ impl Game {
     }
 
     fn stack_enchants(&self, s: &Stack) -> Vec<(String, i32)> {
-        s.ench.list().into_iter().map(|(i, l)| (self.en_short(i), l as i32)).collect()
+        s.ench
+            .list()
+            .into_iter()
+            .map(|(i, l)| (self.en_short(i), l as i32))
+            .collect()
     }
 
     fn default_name_matches(&self, s: &Stack, name: &str) -> bool {
@@ -497,7 +571,13 @@ impl Game {
     }
 
     /// (result, cost shown in container data, repair-material units consumed). Empty result when nothing can be made.
-    pub fn anvil_compute(&self, a: Stack, b: Stack, rename: &Option<String>, creative: bool) -> (Stack, i32, i32) {
+    pub fn anvil_compute(
+        &self,
+        a: Stack,
+        b: Stack,
+        rename: &Option<String>,
+        creative: bool,
+    ) -> (Stack, i32, i32) {
         let none = (Stack::default(), 0, 0);
         if a.count <= 0 {
             return none;
@@ -512,7 +592,10 @@ impl Game {
         if b.count > 0 {
             base += b.ench.repair as i64;
             let b_book = self.item_name(b.item) == "enchanted_book" && !b.ench.list().is_empty();
-            let repairable = info.and_then(|i| i.repairable.as_ref()).map(|r| r.matches(b.item)).unwrap_or(false);
+            let repairable = info
+                .and_then(|i| i.repairable.as_ref())
+                .map(|r| r.matches(b.item))
+                .unwrap_or(false);
             if max_damage > 0 && repairable {
                 let mut d = res.damage.min(max_damage / 4);
                 if d <= 0 {
@@ -531,7 +614,8 @@ impl Game {
                     return none;
                 }
                 if max_damage > 0 && !b_book {
-                    let remaining = (max_damage - res.damage) + (max_damage - b.damage) + max_damage * 12 / 100;
+                    let remaining =
+                        (max_damage - res.damage) + (max_damage - b.damage) + max_damage * 12 / 100;
                     let nd = (max_damage - remaining).max(0);
                     if nd < res.damage {
                         res.damage = nd;
@@ -543,7 +627,9 @@ impl Game {
                 let mut incompatible = false;
                 let mut cur = self.stack_enchants(&res);
                 for (name, lvl) in self.stack_enchants(&b) {
-                    let Some(def) = self.data.ench.by_name(&name) else { continue };
+                    let Some(def) = self.data.ench.by_name(&name) else {
+                        continue;
+                    };
                     let have = cur.iter().find(|e| e.0 == name).map(|e| e.1).unwrap_or(0);
                     let mut level = if have == lvl { lvl + 1 } else { have.max(lvl) };
                     let mut can = def.supported.matches(res.item) || a_book || creative;
@@ -574,7 +660,10 @@ impl Game {
                 if incompatible && !applied {
                     return none;
                 }
-                let list: Vec<(u16, u8)> = cur.iter().filter_map(|(n, l)| Some((self.en_id(n)?, *l as u8))).collect();
+                let list: Vec<(u16, u8)> = cur
+                    .iter()
+                    .filter_map(|(n, l)| Some((self.en_id(n)?, *l as u8)))
+                    .collect();
                 res.ench.set_list(&list);
             }
         }
@@ -586,12 +675,10 @@ impl Game {
                     res.ench.name = 0;
                 }
             }
-            Some(n) if !n.is_empty() => {
-                if !self.default_name_matches(&a, n) {
-                    rename_cost = 1;
-                    total += 1;
-                    res.ench.name = intern(n);
-                }
+            Some(n) if !n.is_empty() && !self.default_name_matches(&a, n) => {
+                rename_cost = 1;
+                total += 1;
+                res.ench.name = intern(n);
             }
             _ => {}
         }
@@ -606,7 +693,10 @@ impl Game {
         if cost >= 40 && !creative {
             return (Stack::default(), shown, 0);
         }
-        let mut pen = a.ench.repair.max(if b.count > 0 { b.ench.repair } else { 0 });
+        let mut pen = a
+            .ench
+            .repair
+            .max(if b.count > 0 { b.ench.repair } else { 0 });
         if rename_cost != total || rename_cost == 0 {
             pen = pen.saturating_mul(2).saturating_add(1);
         }
@@ -617,7 +707,11 @@ impl Game {
     // ------------------------------------------------------------ grindstone
 
     fn is_curse(&self, name: &str) -> bool {
-        self.data.ench.by_name(name).map(|d| d.curse).unwrap_or(false)
+        self.data
+            .ench
+            .by_name(name)
+            .map(|d| d.curse)
+            .unwrap_or(false)
     }
 
     fn strip_non_curses(&self, mut s: Stack) -> Stack {
@@ -670,7 +764,13 @@ impl Game {
         }
         let s = if ea { a } else { b };
         let has_ench = !s.ench.list().is_empty();
-        if !has_ench && !(self.data.item(s.item).map(|i| i.max_damage > 0).unwrap_or(false)) {
+        if !has_ench
+            && !(self
+                .data
+                .item(s.item)
+                .map(|i| i.max_damage > 0)
+                .unwrap_or(false))
+        {
             return Stack::default();
         }
         if !has_ench {
@@ -704,7 +804,11 @@ impl Game {
         match &r.kind {
             SmithKind::Transform { result } => out.item = *result,
             SmithKind::Trim { pattern } => {
-                let Some(mat) = self.data.item(add.item).and_then(|i| i.trim_material.clone()) else {
+                let Some(mat) = self
+                    .data
+                    .item(add.item)
+                    .and_then(|i| i.trim_material.clone())
+                else {
                     return Stack::default();
                 };
                 let m = self.sh.registries.entries("minecraft:trim_material");
@@ -728,7 +832,13 @@ impl Game {
     // ------------------------------------------------------------ taking the result
 
     /// Click on the result slot of a station. Returns false when the click is not a plain take (falls back to generic).
-    pub(super) fn station_result_click(&mut self, eid: i32, cw: &Cw, mode: i32, button: i8) -> bool {
+    pub(super) fn station_result_click(
+        &mut self,
+        eid: i32,
+        cw: &Cw,
+        mode: i32,
+        button: i8,
+    ) -> bool {
         let r = cw.kind.result_slot().unwrap_or(0);
         let res = self.players[&eid].st.items[r];
         if !matches!(mode, 0 | 1 | 2 | 4) || res.count <= 0 {
@@ -795,7 +905,11 @@ impl Game {
     fn station_consume(&mut self, eid: i32, cw: &Cw) {
         let pos = cw.pos[0];
         let creative = self.players[&eid].gamemode == 1;
-        let ctr = [pos[0] as f64 + 0.5, pos[1] as f64 + 0.5, pos[2] as f64 + 0.5];
+        let ctr = [
+            pos[0] as f64 + 0.5,
+            pos[1] as f64 + 0.5,
+            pos[2] as f64 + 0.5,
+        ];
         match cw.kind {
             Kind::Anvil => {
                 let (cost, units) = (self.players[&eid].st.cost, self.players[&eid].st.units);
@@ -837,7 +951,10 @@ impl Game {
                 self.level_event(event, pos);
             }
             Kind::Grind => {
-                let (a, b) = (self.players[&eid].st.items[0], self.players[&eid].st.items[1]);
+                let (a, b) = (
+                    self.players[&eid].st.items[0],
+                    self.players[&eid].st.items[1],
+                );
                 let xp = self.grind_xp(&a) + self.grind_xp(&b);
                 if xp > 0 {
                     let j = (xp as f64 / 2.0).ceil() as i32;
@@ -868,7 +985,10 @@ impl Game {
     fn level_event(&self, ty: i32, pos: [i32; 3]) {
         self.broadcast_chunk((pos[0] >> 4, pos[2] >> 4), None, || {
             let mut w = Writer::with_id(cb::LEVEL_EVENT);
-            w.i32(ty).position(pos[0], pos[1], pos[2]).i32(0).bool(false);
+            w.i32(ty)
+                .position(pos[0], pos[1], pos[2])
+                .i32(0)
+                .bool(false);
             w
         });
     }
@@ -880,7 +1000,10 @@ impl Game {
             Kind::Brewing => {
                 if name == "blaze_powder" {
                     Some((4, 5))
-                } else if matches!(name, "potion" | "splash_potion" | "lingering_potion" | "glass_bottle") {
+                } else if matches!(
+                    name,
+                    "potion" | "splash_potion" | "lingering_potion" | "glass_bottle"
+                ) {
                     Some((0, 3))
                 } else if is_brew_ingredient(name) {
                     Some((3, 4))
@@ -896,7 +1019,9 @@ impl Game {
                 }
             }
             Kind::Anvil | Kind::Grind => Some((0, 2)),
-            Kind::Smith => (0..3).find(|&i| self.station_may_place(Kind::Smith, i, s)).map(|i| (i, i + 1)),
+            Kind::Smith => (0..3)
+                .find(|&i| self.station_may_place(Kind::Smith, i, s))
+                .map(|i| (i, i + 1)),
             _ => None,
         }
     }
@@ -920,7 +1045,10 @@ impl Game {
             let bn = self.item_name(b.item);
             b.count > 0
                 && matches!(bn, "potion" | "splash_potion" | "lingering_potion")
-                && self.potion_of(&b).map(|p| brew(bn, p, ing).is_some()).unwrap_or(false)
+                && self
+                    .potion_of(&b)
+                    .map(|p| brew(bn, p, ing).is_some())
+                    .unwrap_or(false)
         })
     }
 
@@ -931,7 +1059,10 @@ impl Game {
         let mut be = be.clone();
         let before = (be.brew, be.fuel);
         let items_before = be.items.clone();
-        if be.fuel <= 0 && be.items[4].count > 0 && self.item_name(be.items[4].item) == "blaze_powder" {
+        if be.fuel <= 0
+            && be.items[4].count > 0
+            && self.item_name(be.items[4].item) == "blaze_powder"
+        {
             be.fuel = 20;
             be.items[4].count -= 1;
             if be.items[4].count <= 0 {
@@ -946,12 +1077,19 @@ impl Game {
                 for i in 0..3 {
                     let b = be.items[i];
                     let bn = self.item_name(b.item);
-                    if b.count <= 0 || !matches!(bn, "potion" | "splash_potion" | "lingering_potion") {
+                    if b.count <= 0
+                        || !matches!(bn, "potion" | "splash_potion" | "lingering_potion")
+                    {
                         continue;
                     }
-                    let Some(pn) = self.potion_of(&b) else { continue };
+                    let Some(pn) = self.potion_of(&b) else {
+                        continue;
+                    };
                     if let Some((nb, np)) = brew(bn, pn, ing) {
-                        if let (Some(item), Some(pi)) = (registry_id(reg::ITEM, &nb), reg::POTION.iter().position(|x| *x == np)) {
+                        if let (Some(item), Some(pi)) = (
+                            registry_id(reg::ITEM, &nb),
+                            reg::POTION.iter().position(|x| *x == np),
+                        ) {
                             be.items[i] = Stack {
                                 item,
                                 count: 1,
@@ -972,7 +1110,11 @@ impl Game {
                 self.play_sound(
                     "block.brewing_stand.brew",
                     4,
-                    [pos[0] as f64 + 0.5, pos[1] as f64 + 0.5, pos[2] as f64 + 0.5],
+                    [
+                        pos[0] as f64 + 0.5,
+                        pos[1] as f64 + 0.5,
+                        pos[2] as f64 + 0.5,
+                    ],
                     1.0,
                     1.0,
                 );
@@ -992,7 +1134,11 @@ impl Game {
         let st = self.world.get_block(pos[0], pos[1], pos[2]);
         let mut ns = st;
         for i in 0..3 {
-            let v = if be.items[i].count > 0 { "true" } else { "false" };
+            let v = if be.items[i].count > 0 {
+                "true"
+            } else {
+                "false"
+            };
             if let Some(x) = BlockState(ns).with(&format!("has_bottle_{i}"), v) {
                 ns = x.0;
             }
@@ -1053,7 +1199,9 @@ impl Game {
             return;
         };
         for part in split_top(body) {
-            let Some((k, v)) = part.split_once('=') else { continue };
+            let Some((k, v)) = part.split_once('=') else {
+                continue;
+            };
             let (k, v) = (k.trim().trim_start_matches("minecraft:"), v.trim());
             let unq = |x: &str| {
                 x.trim()
@@ -1070,7 +1218,8 @@ impl Game {
                     let inner = v.trim_start_matches('{').trim_end_matches('}');
                     for e in split_top(inner) {
                         if let Some((n, l)) = e.split_once(':') {
-                            if let (Some(id), Ok(l)) = (self.en_id(&unq(n)), l.trim().parse::<u8>()) {
+                            if let (Some(id), Ok(l)) = (self.en_id(&unq(n)), l.trim().parse::<u8>())
+                            {
                                 s.ench.set(id, l);
                             }
                         }
@@ -1147,12 +1296,27 @@ mod tests {
             ("swiftness", "fermented_spider_eye", "potion", "slowness"),
             ("swiftness", "gunpowder", "splash_potion", "swiftness"),
             ("night_vision", "redstone", "potion", "long_night_vision"),
-            ("night_vision", "fermented_spider_eye", "potion", "invisibility"),
+            (
+                "night_vision",
+                "fermented_spider_eye",
+                "potion",
+                "invisibility",
+            ),
             ("night_vision", "gunpowder", "splash_potion", "night_vision"),
             ("weakness", "redstone", "potion", "long_weakness"),
             ("weakness", "gunpowder", "splash_potion", "weakness"),
-            ("strong_swiftness", "gunpowder", "splash_potion", "strong_swiftness"),
-            ("long_leaping", "fermented_spider_eye", "potion", "long_slowness"),
+            (
+                "strong_swiftness",
+                "gunpowder",
+                "splash_potion",
+                "strong_swiftness",
+            ),
+            (
+                "long_leaping",
+                "fermented_spider_eye",
+                "potion",
+                "long_slowness",
+            ),
             ("long_leaping", "gunpowder", "splash_potion", "long_leaping"),
         ];
         let bases = [
@@ -1190,7 +1354,10 @@ mod tests {
         ];
         for b in bases {
             for i in ings {
-                let want = m.iter().find(|x| x.0 == b && x.1 == i).map(|x| (x.2.to_string(), x.3.to_string()));
+                let want = m
+                    .iter()
+                    .find(|x| x.0 == b && x.1 == i)
+                    .map(|x| (x.2.to_string(), x.3.to_string()));
                 let got = brew("potion", b, i);
                 assert_eq!(got, want, "{b} + {i}");
             }
@@ -1198,7 +1365,10 @@ mod tests {
     }
     #[test]
     fn brew_table() {
-        assert_eq!(brew("potion", "water", "nether_wart"), Some(("potion".into(), "awkward".into())));
+        assert_eq!(
+            brew("potion", "water", "nether_wart"),
+            Some(("potion".into(), "awkward".into()))
+        );
         assert_eq!(
             brew("potion", "strength", "redstone"),
             Some(("potion".into(), "long_strength".into()))

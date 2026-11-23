@@ -83,7 +83,11 @@ impl EnchData {
         let in_tag = |t: &str, n: &str| etags.get(short(t)).is_some_and(|s| s.contains(n));
         let mut list = Vec::new();
         for p in json_files(&mc.join("enchantment"))? {
-            let name = p.file_stem().unwrap_or_default().to_string_lossy().to_string();
+            let name = p
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             let v = read_json(&p)?;
             let sel = |k: &str| Ingredient::parse(&v[k], tags).unwrap_or_default();
             let supported = sel("supported_items");
@@ -93,9 +97,15 @@ impl EnchData {
                 sel("primary_items")
             };
             let exclusive: HashSet<String> = match &v["exclusive_set"] {
-                Value::String(s) if s.starts_with('#') => etags.get(short(s)).cloned().unwrap_or_default(),
+                Value::String(s) if s.starts_with('#') => {
+                    etags.get(short(s)).cloned().unwrap_or_default()
+                }
                 Value::String(s) => [short(s).to_string()].into(),
-                Value::Array(a) => a.iter().filter_map(|x| x.as_str()).map(|s| short(s).to_string()).collect(),
+                Value::Array(a) => a
+                    .iter()
+                    .filter_map(|x| x.as_str())
+                    .map(|s| short(s).to_string())
+                    .collect(),
                 _ => HashSet::new(),
             };
             list.push(EnchDef {
@@ -139,7 +149,11 @@ impl EnchData {
                 }
             };
             smithing.push(SmithRecipe {
-                id: p.file_stem().unwrap_or_default().to_string_lossy().to_string(),
+                id: p
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string(),
                 template,
                 base,
                 addition,
@@ -160,14 +174,21 @@ impl EnchData {
     }
 
     pub fn smithing_for(&self, template: i32, base: i32, addition: i32) -> Option<&SmithRecipe> {
-        self.smithing
-            .iter()
-            .find(|r| r.template.matches(template) && r.base.matches(base) && r.addition.matches(addition))
+        self.smithing.iter().find(|r| {
+            r.template.matches(template) && r.base.matches(base) && r.addition.matches(addition)
+        })
     }
 
     /// Enchanting-table rule: the enchantments (name, level) rolled for an item of `enchantability` at the
     /// button `cost`. Books accept every non-treasure table enchantment, other items use `primary_items`.
-    pub fn roll(&self, rng: &mut impl Rng, item: i32, is_book: bool, enchantability: i32, cost: i32) -> Vec<(String, i32)> {
+    pub fn roll(
+        &self,
+        rng: &mut impl Rng,
+        item: i32,
+        is_book: bool,
+        enchantability: i32,
+        cost: i32,
+    ) -> Vec<(String, i32)> {
         // 1. modified level (rand(e/4+1) twice, +-15% bonus)
         let q = enchantability / 4 + 1;
         let mut level = cost + 1 + rng.gen_range(0..q) + rng.gen_range(0..q);

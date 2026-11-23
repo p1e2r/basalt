@@ -5,8 +5,7 @@
 //! server wrote in vanilla/srv/world/players/data (2026-11-24): Inventory entries {Slot, id,
 //! count, components}, Slot 0-8 hotbar / 9-35 main, armor and offhand in `equipment`
 //! {head, chest, legs, feet, offhand}, UUID as 4 ints.
-use super::{dim, Game, Player, Stack, NO_ENCH};
-use basalt_data::registries as reg;
+use super::{dim, Game, Player, Stack};
 use basalt_nbt::{Compound, Tag};
 use uuid::Uuid;
 
@@ -39,62 +38,12 @@ fn window_slot(slot: i32) -> Option<usize> {
 }
 
 impl Game {
+    // stacks use the block-entity item format (container.rs), which carries every component
     fn stack_nbt(&self, s: &Stack) -> Tag {
-        let mut c = Compound::new();
-        c.insert(
-            "id".into(),
-            Tag::String(format!(
-                "minecraft:{}",
-                reg::ITEM.get(s.item as usize).copied().unwrap_or("air")
-            )),
-        );
-        c.insert("count".into(), Tag::Int(s.count));
-        let mut comp = Compound::new();
-        if s.damage > 0 {
-            comp.insert("minecraft:damage".into(), Tag::Int(s.damage));
-        }
-        let names = self.sh.registries.entries("minecraft:enchantment");
-        let mut en = Compound::new();
-        for (id, lvl) in s.ench.iter().filter(|e| e.1 > 0) {
-            if let Some(n) = names.get(*id as usize) {
-                en.insert(n.clone(), Tag::Int(*lvl as i32));
-            }
-        }
-        if !en.is_empty() {
-            comp.insert("minecraft:enchantments".into(), Tag::Compound(en));
-        }
-        if !comp.is_empty() {
-            c.insert("components".into(), Tag::Compound(comp));
-        }
-        Tag::Compound(c)
+        self.stack_to_nbt(None, s)
     }
-
     fn nbt_stack(&self, t: &Tag) -> Option<Stack> {
-        let id = t.get("id")?.as_str()?.trim_start_matches("minecraft:");
-        let item = reg::ITEM.iter().position(|n| *n == id)? as i32;
-        let count = t.get("count").and_then(|c| c.as_i64()).unwrap_or(1) as i32;
-        let comp = t.get("components");
-        let damage = comp
-            .and_then(|c| c.get("minecraft:damage"))
-            .and_then(|d| d.as_i64())
-            .unwrap_or(0) as i32;
-        let mut ench = NO_ENCH;
-        if let Some(e) = comp
-            .and_then(|c| c.get("minecraft:enchantments"))
-            .and_then(|e| e.as_compound())
-        {
-            for (k, (n, l)) in e.iter().take(3).enumerate() {
-                if let Some(id) = self.sh.registries.id("minecraft:enchantment", n) {
-                    ench[k] = (id as u16, l.as_i64().unwrap_or(1).clamp(0, 255) as u8);
-                }
-            }
-        }
-        Some(Stack {
-            item,
-            count,
-            damage,
-            ench,
-        })
+        self.stack_from_nbt(t)
     }
 
     /// Write `players/data/<uuid>.dat`, keeping the tags Basalt doesn't manage.

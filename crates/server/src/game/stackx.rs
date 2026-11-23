@@ -52,8 +52,13 @@ impl Ench {
     pub fn list(&self) -> Vec<(u16, u8)> {
         self.e.iter().copied().filter(|e| e.1 > 0).collect()
     }
+    #[allow(dead_code)]
     pub fn level_of(&self, id: u16) -> u8 {
-        self.e.iter().find(|e| e.1 > 0 && e.0 == id).map(|e| e.1).unwrap_or(0)
+        self.e
+            .iter()
+            .find(|e| e.1 > 0 && e.0 == id)
+            .map(|e| e.1)
+            .unwrap_or(0)
     }
     /// Set (or add) an enchantment; false when all slots are used.
     pub fn set(&mut self, id: u16, level: u8) -> bool {

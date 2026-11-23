@@ -405,7 +405,9 @@ impl Game {
             }
             if let Some(e) = c
                 .get("minecraft:enchantments")
-                .filter(|e| e.get("levels").is_some() || e.as_compound().is_some_and(|c| !c.is_empty()))
+                .filter(|e| {
+                    e.get("levels").is_some() || e.as_compound().is_some_and(|c| !c.is_empty())
+                })
                 .or(stored)
             {
                 let levels = e.get("levels").unwrap_or(e);
@@ -989,7 +991,11 @@ impl Game {
     pub(super) fn win_get(&self, eid: i32, cw: &Cw, i: usize) -> Stack {
         let n = cw.n_cont();
         if i < n && cw.kind.is_station() {
-            return self.players.get(&eid).and_then(|p| p.st.items.get(i).copied()).unwrap_or_default();
+            return self
+                .players
+                .get(&eid)
+                .and_then(|p| p.st.items.get(i).copied())
+                .unwrap_or_default();
         }
         if i < n {
             return self.win_slot(cw, i);
@@ -1062,7 +1068,10 @@ impl Game {
         if cw.kind == Kind::Brewing {
             let name = self.item_name_of(s.item);
             return match i {
-                0..=2 => matches!(name, "potion" | "splash_potion" | "lingering_potion" | "glass_bottle"),
+                0..=2 => matches!(
+                    name,
+                    "potion" | "splash_potion" | "lingering_potion" | "glass_bottle"
+                ),
                 3 => super::station::is_brew_ingredient(name),
                 _ => name == "blaze_powder",
             };
@@ -1164,7 +1173,12 @@ impl Game {
         let valid = slot >= 0 && (slot as usize) < n;
         let creative = self.players[&eid].gamemode == 1;
         let result_slot = |i: usize| cw.kind.result_slot() == Some(i);
-        if cw.kind.is_station() && valid && cw.kind.result_slot() == Some(slot as usize) && mode != 5 && mode != 6 {
+        if cw.kind.is_station()
+            && valid
+            && cw.kind.result_slot() == Some(slot as usize)
+            && mode != 5
+            && mode != 6
+        {
             self.station_result_click(eid, &cw, mode, button);
             self.station_update(eid);
             if let Some(p) = self.players.get_mut(&eid) {
@@ -1292,7 +1306,10 @@ impl Game {
                                 // one item of the stack goes into the empty item slot
                                 if self.win_get(eid, &cw, 0).count == 0 {
                                     self.win_set(eid, &cw, 0, Stack { count: 1, ..s });
-                                    Stack { count: s.count - 1, ..s }
+                                    Stack {
+                                        count: s.count - 1,
+                                        ..s
+                                    }
                                 } else {
                                     s
                                 }

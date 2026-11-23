@@ -544,7 +544,14 @@ impl Game {
                 for &e in &ids {
                     let left = self.give_stack(e, proto);
                     if left > 0 {
-                        self.throw_item(e, Stack { count: left, ..proto }, false);
+                        self.throw_item(
+                            e,
+                            Stack {
+                                count: left,
+                                ..proto
+                            },
+                            false,
+                        );
                     }
                 }
                 let comp = tr("chat.square_brackets", vec![item_name(item)]);

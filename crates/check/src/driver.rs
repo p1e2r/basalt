@@ -176,6 +176,12 @@ pub fn try_main() -> Option<i32> {
         let res: Vec<Value> = std::fs::read_to_string(&json_path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
         for e in &scen {
             let mine: Vec<&Value> = res.iter().filter(|r| r["id"] == json!(e.id) || r["id"] == json!(format!("diff:{}", e.id))).collect();
+            // a vanilla-only scenario has nothing to run without a vanilla server
+            let vanilla_only = crate::scenarios::ALL.iter().any(|sp| sp.id == e.id && sp.servers == crate::runner::Servers::VanillaOnly);
+            if mine.is_empty() && vanilla.is_none() && vanilla_only {
+                rows.push(RunRow { id: e.id.clone(), kind: "scenario", result: "SKIP", secs: 0.0, detail: "vanilla-only scenario, no vanilla server".into() });
+                continue;
+            }
             let pass = !mine.is_empty() && mine.iter().all(|r| r["pass"] == json!(true));
             let detail = if mine.is_empty() { "no result (runner failed?)".into() } else if pass { format!("{} result row(s)", mine.len()) } else { mine.iter().filter(|r| r["pass"] != json!(true)).filter_map(|r| r["failures"].get(0).and_then(|f| f.as_str()).map(String::from)).next().unwrap_or_default() };
             if pass { cache.store_pass(&key_of(e, &a), &detail); }

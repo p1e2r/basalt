@@ -33,7 +33,9 @@ fn open_at(bot: &Bot, p: [i32; 3]) -> Result<()> {
         s.container.clear();
     }
     bot.place(p, 1);
-    if !bot.wait_until(Duration::from_secs(3), |s| s.screen.is_some() && !s.container.is_empty()) {
+    if !bot.wait_until(Duration::from_secs(3), |s| {
+        s.screen.is_some() && !s.container.is_empty()
+    }) {
         bail!("station at {p:?} did not open");
     }
     bot.wait_ticks(3);
@@ -50,7 +52,14 @@ fn menu(bot: &Bot) -> (String, String, usize) {
 }
 
 /// Give `spec` (e.g. `iron_sword[damage=5]`, count) and move it into container slot `slot` (n_cont container slots).
-fn put(bot: &Bot, n_cont: usize, _hotbar: usize, slot: usize, spec: &str, count: i32) -> Result<()> {
+fn put(
+    bot: &Bot,
+    n_cont: usize,
+    _hotbar: usize,
+    slot: usize,
+    spec: &str,
+    count: i32,
+) -> Result<()> {
     bot.cmd_reply(&format!("give @s minecraft:{spec} {count}"))?;
     let name = spec.split('[').next().unwrap_or(spec).to_string();
     // the stack lands in the first free slot (hotbar first): find it by name
@@ -59,7 +68,9 @@ fn put(bot: &Bot, n_cont: usize, _hotbar: usize, slot: usize, spec: &str, count:
         hb = (0..9).find(|&i| s.inv[36 + i].name() == name);
         hb.is_some()
     });
-    let Some(hb) = hb else { bail!("{spec} did not arrive") };
+    let Some(hb) = hb else {
+        bail!("{spec} did not arrive")
+    };
     bot.wait_ticks(2);
     bot.click((n_cont + 27 + hb) as i16, 0, 0);
     bot.wait_ticks(2);
@@ -79,7 +90,11 @@ fn reset(bot: &Bot, levels: i32) -> Result<()> {
     bot.cmd_reply("clear @s")?;
     bot.cmd_reply(&format!("xp set @s {levels} levels"))?;
     bot.wait_ticks(3);
-    let left: Vec<String> = bot.st().inv[5..].iter().map(stack_str).filter(|x| !x.is_empty()).collect();
+    let left: Vec<String> = bot.st().inv[5..]
+        .iter()
+        .map(stack_str)
+        .filter(|x| !x.is_empty())
+        .collect();
     if !left.is_empty() {
         bail!("inventory not empty after clear: {left:?}");
     }
@@ -133,7 +148,11 @@ pub fn enchant_table(ctx: &mut Ctx) -> Result<()> {
         .flat_map(|x| (-2..=2).map(move |z| (x, z)))
         .filter(|(x, z): &(i32, i32)| x.abs() == 2 || z.abs() == 2)
         .collect();
-    let non_corner: Vec<(i32, i32)> = ring.iter().copied().filter(|(x, z)| !(x.abs() == 2 && z.abs() == 2)).collect();
+    let non_corner: Vec<(i32, i32)> = ring
+        .iter()
+        .copied()
+        .filter(|(x, z)| !(x.abs() == 2 && z.abs() == 2))
+        .collect();
     let place = |bot: &Bot, list: &[(i32, i32)], n: usize, block: &str| -> Result<()> {
         let mut k = 0;
         for &(dx, dz) in list {
@@ -154,13 +173,13 @@ pub fn enchant_table(ctx: &mut Ctx) -> Result<()> {
         }
         Ok(())
     };
-    let mut cost2 = |ctx: &mut Ctx, label: &str, bot: &Bot| -> Result<(i16, i16, i16)> {
+    let cost2 = |ctx: &mut Ctx, label: &str, bot: &Bot| -> Result<(i16, i16, i16)> {
         reset(bot, 30)?;
         bot.cmd_reply("give @s minecraft:diamond_pickaxe")?;
         bot.cmd_reply("give @s minecraft:lapis_lazuli 10")?;
         bot.wait_ticks(3);
         open_at(bot, t)?;
-        bot.click(2 + 27 + 0, 0, 0);
+        bot.click(2 + 27, 0, 0);
         bot.wait_ticks(2);
         bot.click(0, 0, 0);
         bot.wait_ticks(3);
@@ -196,7 +215,11 @@ pub fn enchant_table(ctx: &mut Ctx) -> Result<()> {
     // a gap blocked by stone hides the shelves behind it: 14 shelves + 1 whose gap is blocked -> not 30
     clear_ring(&bot)?;
     place(&bot, &non_corner, 14, "bookshelf")?;
-    setblock(&bot, [t[0] + non_corner[7].0, t[1] + 1, t[2] + non_corner[7].1], "bookshelf")?;
+    setblock(
+        &bot,
+        [t[0] + non_corner[7].0, t[1] + 1, t[2] + non_corner[7].1],
+        "bookshelf",
+    )?;
     setblock(&bot, [t[0] + 1, t[1], t[2]], "stone")?;
     let cg = cost2(ctx, "gap blocked (stone east)", &bot)?;
     ctx.metric("gap_blocked_cost2_is_30", (cg.2 == 30) as u8 as f64, 0.0);
@@ -242,9 +265,17 @@ pub fn enchant_table(ctx: &mut Ctx) -> Result<()> {
         ),
     );
     ctx.check(!item.ench.is_empty(), "item not enchanted");
-    ctx.metric("enchants_applied", (!item.ench.is_empty()) as u8 as f64, 0.0);
+    ctx.metric(
+        "enchants_applied",
+        (!item.ench.is_empty()) as u8 as f64,
+        0.0,
+    );
     ctx.metric("lapis_left", lap.count as f64, 0.0);
-    ctx.metric("xp_total_unchanged", (bot.st().xp_total == xp0) as u8 as f64, 0.0);
+    ctx.metric(
+        "xp_total_unchanged",
+        (bot.st().xp_total == xp0) as u8 as f64,
+        0.0,
+    );
     ctx.metric("level_after", bot.st().xp_level as f64, 0.0);
     ctx.metric("seed_changed", (prop(&bot, 3) != seed0) as u8 as f64, 0.0);
     // a second click on an enchanted item does nothing
@@ -267,11 +298,33 @@ pub fn anvil_cases(ctx: &mut Ctx) -> Result<()> {
     let (bot, o) = arena(ctx, 6, 6)?;
     let p = [o[0] + 2, Y, o[2] + 4];
     setblock(&bot, p, "anvil")?;
+    #[allow(clippy::type_complexity)]
     let cases: &[(&str, &str, i32, &str, i32, Option<&str>)] = &[
         ("rename", "iron_sword", 1, "", 0, Some("Foo")),
-        ("repair_ingot", "iron_sword[damage=100]", 1, "iron_ingot", 2, None),
-        ("repair_one_ingot", "iron_sword[damage=100]", 1, "iron_ingot", 1, None),
-        ("combine_damaged", "iron_sword[damage=100]", 1, "iron_sword[damage=50]", 1, None),
+        (
+            "repair_ingot",
+            "iron_sword[damage=100]",
+            1,
+            "iron_ingot",
+            2,
+            None,
+        ),
+        (
+            "repair_one_ingot",
+            "iron_sword[damage=100]",
+            1,
+            "iron_ingot",
+            1,
+            None,
+        ),
+        (
+            "combine_damaged",
+            "iron_sword[damage=100]",
+            1,
+            "iron_sword[damage=50]",
+            1,
+            None,
+        ),
         (
             "book_sharp3",
             "iron_sword",
@@ -344,8 +397,22 @@ pub fn anvil_cases(ctx: &mut Ctx) -> Result<()> {
             1,
             None,
         ),
-        ("rename_penalty", "iron_sword[repair_cost=3]", 1, "", 0, Some("Bar")),
-        ("rename_named", "iron_sword[custom_name='\"Old\"']", 1, "", 0, Some("")),
+        (
+            "rename_penalty",
+            "iron_sword[repair_cost=3]",
+            1,
+            "",
+            0,
+            Some("Bar"),
+        ),
+        (
+            "rename_named",
+            "iron_sword[custom_name='\"Old\"']",
+            1,
+            "",
+            0,
+            Some(""),
+        ),
         ("different_items", "iron_sword", 1, "iron_pickaxe", 1, None),
         (
             "mending_book",
@@ -391,13 +458,20 @@ pub fn anvil_take(ctx: &mut Ctx) -> Result<()> {
     bot.wait_ticks(4);
     let (c1, level) = {
         let s = bot.st();
-        (s.container.get(1).map(|x| x.count).unwrap_or(-1), s.xp_level)
+        (
+            s.container.get(1).map(|x| x.count).unwrap_or(-1),
+            s.xp_level,
+        )
     };
     note(ctx, format!("cost {cost}, ingots left {c1}, level {level}"));
     ctx.metric("take_cost", cost as f64, 0.0);
     ctx.metric("take_ingots_left", c1 as f64, 0.0);
     ctx.metric("take_level_after", level as f64, 0.0);
-    ctx.metric("take_sword_in_inventory", (bot.st().count("iron_sword") == 1) as u8 as f64, 0.0);
+    ctx.metric(
+        "take_sword_in_inventory",
+        (bot.st().count("iron_sword") == 1) as u8 as f64,
+        0.0,
+    );
     // not enough levels: result cannot be taken
     bot.close_container();
     reset(&bot, 1)?;
@@ -407,7 +481,11 @@ pub fn anvil_take(ctx: &mut Ctx) -> Result<()> {
     bot.wait_ticks(3);
     bot.click(2, 0, 1);
     bot.wait_ticks(3);
-    ctx.metric("poor_cannot_take", (bot.st().count("iron_sword") == 0) as u8 as f64, 0.0);
+    ctx.metric(
+        "poor_cannot_take",
+        (bot.st().count("iron_sword") == 0) as u8 as f64,
+        0.0,
+    );
     bot.close_container();
     Ok(())
 }
@@ -422,22 +500,42 @@ pub fn grindstone_cases(ctx: &mut Ctx) -> Result<()> {
             "diamond_sword[enchantments={sharpness:3,unbreaking:2},damage=10]",
             "",
         ),
-        ("sword_curse", "diamond_sword[enchantments={sharpness:3,vanishing_curse:1}]", ""),
-        ("book", "enchanted_book[stored_enchantments={sharpness:3}]", ""),
+        (
+            "sword_curse",
+            "diamond_sword[enchantments={sharpness:3,vanishing_curse:1}]",
+            "",
+        ),
+        (
+            "book",
+            "enchanted_book[stored_enchantments={sharpness:3}]",
+            "",
+        ),
         (
             "book_curse",
             "enchanted_book[stored_enchantments={sharpness:3,binding_curse:1}]",
             "",
         ),
-        ("two_damaged", "iron_pickaxe[damage=100]", "iron_pickaxe[damage=50]"),
+        (
+            "two_damaged",
+            "iron_pickaxe[damage=100]",
+            "iron_pickaxe[damage=50]",
+        ),
         (
             "two_enchanted",
             "iron_pickaxe[damage=100,enchantments={efficiency:2}]",
             "iron_pickaxe[damage=50,enchantments={unbreaking:1}]",
         ),
-        ("different", "iron_pickaxe[damage=10]", "iron_sword[damage=10]"),
+        (
+            "different",
+            "iron_pickaxe[damage=10]",
+            "iron_sword[damage=10]",
+        ),
         ("plain_damaged", "iron_pickaxe[damage=10]", ""),
-        ("penalty", "diamond_sword[enchantments={sharpness:3},repair_cost=15]", ""),
+        (
+            "penalty",
+            "diamond_sword[enchantments={sharpness:3},repair_cost=15]",
+            "",
+        ),
     ];
     for (name, a, b) in cases {
         reset(&bot, 0)?;
@@ -446,7 +544,11 @@ pub fn grindstone_cases(ctx: &mut Ctx) -> Result<()> {
         if !b.is_empty() {
             put(&bot, 3, 1, 1, b, 1)?;
         }
-        let d = digest_case(&bot, 2).split('|').next().unwrap_or("").to_string();
+        let d = digest_case(&bot, 2)
+            .split('|')
+            .next()
+            .unwrap_or("")
+            .to_string();
         note(ctx, format!("{name}: {d}"));
         ctx.metric(&format!("grind_{name}"), fnv(&d), 0.0);
         bot.close_container();
@@ -454,10 +556,21 @@ pub fn grindstone_cases(ctx: &mut Ctx) -> Result<()> {
     // take: xp is paid out as orbs (min cost of the removed enchantments, halved)
     reset(&bot, 0)?;
     open_at(&bot, p)?;
-    put(&bot, 3, 0, 0, "diamond_sword[enchantments={sharpness:5}]", 1)?;
+    put(
+        &bot,
+        3,
+        0,
+        0,
+        "diamond_sword[enchantments={sharpness:5}]",
+        1,
+    )?;
     bot.click(2, 0, 1);
     bot.wait_ticks(4);
-    ctx.metric("grind_take_sword", (bot.st().count("diamond_sword") == 1) as u8 as f64, 0.0);
+    ctx.metric(
+        "grind_take_sword",
+        (bot.st().count("diamond_sword") == 1) as u8 as f64,
+        0.0,
+    );
     bot.close_container();
     Ok(())
 }
@@ -504,13 +617,21 @@ pub fn smithing_cases(ctx: &mut Ctx) -> Result<()> {
         put(&bot, 4, 0, 0, t, 1)?;
         put(&bot, 4, 1, 1, b, 1)?;
         put(&bot, 4, 2, 2, a, 1)?;
-        let d = digest_case(&bot, 3).split('|').next().unwrap_or("").to_string();
+        let d = digest_case(&bot, 3)
+            .split('|')
+            .next()
+            .unwrap_or("")
+            .to_string();
         note(ctx, format!("{name}: {d}"));
         ctx.metric(&format!("smith_{name}"), fnv(&d), 0.0);
         if *name == "netherite_sword" {
             bot.click(3, 0, 1);
             bot.wait_ticks(4);
-            ctx.metric("smith_take", (bot.st().count("netherite_sword") == 1) as u8 as f64, 0.0);
+            ctx.metric(
+                "smith_take",
+                (bot.st().count("netherite_sword") == 1) as u8 as f64,
+                0.0,
+            );
             let left: Vec<String> = bot.st().container.iter().take(4).map(stack_str).collect();
             note(ctx, format!("after take: {left:?}"));
             ctx.metric("smith_inputs_left", fnv(&left.join(",")), 0.0);
@@ -528,14 +649,36 @@ pub fn brewing(ctx: &mut Ctx) -> Result<()> {
     reset(&bot, 0)?;
     open_at(&bot, p)?;
     let (m, t, n) = menu(&bot);
-    ctx.check(m == "brewing_stand" && n == 41, format!("brewing menu {m} {t} {n}"));
-    put(&bot, 5, 0, 0, "potion[potion_contents={potion:\"minecraft:water\"}]", 1)?;
-    put(&bot, 5, 1, 1, "potion[potion_contents={potion:\"minecraft:water\"}]", 1)?;
+    ctx.check(
+        m == "brewing_stand" && n == 41,
+        format!("brewing menu {m} {t} {n}"),
+    );
+    put(
+        &bot,
+        5,
+        0,
+        0,
+        "potion[potion_contents={potion:\"minecraft:water\"}]",
+        1,
+    )?;
+    put(
+        &bot,
+        5,
+        1,
+        1,
+        "potion[potion_contents={potion:\"minecraft:water\"}]",
+        1,
+    )?;
     put(&bot, 5, 2, 4, "blaze_powder", 2)?;
     put(&bot, 5, 3, 3, "nether_wart", 3)?;
     let t0 = std::time::Instant::now();
-    let started = bot.wait_until(Duration::from_secs(3), |s| s.props.get(&0).copied().unwrap_or(0) > 300);
-    ctx.check(started, format!("brew did not start: props {:?}", bot.st().props));
+    let started = bot.wait_until(Duration::from_secs(3), |s| {
+        s.props.get(&0).copied().unwrap_or(0) > 300
+    });
+    ctx.check(
+        started,
+        format!("brew did not start: props {:?}", bot.st().props),
+    );
     let (bt, fuel) = (prop(&bot, 0), prop(&bot, 1));
     note(ctx, format!("started: brew time {bt}, fuel {fuel}"));
     ctx.metric("fuel_after_start", fuel as f64, 0.0);
@@ -604,7 +747,11 @@ pub fn brew_table(ctx: &mut Ctx) -> Result<()> {
             if k >= 14 * 14 {
                 break;
             }
-            let pos = [o[0] + 1 + (k % 14) as i32, Y + 1, o[2] + 1 + (k / 14) as i32];
+            let pos = [
+                o[0] + 1 + (k % 14) as i32,
+                Y + 1,
+                o[2] + 1 + (k / 14) as i32,
+            ];
             stands.push((pos, *b, *ing));
         }
     }
@@ -637,10 +784,17 @@ pub fn brew_table(ctx: &mut Ctx) -> Result<()> {
     }
     // per ingredient hash over all bases so a difference names the ingredient
     for ing in ingredients {
-        let part: Vec<&String> = table.iter().filter(|l| l.contains(&format!("+{ing}="))).collect();
+        let part: Vec<&String> = table
+            .iter()
+            .filter(|l| l.contains(&format!("+{ing}=")))
+            .collect();
         ctx.metric(
             &format!("brew_{ing}"),
-            fnv(&part.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(";")),
+            fnv(&part
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(";")),
             0.0,
         );
     }
@@ -651,7 +805,14 @@ pub fn brew_table(ctx: &mut Ctx) -> Result<()> {
 /// Record a note; with `M10_NOTES=1` also print it (the result table only shows the first note).
 fn note(ctx: &mut Ctx, s: String) {
     if std::env::var("M10_NOTES").is_ok() {
-        eprintln!("[{}] {s}", if ctx.is_vanilla() { "vanilla" } else { "basalt" });
+        eprintln!(
+            "[{}] {s}",
+            if ctx.is_vanilla() {
+                "vanilla"
+            } else {
+                "basalt"
+            }
+        );
     }
     ctx.note(s);
 }
