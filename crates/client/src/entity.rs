@@ -48,7 +48,7 @@ pub struct Entity {
     pub yaw: f32, pub pitch: f32, target_yaw: f32, target_pitch: f32,
     pub head_yaw: f32, prev_head_yaw: f32, target_head_yaw: f32,
     pub body_yaw: f32, prev_body_yaw: f32,
-    prev_pitch: f32,
+    pub prev_pitch: f32,
     pub vel: [f64; 3],
     pub on_ground: bool,
     pub flags: u8,
@@ -512,6 +512,23 @@ pub fn build_model_gui(atlas: &EntityAtlas, e: &Entity, cx: f32, cy: f32, scale:
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn head_pitch_never_flips_while_interpolating() {
+        // a mob whose head goes from level to 45° up and back: every rendered pitch stays between 0 and -45°
+        let mut e = super::Entity::new(1, uuid::Uuid::nil(), 0, [0.0; 3], [0.0; 3], 0.0, 0.0, 0.0);
+        for target in [-45.0f32, 0.0, -90.0, 30.0] {
+            e.move_to(e.pos, Some((0.0, target)));
+            let (lo, hi) = (target.min(e.pitch), target.max(e.pitch));
+            for _ in 0..12 {
+                e.tick();
+                for a in [0.0f32, 0.5, 1.0] {
+                    let p = e.prev_pitch + (e.pitch - e.prev_pitch) * a;
+                    assert!(p >= lo - 0.01 && p <= hi + 0.01 && p.abs() <= 90.0, "pitch {p} left [{lo}, {hi}] on the way to {target}");
+                }
+            }
+        }
+    }
+
     #[test]
     fn wraps() {
         assert_eq!(super::wrap(190.0), -170.0);

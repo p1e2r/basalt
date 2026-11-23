@@ -14,7 +14,7 @@ use winit::keyboard::KeyCode;
 const W: u32 = 854;
 const H: u32 = 480;
 
-pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "sounds", "menus"];
+pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "sounds", "menus"];
 
 enum Outcome { Pass(String), Skip(String) }
 
@@ -40,7 +40,7 @@ pub fn run(args: &Args, assets: Arc<Assets>, name: &str) -> Result<bool> {
         let t = Instant::now();
         let r = match s {
             "edge_chunks" => edge_chunks(&ctx), "inventory" => inventory(&ctx), "crafting_table" => crafting_table(&ctx), "death" => death(&ctx),
-            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx),
+            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx),
             other => Err(anyhow!("unknown scenario {other} (known: {})", ALL.join(", "))),
         };
         let secs = t.elapsed().as_secs_f32();
@@ -485,6 +485,38 @@ fn interp(c: &Ctx) -> Result<Outcome> {
     if moved < 1.5 { bail!("other player moved only {moved:.2}"); }
     if max_jump > 0.12 { bail!("rendered position jumps {max_jump:.3} blocks between frames"); }
     Ok(Outcome::Pass(format!("moved {moved:.2} blocks over {frames} frames, max frame step {max_jump:.3}")))
+}
+
+/// Regression: head pitch arrives as a *signed* byte. A mob looking up at a player above it used to
+/// decode as ~310° and its head interpolated through a backflip. Samples the rendered pitch every frame.
+fn head_pitch(c: &Ctx) -> Result<Outcome> {
+    let mut g = c.game("hp")?;
+    join(&mut g)?;
+    let o = [700.5, -54.0, 700.5];
+    cmd(&mut g, "time set midnight");
+    cmd(&mut g, "fill 698 -55 698 702 -55 702 stone");
+    wait(&mut g, 0.5)?;
+    tp(&mut g, o, 0.0, 0.0)?;
+    cmd(&mut g, "summon zombie 700.5 -60 700.5");
+    if !wait_until(&mut g, 5.0, |g| g.entities.values().any(|e| crate::entity::type_name(e.kind) == "zombie"))? { bail!("zombie not visible"); }
+    let id = g.entities.values().find(|e| crate::entity::type_name(e.kind) == "zombie").map(|e| e.id).unwrap();
+    let (mut min, mut max, mut last, mut max_step, mut frames) = (f32::MAX, f32::MIN, None::<f32>, 0.0f32, 0);
+    let t0 = Instant::now();
+    while t0.elapsed().as_secs_f32() < 4.0 {
+        let alpha = g.update() as f32;
+        if let Some(e) = g.entities.get(&id) {
+            let p = e.prev_pitch + (e.pitch - e.prev_pitch) * alpha;
+            min = min.min(p); max = max.max(p);
+            if let Some(l) = last { max_step = max_step.max((p - l).abs()); }
+            last = Some(p); frames += 1;
+        }
+        std::thread::sleep(Duration::from_millis(4));
+    }
+    if frames < 50 { bail!("only {frames} frames with the zombie in view"); }
+    if min < -90.01 || max > 90.01 { bail!("rendered head pitch left ±90°: {min:.1}..{max:.1}"); }
+    if max_step > 20.0 { bail!("head pitch jumped {max_step:.1}° between frames (backflip)"); }
+    if min > -10.0 { bail!("the zombie never looked up at the player above it (min pitch {min:.1}°) — scenario not exercising the bug"); }
+    Ok(Outcome::Pass(format!("pitch {min:.1}..{max:.1}° over {frames} frames, max step {max_step:.1}°")))
 }
 
 /// Sound index + Ogg decoding from the asset store; play events for local place/break and server packets.

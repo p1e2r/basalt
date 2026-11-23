@@ -229,7 +229,11 @@ fn read_sound_event(r: &mut Reader) -> Result<String> {
 }
 
 
+/// Yaw byte: 256 steps per turn (wrapping, so interpolation goes through `entity::wrap`).
 fn angle(b: u8) -> f32 { b as f32 * 360.0 / 256.0 }
+/// Pitch byte: the same scale but *signed* (-128..127 → -180..177.2°), then limited to what a head
+/// can do. Read unsigned, "slightly up" (0xF0) is 337.5° and the entity lerps through a backflip.
+pub fn pitch_angle(b: u8) -> f32 { ((b as i8) as f32 * 360.0 / 256.0).clamp(-90.0, 90.0) }
 
 fn handle_play(id: i32, data: &[u8], tx: &Sender<Event>, players: &mut HashMap<Uuid, String>) -> Result<()> {
     let mut r = Reader::new(data);
@@ -322,7 +326,7 @@ fn handle_play(id: i32, data: &[u8], tx: &Sender<Event>, players: &mut HashMap<U
         cb::ADD_ENTITY => {
             let id = r.varint()?; let uuid = r.uuid()?; let kind = r.varint()?;
             let pos = [r.f64()?, r.f64()?, r.f64()?];
-            let vel = read_lpvec3(&mut r)?; let pitch = angle(r.u8()?); let yaw = angle(r.u8()?); let head_yaw = angle(r.u8().unwrap_or(0));
+            let vel = read_lpvec3(&mut r)?; let pitch = pitch_angle(r.u8()?); let yaw = angle(r.u8()?); let head_yaw = angle(r.u8().unwrap_or(0));
             Event::AddEntity { id, uuid, kind, pos, vel, yaw, pitch, head_yaw }
         }
         cb::MOVE_ENTITY_POS => {
@@ -332,11 +336,11 @@ fn handle_play(id: i32, data: &[u8], tx: &Sender<Event>, players: &mut HashMap<U
         }
         cb::MOVE_ENTITY_POS_ROT => {
             let id = r.varint()?; let d = [r.i16()? as f64 / 4096.0, r.i16()? as f64 / 4096.0, r.i16()? as f64 / 4096.0];
-            let yaw = angle(r.u8()?); let pitch = angle(r.u8()?); let on_ground = r.bool().unwrap_or(false);
+            let yaw = angle(r.u8()?); let pitch = pitch_angle(r.u8()?); let on_ground = r.bool().unwrap_or(false);
             Event::MoveEntity { id, delta: d, rot: Some((yaw, pitch)), on_ground }
         }
         cb::MOVE_ENTITY_ROT => {
-            let id = r.varint()?; let yaw = angle(r.u8()?); let pitch = angle(r.u8()?); let on_ground = r.bool().unwrap_or(false);
+            let id = r.varint()?; let yaw = angle(r.u8()?); let pitch = pitch_angle(r.u8()?); let on_ground = r.bool().unwrap_or(false);
             Event::MoveEntity { id, delta: [0.0; 3], rot: Some((yaw, pitch)), on_ground }
         }
         cb::ENTITY_POSITION_SYNC => {
@@ -386,5 +390,29 @@ mod tests {
             let d = super::read_lpvec3(&mut basalt_protocol::Reader::new(&w.buf)).unwrap();
             for i in 0..3 { assert!((d[i] - v[i]).abs() < 1e-3 * v[i].abs().max(1.0), "{v:?} -> {d:?}"); }
         }
+    }
+}
+
+#[cfg(test)]
+mod angle_tests {
+    use super::*;
+    #[test]
+    fn pitch_is_signed_and_limited() {
+        assert_eq!(pitch_angle(0), 0.0);
+        assert_eq!(pitch_angle(0xF0), -22.5);          // looking slightly up (was 337.5°)
+        assert_eq!(pitch_angle(0x10), 22.5);           // looking slightly down
+        assert_eq!(pitch_angle(0xC0), -90.0);          // straight up
+        assert_eq!(pitch_angle(0x40), 90.0);           // straight down
+        assert_eq!(pitch_angle(0x80), -90.0);          // out of range → clamped, not a flip
+        assert_eq!(pitch_angle(0x7F), 90.0);
+    }
+    #[test]
+    fn move_entity_pos_rot_decodes_signed_pitch() {
+        use basalt_protocol::Writer;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut w = Writer::new();
+        w.varint(7).i16(0).i16(0).i16(0).u8(64).u8(0xE0).bool(true);   // yaw 90°, pitch byte 0xE0 = -45°
+        handle_play(cb::MOVE_ENTITY_POS_ROT, &w.buf, &tx, &mut HashMap::new()).unwrap();
+        match rx.try_recv().unwrap() { Event::MoveEntity { id: 7, rot: Some((yaw, pitch)), .. } => { assert_eq!(yaw, 90.0); assert_eq!(pitch, -45.0); } _ => panic!("wrong event") }
     }
 }
