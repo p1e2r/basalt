@@ -43,6 +43,7 @@ pub static ALL: &[Spec] = &[
     spec!("M2", "m2_block_orientation", m1::orientation, Flat, Both, true, "log axis from clicked face, stairs facing from yaw, slab half"),
     spec!("M2", "m2_place_shapes", m1::place_shapes, Flat, Both, true, "doors/beds/tall plants halves, fence/wall/pane connections, support refusal, trapdoor toggling (vs vanilla)"),
     spec!("M2", "m2_persistence", m1::persistence, FlatOnDisk, BasaltOnly, false, "restart with same --world: block, inventory, position kept"),
+    spec!("M3", "m3_locate_structure", m3::locate, Generated, Both, true, "/locate structure (ids + a tag) from near spawn: position, distance and reply key vs vanilla (seed 12345)"),
     spec!("M3", "m3_worldgen_spawn", m3::worldgen_columns, Generated, BasaltOnly, false, "bot-observed terrain at spawn columns = vanilla region files (seed 12345)"),
     spec!("M4", "m4_dig_timing", m4::dig_timing, Flat, Both, true, "survival dig with tool timing; too-fast break rejected"),
     spec!("M4", "m4_drops_pickup", m4::drops_pickup, Flat, Both, true, "broken block drops an item entity which is picked up"),

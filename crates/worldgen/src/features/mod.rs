@@ -453,9 +453,17 @@ impl Features {
     /// Run all decoration steps for chunk (ncx, ncz). `biomes`: biome ids present in
     /// that chunk and its 8 neighbours. The region's writable area must be set by the caller.
     pub fn decorate(&self, seed: i64, ncx: i32, ncz: i32, biomes: &[u8], reg: &mut Region) {
+        self.decorate_with(seed, ncx, ncz, biomes, reg, &mut |_, _, _, _| {});
+    }
+
+    /// [`Features::decorate`] with a hook run at the start of every step (structure pieces):
+    /// `structures(step, decoration seed, region, random)`.
+    pub fn decorate_with(&self, seed: i64, ncx: i32, ncz: i32, biomes: &[u8], reg: &mut Region, structures: &mut dyn FnMut(usize, i64, &mut Region, &mut R)) {
         let mut r = BitXoroshiro::new(0);
         let deco = set_decoration_seed(&mut r, seed, ncx * 16, ncz * 16);
-        for step in 0..self.steps.len() {
+        for step in 0..self.steps.len().max(11) {
+            structures(step, deco, reg, &mut r);
+            if step >= self.steps.len() { continue; }
             let mut idx: BTreeSet<u32> = BTreeSet::new();
             for b in biomes {
                 if let Some(st) = self.biome_steps[*b as usize].get(step) { idx.extend(st.iter().copied()); }

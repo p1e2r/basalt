@@ -14,7 +14,7 @@ use std::path::Path;
 
 /// Commands Basalt implements (top-level names present in vanilla's tree). Redirect targets
 /// (e.g. `tp` → `teleport`) are pulled in automatically.
-pub const IMPLEMENTED: &[&str] = &["gamemode", "tp", "teleport", "give", "time", "say", "list", "save-all", "effect", "enchant", "setblock", "fill", "kill", "summon", "help", "weather", "clear"];
+pub const IMPLEMENTED: &[&str] = &["gamemode", "tp", "teleport", "give", "time", "say", "list", "save-all", "effect", "enchant", "setblock", "fill", "kill", "summon", "help", "weather", "clear", "locate"];
 /// Basalt-only commands (not in vanilla): name, optional integer argument.
 const EXTRA: &[(&str, Option<&str>)] = &[("spawn", None), ("save", None), ("mobs", Some("radius"))];
 

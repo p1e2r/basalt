@@ -683,6 +683,7 @@ impl Game {
                 self.cmd_item_replace_block(eid, p)?
             }
             "help" | "help command" => self.cmd_help(eid, p)?,
+            "locate structure structure" => self.cmd_locate_structure(eid, p)?,
             path if path.starts_with("weather") => {
                 let kind = p.path[1].as_str();
                 let ticks = if p.has("duration") {
@@ -1487,6 +1488,51 @@ impl Game {
     }
 
     // ------------------------------------------------------------ /help
+
+    /// `/locate structure <id|#tag>`: nearest start by vanilla's placement rules (crates/worldgen
+    /// structure sets). Reply `commands.locate.structure.success` [id, [x, ~, z], distance]; a tag
+    /// shows as `#tag (found id)`. Distance = floor of the horizontal distance from the block the
+    /// sender stands in (measured against vanilla's replies).
+    fn cmd_locate_structure(&mut self, eid: i32, p: &Parsed) -> R<()> {
+        let spec = p.arg("structure").to_string();
+        let pos = self.players[&eid].pos;
+        let (bx, bz) = (pos[0].floor() as i32, pos[2].floor() as i32);
+        let gen = self.gen.gen.clone();
+        let found = if spec.starts_with('#') || spec.contains(':') {
+            gen.locate_structure(&spec, bx, bz)
+        } else {
+            gen.locate_structure(&format!("minecraft:{spec}"), bx, bz)
+        };
+        let full = if spec.starts_with('#') || spec.contains(':') {
+            spec.clone()
+        } else {
+            format!("minecraft:{spec}")
+        };
+        match found {
+            Err(()) => Err(err("commands.locate.structure.invalid", &[&full])),
+            Ok(None) => Err(err("commands.locate.structure.not_found", &[&full])),
+            Ok(Some((id, x, z))) => {
+                let shown = if full.starts_with('#') {
+                    format!("{full} ({id})")
+                } else {
+                    id
+                };
+                let dist = (((x - bx) as f64).powi(2) + ((z - bz) as f64).powi(2))
+                    .sqrt()
+                    .floor() as i64;
+                let coords = tr(
+                    "chat.square_brackets",
+                    vec![tr("chat.coordinates", vec![s(x), s("~"), s(z)])],
+                );
+                self.ok(
+                    eid,
+                    "commands.locate.structure.success",
+                    vec![s(shown), coords, s(dist)],
+                );
+                Ok(())
+            }
+        }
+    }
 
     fn cmd_help(&mut self, eid: i32, p: &Parsed) -> R<()> {
         let Some(tree) = cmdparse::tree(&self.sh.cfg.data_dir) else {

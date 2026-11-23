@@ -332,6 +332,7 @@ dependencies = [
  "flate2",
  "md-5",
  "serde_json",
+ "zip",
 ]
 
 [[package]]

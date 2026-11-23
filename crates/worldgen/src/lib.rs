@@ -19,6 +19,7 @@ pub mod features;
 pub mod noise;
 pub mod region;
 pub mod random;
+pub mod structure;
 pub mod surface;
 
 use aquifer::{Aquifer, AquiferNodes, Fluid};
@@ -171,6 +172,8 @@ pub struct Generator {
     trig: carver::Trig,
     features: features::Features,
     protos: std::sync::Mutex<ProtoCache>,
+    /// Overworld structures (None in other dimensions or when disabled).
+    pub(crate) structures: Option<structure::Structures>,
 }
 
 /// A chunk generated up to the carver stage (input for decoration).
@@ -328,9 +331,13 @@ impl Generator {
         features::GEN_RANGE.with(|r| r.set((gen_min_y, gen_height)));
         let features = features::Features::load(&data_dir.join("data/minecraft"), &biome_names, &biomes.possible_biomes());
         features::GEN_RANGE.with(|r| r.set((MIN_Y, HEIGHT)));
-        let features = features?;
+        let mut features = features?;
         let surface = surface::SurfaceSystem::load(&wg, &settings, rand, &biome_names, default_block, sea_level, random::biome_zoom_seed(seed))?;
+        let structures = if dim == Dimension::Overworld && std::env::var("BASALT_NO_STRUCTURES").is_err() {
+            Some(structure::Structures::load(data_dir, &biome_names, &mut features)?)
+        } else { None };
         Ok(Generator {
+            structures,
             seed, dim, gen_min_y, gen_height, biome_names, biomes, surface, carvers, biome_carvers, trig: carver::Trig::new(), features,
             protos: std::sync::Mutex::new(ProtoCache { map: HashMap::new(), order: Default::default(), cap: 1024 }),
             aquifer_rand: rand.from_hash("minecraft:aquifer").fork_positional().xoro(),
@@ -390,8 +397,19 @@ impl Generator {
                 for ez in -1..=1 { reg.chunk_biomes(nx + ex, nz + ez, &mut set); }
             }
             let list: Vec<u8> = set.iter().enumerate().filter(|(_, v)| **v).map(|(i, _)| i as u8).collect();
-            reg.write = ((nx - 1) * 16, (nx + 2) * 16 - 1, (nz - 1) * 16, (nz + 2) * 16 - 1);
-            self.features.decorate(self.seed, nx, nz, &list, &mut reg);
+            let window = ((nx - 1) * 16, (nx + 2) * 16 - 1, (nz - 1) * 16, (nz + 2) * 16 - 1);
+            reg.write = window;
+            if self.structures.is_some() {
+                let refs = self.structure_refs(nx, nz);
+                self.features.decorate_with(self.seed, nx, nz, &list, &mut reg, &mut |step, deco, reg, r| {
+                    if refs.is_empty() { return; }
+                    reg.write = (nx * 16, nx * 16 + 15, nz * 16, nz * 16 + 15);
+                    self.place_structures(&refs, step, deco, nx, nz, reg, r);
+                    reg.write = window;
+                });
+            } else {
+                self.features.decorate(self.seed, nx, nz, &list, &mut reg);
+            }
         }
         self.crop(GeneratedChunk { blocks: reg.take_chunk(cx, cz), biomes: own_biomes, min_y: MIN_Y })
     }
@@ -611,6 +629,73 @@ impl Generator {
     }
 
     pub fn stone_id(&self) -> u16 { self.default_block }
+
+    /// Lowest y above the noise-stage column at (x, z) whose blocks are all "free": for
+    /// `ocean_floor` false any non-air block counts as occupied (WORLD_SURFACE_WG), otherwise
+    /// only solid blocks (OCEAN_FLOOR_WG). Returns the generation bottom if the column is empty.
+    pub fn base_height(&self, x: i32, z: i32, ocean_floor: bool) -> i32 {
+        let mut e = Eval::new(&self.graph);
+        let mut aq = Aquifer::new(self.router.aq, self.aquifer_rand, self.sea_level, self.aquifers_enabled);
+        self.base_height_with(&mut e, &mut aq, x, z, ocean_floor)
+    }
+
+    pub(crate) fn base_height_with(&self, e: &mut Eval, aq: &mut Aquifer, x: i32, z: i32, ocean_floor: bool) -> i32 {
+        const CW: i32 = 4;
+        const CH: i32 = 8;
+        let cx0 = x.div_euclid(CW) * CW;
+        let cz0 = z.div_euclid(CW) * CW;
+        let fx = (x - cx0) as f64 / CW as f64;
+        let fz = (z - cz0) as f64 / CW as f64;
+        let ny = (self.gen_height / CH) as usize + 1;
+        let ns = self.interp_args.len();
+        let idx = |s: usize, dx: usize, dz: usize, iy: usize| ((s * 2 + dx) * 2 + dz) * ny + iy;
+        let mut corners = vec![0f64; ns * 4 * ny];
+        let mut have = vec![false; ny];
+        let top = self.gen_min_y + self.gen_height - 1;
+        for y in (self.gen_min_y..=top).rev() {
+            let yy = y - self.gen_min_y;
+            let iy = (yy / CH) as usize;
+            e.set_mode(Mode::Direct);
+            for k in [iy, iy + 1] {
+                if k >= ny || have[k] { continue; }
+                have[k] = true;
+                let cy = self.gen_min_y + k as i32 * CH;
+                for dx in 0..2 {
+                    for dz in 0..2 {
+                        for (s, a) in self.interp_args.iter().enumerate() {
+                            corners[idx(s, dx, dz, k)] = e.eval(*a, cx0 + dx as i32 * CW, cy, cz0 + dz as i32 * CW);
+                        }
+                    }
+                }
+            }
+            let fy = (yy % CH) as f64 / CH as f64;
+            e.set_mode(Mode::Interpolated);
+            for s in 0..ns {
+                let c = |dx: usize, dy: usize, dz: usize| corners[idx(s, dx, dz, (iy + dy).min(ny - 1))];
+                let v00 = noise::lerp(fy, c(0, 0, 0), c(0, 1, 0));
+                let v10 = noise::lerp(fy, c(1, 0, 0), c(1, 1, 0));
+                let v01 = noise::lerp(fy, c(0, 0, 1), c(0, 1, 1));
+                let v11 = noise::lerp(fy, c(1, 0, 1), c(1, 1, 1));
+                e.interp[s] = noise::lerp(fz, noise::lerp(fx, v00, v10), noise::lerp(fx, v01, v11));
+            }
+            let d = e.eval(self.router.final_density, x, y, z);
+            let occupied = match aq.compute(e, x, y, z, d) {
+                None => true,
+                Some(Fluid::Air) => false,
+                Some(_) => !ocean_floor,
+            };
+            if occupied { return y + 1; }
+        }
+        self.gen_min_y
+    }
+
+    /// Biome at block coordinates (sampled at the containing quart cell).
+    pub fn biome_at(&self, x: i32, y: i32, z: i32) -> u8 {
+        let mut e = Eval::new(&self.graph);
+        self.noise_biome(&mut e, x >> 2, y >> 2, z >> 2)
+    }
+
+    pub fn sea_level(&self) -> i32 { self.sea_level }
 }
 
 #[cfg(test)]
