@@ -7,7 +7,7 @@ OUT=${1:-target/smoke}
 PORT=${PORT:-25580}
 mkdir -p "$OUT"
 cargo build -q -p basalt-server -p basalt-client || exit 1
-./target/debug/basalt-server --memory --port "$PORT" --gamemode creative > "$OUT/server.log" 2>&1 &
+./target/debug/basalt-server --memory --flat --port "$PORT" --gamemode creative > "$OUT/server.log" 2>&1 &
 SRV=$!
 trap 'kill $SRV 2>/dev/null' EXIT
 for _ in $(seq 1 50); do grep -q "listening" "$OUT/server.log" && break; sleep 0.2; done

@@ -1,7 +1,7 @@
 //! Basalt server: a clean-room Minecraft Java 26.2 server.
 //!
 //! Usage: basalt-server [--port 25565] [--world DIR | --memory] [--seed N] [--view N]
-//!                      [--gamemode survival|creative] [--compression N] [--data ./data]
+//!                      [--gamemode survival|creative] [--compression N] [--data ./data] [--flat]
 mod conn;
 mod game;
 mod gen;
@@ -22,11 +22,12 @@ pub struct Config {
     pub gamemode: u8,
     pub compression: i32,
     pub data_dir: PathBuf,
+    pub flat: bool,
 }
 
 fn parse_args() -> Config {
     let mut c = Config { port: 25565, world_dir: Some("world".into()), seed: 12345, view_distance: 10, max_players: 20,
-        motd: "A Basalt server".into(), gamemode: 0, compression: 256, data_dir: "data".into() };
+        motd: "A Basalt server".into(), gamemode: 0, compression: 256, data_dir: "data".into(), flat: false };
     let mut it = std::env::args().skip(1);
     while let Some(k) = it.next() {
         let mut v = || it.next().unwrap_or_default();
@@ -40,6 +41,7 @@ fn parse_args() -> Config {
             "--gamemode" => c.gamemode = match v().as_str() { "creative" | "1" => 1, "adventure" | "2" => 2, "spectator" | "3" => 3, _ => 0 },
             "--compression" => c.compression = v().parse().unwrap_or(256),
             "--data" => c.data_dir = v().into(),
+            "--flat" => c.flat = true,
             other => eprintln!("unknown argument {other}"),
         }
     }
@@ -56,7 +58,13 @@ fn main() -> Result<()> {
     let port = cfg.port;
     let sh = Arc::new(conn::Shared { cfg, registries, online: AtomicUsize::new(0), next_eid: AtomicI32::new(1), game: std::sync::Mutex::new(tx) });
     let stop = Arc::new(AtomicBool::new(false));
-    let game = game::Game::new(sh.clone(), Box::new(gen::Flat::new(plains)));
+    let generator: Arc<dyn gen::Generator> = if sh.cfg.flat { Arc::new(gen::Flat::new(plains)) } else {
+        let t = std::time::Instant::now();
+        let g = basalt_worldgen::Generator::try_new(sh.cfg.seed, &sh.cfg.data_dir).context("loading worldgen settings")?;
+        log::info!("worldgen ready in {:.2?} (seed {})", t.elapsed(), sh.cfg.seed);
+        Arc::new(gen::Vanilla(g))
+    };
+    let game = game::Game::new(sh.clone(), generator);
     let stop2 = stop.clone();
     let game_thread = std::thread::Builder::new().name("game".into()).spawn(move || game.run(rx, stop2))?;
 

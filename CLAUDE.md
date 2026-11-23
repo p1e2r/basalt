@@ -28,15 +28,23 @@ Read NOTES.md for verified packet formats.
   entities, keepalive, world + player persistence. Flat generator until worldgen is wired in.
   Verified: real 26.2 client joins, renders, sees a second (basalt-client) player, chat,
   placed blocks; restart keeps blocks/inventory/position. `tools/server-smoke.sh` runs the
-  two-client smoke test.
-- Not started: crates/worldgen (subagent working on it in a worktree).
+  two-client smoke test. Generation runs on a worker pool (gen.rs); `--flat` for superflat.
+- crates/worldgen: **terrain done, features partial.** Noise router/density functions, aquifers,
+  ore veins, multi-noise biomes, surface rules, cave/canyon carvers, ores + disks + freeze.
+  vs vanilla seed 12345 (15x15 chunks at two sites): biomes 100.000%, shape 99.6-99.7%, exact
+  terrain blocks 99.3-99.45%. Missing: trees/vegetation, lakes, springs, geodes, monster rooms,
+  structures, nether/end. Compare: `cargo run -p basalt-worldgen --release --example compare --
+  vanilla/srv/world/dimensions/minecraft/overworld/region <cx> <cz> <radius>`.
+  Build the server with --release (worldgen ~40 ms/chunk in release).
 
 ### Task list
 - [x] M1 client builds, joins vanilla, renders chunks
 - [x] M2 crates/world: sections/paletted containers, light, Anvil region read/write
 - [x] M2 crates/server: login/config/play, chunk streaming, movement, break/place, chat, multiplayer
 - [x] M2 verify with real 26.2 client (tools/run-vanilla-client.py) + basalt-client
-- [ ] M3 crates/worldgen vs vanilla seed 12345, then plug into server (replace gen::Flat)
+- [x] M3a worldgen terrain/biomes/surface/carvers/ores vs vanilla seed 12345, wired into server
+- [ ] M3b features: trees + vegetation, lakes, springs, geodes, monster rooms; exact neighbour mode
+- [ ] M3c structures
 - Server gaps: survival drops go straight to inventory (no item entities), no container_click /
   crafting, no mobs, no fluids/redstone ticking, no online-mode auth. Real-client walking/
   breaking driven by a human not yet verified (only bot-driven).

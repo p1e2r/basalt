@@ -17,3 +17,4 @@ basalt-protocol = { path = "../protocol" }
 basalt-nbt = { path = "../nbt" }
 basalt-data = { path = "../data" }
 basalt-world = { path = "../world" }
+basalt-worldgen = { path = "../worldgen" }

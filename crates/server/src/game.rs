@@ -1,6 +1,6 @@
 //! Game thread: owns the world and all players; runs at 20 TPS.
 use crate::conn::Shared;
-use crate::gen::Generator;
+use crate::gen::{GenPool, Generator};
 use anyhow::{anyhow, Result};
 use basalt_data::{registries as reg, registry_id, BlockState};
 use basalt_protocol::{ids::play::clientbound as cb, ids::play::serverbound as sb, text, Reader, Writer};
@@ -55,7 +55,7 @@ impl Player {
 pub struct Game {
     sh: Arc<Shared>,
     world: World,
-    gen: Box<dyn Generator>,
+    gen: GenPool,
     players: HashMap<i32, Player>,
     tick: u64,
     day_time: i64,
@@ -98,14 +98,14 @@ fn replaceable(state: u32) -> bool {
 }
 
 impl Game {
-    pub fn new(sh: Arc<Shared>, gen: Box<dyn Generator>) -> Game {
+    pub fn new(sh: Arc<Shared>, gen: Arc<dyn Generator>) -> Game {
         let dir = sh.cfg.world_dir.clone();
         let world = World::new(dir.as_ref().map(|d| d.join("region")));
         let player_type = registry_id(reg::ENTITY_TYPE, "player").unwrap_or(0);
-        let mut g = Game { sh, world, gen, players: HashMap::new(), tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir };
+        let mut g = Game { sh, world, gen: GenPool::new(gen), players: HashMap::new(), tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir };
         g.load_level();
-        let y = g.surface_y(0, 0);
-        g.spawn = [0.5, y as f64, 0.5];
+        g.spawn = g.find_spawn();
+        log::info!("spawn at {:.1} {:.1} {:.1}", g.spawn[0], g.spawn[1], g.spawn[2]);
         g
     }
 
@@ -144,16 +144,51 @@ impl Game {
 
     // ------------------------------------------------------------ world helpers
 
+    /// Load or generate a chunk synchronously (startup / spawn search only).
     fn ensure_chunk(&mut self, cx: i32, cz: i32) {
-        if self.world.chunk(cx, cz).is_some() { return; }
+        if self.chunk_ready(cx, cz) { return; }
+        let c = self.gen.gen.generate(cx, cz);
+        self.add_generated(c);
+    }
+
+    /// True if the chunk is in memory (loading it from disk if saved); otherwise queues generation.
+    fn chunk_ready(&mut self, cx: i32, cz: i32) -> bool {
+        if self.world.chunk(cx, cz).is_some() { return true; }
         match self.world.load(cx, cz) {
-            Ok(true) => return,
+            Ok(true) => return true,
             Ok(false) => {}
             Err(e) => log::warn!("loading chunk {cx},{cz}: {e:#}; regenerating"),
         }
-        let c = self.gen.generate(cx, cz);
+        false
+    }
+
+    fn add_generated(&mut self, c: basalt_world::Chunk) {
+        let (cx, cz) = (c.x, c.z);
+        if self.world.chunk(cx, cz).is_some() { return; }
         self.world.insert(c);
-        self.world.light_chunk(cx, cz);
+        // neighbours that players already have may get new light across the border
+        for (nx, nz) in self.world.light_chunk_changed(cx, cz) {
+            if (nx, nz) == (cx, cz) { continue; }
+            let Some(ch) = self.world.chunk(nx, nz) else { continue };
+            let mut body = Vec::new(); ch.write_light(&mut body);
+            self.broadcast_chunk((nx, nz), None, || { let mut w = Writer::with_id(cb::LIGHT_UPDATE); w.varint(nx).varint(nz).bytes(&body); w });
+        }
+    }
+
+    /// Nearest dry land to the origin (vanilla also searches for a non-ocean spawn).
+    fn find_spawn(&mut self) -> [f64; 3] {
+        for r in 0..24i32 {
+            for dx in -r..=r { for dz in -r..=r {
+                if dx.abs() != r && dz.abs() != r { continue; }
+                let (x, z) = (dx * 16 + 8, dz * 16 + 8);
+                let y = self.surface_y(x, z);
+                let top = BlockState(self.world.get_block(x, y - 1, z)).name();
+                if y > 62 && !matches!(top, "water" | "ice" | "lava" | "seagrass" | "kelp" | "kelp_plant") && !top.ends_with("leaves") {
+                    return [x as f64 + 0.5, y as f64, z as f64 + 0.5];
+                }
+            } }
+        }
+        [0.5, self.surface_y(0, 0) as f64, 0.5]
     }
 
     fn surface_y(&mut self, x: i32, z: i32) -> i32 {
@@ -316,8 +351,14 @@ impl Game {
         if center_changed { p.center = (cx, cz); let mut w = Writer::with_id(cb::SET_CHUNK_CACHE_CENTER); w.varint(cx).varint(cz); p.send(w); }
         for c in &to_unload { p.loaded.remove(c); let mut w = Writer::with_id(cb::FORGET_LEVEL_CHUNK); w.i32(c.1).i32(c.0); p.send(w); }
         if outstanding || missing.is_empty() { return; }
-        let batch: Vec<_> = missing.into_iter().take(budget).collect();
-        for &(x, z) in &batch { self.ensure_chunk(x, z); }
+        // send what's ready (nearest first); queue generation for what isn't
+        let mut batch = Vec::new();
+        for &(x, z) in &missing {
+            if batch.len() >= budget { break; }
+            if self.chunk_ready(x, z) { batch.push((x, z)); } else { self.gen.request(x, z); }
+        }
+        for &(x, z) in missing.iter().take(budget * 4) { if self.world.chunk(x, z).is_none() { self.gen.request(x, z); } }
+        if batch.is_empty() { return; }
         let packets: Vec<Writer> = batch.iter().filter_map(|&(x, z)| self.chunk_packet(x, z)).collect();
         let p = self.players.get_mut(&eid).unwrap();
         p.send(Writer::with_id(cb::CHUNK_BATCH_START));
@@ -516,6 +557,7 @@ impl Game {
     fn tick(&mut self) {
         self.tick += 1;
         self.day_time += 1;
+        for c in self.gen.finished() { self.add_generated(c); }
         let ids: Vec<i32> = self.players.keys().copied().collect();
         for &eid in &ids { self.stream_chunks(eid); }
         // movement broadcast

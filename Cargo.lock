@@ -227,6 +227,7 @@ dependencies = [
  "basalt-nbt",
  "basalt-protocol",
  "basalt-world",
+ "basalt-worldgen",
  "env_logger",
  "log",
  "md-5",
