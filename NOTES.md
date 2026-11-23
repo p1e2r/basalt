@@ -4,7 +4,7 @@ generator (tools/extract-data.sh → ./data). Behaviour is matched by observing 
 real server/client over the wire.
 
 ## Test harness (this machine)
-- Vanilla 26.2 server: /home/claude/vanilla/srv, port 25566, offline, compression off.
+- Vanilla 26.2 server: vanilla/srv (run.sh), port 25566, offline, compression off.
 - Real 26.2 client headless: /home/claude/mcclient/run.sh host:port [name] (Xvfb :99).
   Screenshot: DISPLAY=:99 import -window root shot.png
 - Probe: target/debug/basalt-probe host:port secs dumpdir (joins, dumps clientbound).
@@ -42,3 +42,15 @@ real server/client over the wire.
   for: instrument timeline potion damage_type item worldgen/biome fluid banner_pattern dialog
   game_event painting_variant enchantment entity_type point_of_interest_type block.
 - Vanilla waits for chunk_batch_received before sending more chunks.
+- Serverbound play (accepted by vanilla 26.2, verified with basalt-client):
+  accept_teleportation varint id; move_player_pos f64 xyz + u8 flags (1 onGround, 2 hCollision);
+  move_player_pos_rot f64 xyz f32 yaw pitch u8 flags; move_player_rot f32 f32 u8; status_only u8;
+  player_loaded (empty, after first teleport); client_tick_end (empty, every tick);
+  player_input u8 (1 fwd 2 back 4 left 8 right 16 jump 32 sneak 64 sprint);
+  chat_command str; chat: str msg, i64 ts, i64 salt, bool hasSig(false), varint offset,
+  3-byte ack bitset, u8 checksum (1 accepted when unsigned);
+  player_action varint status, position, u8 face, varint seq (creative: status 0 alone breaks);
+  use_item_on varint hand, position, varint face, f32 cursor xyz, bool inside, bool worldBorderHit, varint seq;
+  swing varint hand; set_carried_item i16.
+- Vanilla console: vanilla/srv/run.sh pipes stdin from vanilla/srv/console.fifo
+  (`echo "op Basalt" > vanilla/srv/console.fifo`).

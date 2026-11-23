@@ -44,6 +44,8 @@ pub struct Frame<'a> {
     pub cam: Vec3,
     pub vp: Mat4,
     pub render_dist: f32,
+    /// world y of section index 0 (section keys are (cx, index, cz))
+    pub min_y: f32,
     /// world-space extras drawn with the opaque pipeline (white texture): outlines
     pub extra: &'a MeshData,
     /// player models drawn with the skin texture
@@ -153,12 +155,13 @@ impl Gpu {
         self.queue.write_buffer(&self.ubuf, 0, bytemuck::bytes_of(&f.uniforms));
         // visible sections: within distance and in front-ish of the camera frustum
         let planes = frustum_planes(&f.vp);
+        let cull = std::env::var("BASALT_NOCULL").is_err();
         let mut vis: Vec<(f32, &SectionGpu)> = Vec::new();
         for (k, s) in &self.sections {
-            let c = Vec3::new(k.0 as f32 * 16.0 + 8.0, k.1 as f32 * 16.0 + 8.0, k.2 as f32 * 16.0 + 8.0) - f.cam;
+            let c = Vec3::new(k.0 as f32 * 16.0 + 8.0, f.min_y + k.1 as f32 * 16.0 + 8.0, k.2 as f32 * 16.0 + 8.0) - f.cam;
             let hd = (c.x * c.x + c.z * c.z).sqrt();
             if hd > f.render_dist + 24.0 { continue; }
-            if planes.iter().any(|p| p.truncate().dot(c) + p.w < -14.0) { continue; }
+            if cull && planes.iter().any(|p| p.truncate().dot(c) + p.w < -14.0) { continue; }
             vis.push((c.length_squared(), s));
         }
         vis.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
@@ -172,7 +175,7 @@ impl Gpu {
             rp.set_bind_group(0, &self.ubind, &[]);
             rp.set_bind_group(1, &self.atlas_bind, &[]);
             rp.set_pipeline(&self.p_sky); rp.draw(0..3, 0..1);
-            let mut draw_mesh = |rp: &mut wgpu::RenderPass, m: &GpuMesh| { rp.set_vertex_buffer(0, m.vb.slice(..)); rp.set_index_buffer(m.ib.slice(..), wgpu::IndexFormat::Uint32); rp.draw_indexed(0..m.count, 0, 0..1); };
+            let draw_mesh = |rp: &mut wgpu::RenderPass, m: &GpuMesh| { rp.set_vertex_buffer(0, m.vb.slice(..)); rp.set_index_buffer(m.ib.slice(..), wgpu::IndexFormat::Uint32); rp.draw_indexed(0..m.count, 0, 0..1); };
             rp.set_pipeline(&self.p_opaque);
             for (_, s) in &vis { if let Some(m) = &s.layers[0] { draw_mesh(&mut rp, m); } }
             if let Some(m) = &extra { draw_mesh(&mut rp, m); }

@@ -6,19 +6,33 @@ over the wire. Never commit Mojang data/assets (data/, vanilla/, *.jar are gitig
 
 Read NOTES.md for verified packet formats.
 
-## Status (handed off from a cloud session, 2026-11-23)
+## Status (updated 2026-11-23)
 - Done & working: crates/nbt, crates/data (tables generated from ./data at build time),
   crates/protocol (framing, compression, varints, NBT, text), crates/probe (joins a server and
   dumps packets; `basalt-probe proxy LISTEN TARGET DUMPDIR` logs both directions).
-- crates/client: WIP (~1.6k lines: networking, jar asset loading, wgpu renderer scaffolding).
-  NOT yet compile-checked — first job is `cargo build -p basalt-client` and fix errors.
+- crates/client: **milestone 1 done.** Joins vanilla 26.2 on 25566, renders chunks (meshing
+  workers, frustum culling, fog, sky, HUD), walks with vanilla-accepted physics, chat,
+  creative/survival break, place, hotbar. Textures come from vanilla/client.jar (`--jar`).
+  Headless test mode: `basalt-client --screenshot out.png --wait 10 [--cmd 'tp @s 0 100 0']
+  [--chat msg] [--look yaw,pitch] [--walk secs] [--click l|r]`; env BASALT_NOFOG / BASALT_NOCULL
+  / BASALT_DIAG for debugging.
 - Not started: crates/world (chunk storage + Anvil), crates/server, crates/worldgen.
+
+### Task list
+- [x] M1 client builds, joins vanilla, renders chunks
+- [ ] M2 crates/world: sections/paletted containers, light, Anvil region read/write
+- [ ] M2 crates/server: login/config/play, chunk streaming, movement, break/place, chat, multiplayer
+- [ ] M2 verify with real 26.2 client (user's launcher) + basalt-client against our server
+- [ ] M3 crates/worldgen vs vanilla seed 12345
+- Known client gaps: no entity models (boxes only), survival dig time not hardness-based,
+  no inventory screen, no sounds, edge chunks without loaded neighbours are not meshed.
 
 ## Local setup (macOS)
 1. Java 25 + Rust. `./tools/extract-data.sh` (downloads the official server jar, runs its data
    generator into ./data). Required before any build.
-2. Test server: run vanilla in vanilla/srv with online-mode=false,
-   network-compression-threshold=-1, level-seed=12345, server-port=25566.
+2. Test server: vanilla/srv/run.sh (online-mode=false, network-compression-threshold=-1,
+   level-seed=12345, server-port=25566). Console via `echo cmd > vanilla/srv/console.fifo`.
+   Client jar for textures: vanilla/client.jar (from Mojang's version manifest).
 3. Test client: the user's normal launcher with 26.2, joining localhost.
    (NOTES.md's /home/claude paths refer to the old cloud machine.)
 

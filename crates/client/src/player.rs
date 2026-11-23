@@ -117,7 +117,7 @@ impl Player {
         if self.sneaking { f *= 0.3; s *= 0.3; }
         let sprint = input.sprint && input.forward > 0.0 && !self.sneaking;
         let (sin, cos) = (self.yaw.to_radians() as f64).sin_cos();
-        let mut accel_dir = |acc: f64, vel: &mut [f64; 3]| { vel[0] += (s * cos - f * sin) * acc; vel[2] += (f * cos + s * sin) * acc; };
+        let accel_dir = |acc: f64, vel: &mut [f64; 3]| { vel[0] += (s * cos - f * sin) * acc; vel[2] += (f * cos + s * sin) * acc; };
         if self.flying || self.gamemode == 3 {
             let sp = if sprint { 0.1 } else { 0.05 };
             accel_dir(sp, &mut self.vel);

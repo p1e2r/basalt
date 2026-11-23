@@ -11,7 +11,7 @@ impl UiAtlas {
         let mut rgba = vec![0u8; (w * h * 4) as usize];
         let mut rects = HashMap::new();
         let mut glyph_w = [6u8; 256];
-        let mut blit = |name: &str, img: &crate::assets::Image, x: u32, y: u32, rgba: &mut Vec<u8>| {
+        let blit = |rects: &mut HashMap<String, [u32; 4]>, name: &str, img: &crate::assets::Image, x: u32, y: u32, rgba: &mut Vec<u8>| {
             for py in 0..img.h.min(h - y) { for px in 0..img.w.min(w - x) {
                 let s = ((py * img.w + px) * 4) as usize; let d = (((y + py) * w + x + px) * 4) as usize;
                 rgba[d..d + 4].copy_from_slice(&img.rgba[s..s + 4]);
@@ -19,7 +19,7 @@ impl UiAtlas {
             rects.insert(name.to_string(), [x, y, img.w, img.h]);
         };
         if let Some(f) = &a.font {
-            blit("font", f, 0, 0, &mut rgba);
+            blit(&mut rects, "font", f, 0, 0, &mut rgba);
             let cell = f.w / 16;
             for c in 0..256u32 {
                 let (cx, cy) = (c % 16 * cell, c / 16 * cell);
@@ -32,12 +32,12 @@ impl UiAtlas {
         for py in 0..8 { for px in 0..8 { let d = (((200 + py) * w + 300 + px) * 4) as usize; rgba[d..d + 4].copy_from_slice(&[255; 4]); } }
         rects.insert("white".into(), [302, 202, 4, 4]);
         let (mut x, mut y, mut row) = (0u32, 260u32, 0u32);
-        let mut names: Vec<&String> = a.hud.keys().filter(|n| matches!(n.as_str(), "hotbar" | "hotbar_selection" | "crosshair" | "heart/container" | "heart/full" | "heart/half" | "food/empty" | "food/full" | "food/half")).collect();
+        let mut names: Vec<&String> = a.hud.keys().filter(|n| matches!(n.as_str(), "hotbar" | "hotbar_selection" | "crosshair" | "heart/container" | "heart/full" | "heart/half" | "food_empty" | "food_full" | "food_half")).collect();
         names.sort();
         for n in names {
             let img = &a.hud[n];
             if x + img.w + 2 > w { x = 0; y += row + 2; row = 0; }
-            blit(n, img, x, y, &mut rgba); x += img.w + 2; row = row.max(img.h);
+            blit(&mut rects, n, img, x, y, &mut rgba); x += img.w + 2; row = row.max(img.h);
         }
         UiAtlas { w, h, rgba, rects, glyph_w }
     }
