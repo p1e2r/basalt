@@ -4,6 +4,7 @@
 //! Hardness, "requires correct tool" and fuel burn times are not part of the data reports and
 //! come from public knowledge (Minecraft Wiki); see [`hardness`] and [`fuel`].
 
+mod combat;
 mod fuel;
 mod hardness;
 mod loot;
@@ -11,7 +12,8 @@ mod recipe;
 mod tags;
 
 pub use hardness::{hardness, requires_correct_tool};
-pub use loot::LootContext;
+pub use loot::{EntityProps, LootContext};
+pub use combat::{armor_reduced, blast_resistance, difficulty_scaled};
 pub use recipe::{CookKind, CraftResult, Ingredient, Recipe, Recipes};
 pub use tags::Tags;
 
@@ -178,6 +180,16 @@ impl GameData {
             return Vec::new();
         }
         let ctx = LootContext { tool: held, silk_touch, fortune, ..Default::default() };
+        let table = format!("blocks/{}", BlockState(state).name());
+        loot::eval_table(self, &table, &ctx, Some(BlockState(state)), rng)
+    }
+
+    /// Drops of a block destroyed by an explosion of `radius` (survives_explosion / explosion_decay).
+    pub fn explosion_drops(&self, state: u32, radius: f32, rng: &mut impl rand::Rng) -> Vec<(i32, i32)> {
+        if !BlockState::is_valid(state) {
+            return Vec::new();
+        }
+        let ctx = LootContext { explosion_radius: Some(radius), ..Default::default() };
         let table = format!("blocks/{}", BlockState(state).name());
         loot::eval_table(self, &table, &ctx, Some(BlockState(state)), rng)
     }

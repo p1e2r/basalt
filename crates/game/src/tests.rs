@@ -271,3 +271,23 @@ fn pickaxe_blocks_without_tool_requirement() {
         .collect();
     assert!(bad.is_empty(), "{bad:?}");
 }
+
+#[test]
+fn entity_loot_uses_entity_state() {
+    let gd = gd();
+    let mut rng = rng();
+    let mutton = it("mutton");
+    let cooked = it("cooked_mutton");
+    let lime = it("lime_wool");
+    let white = it("white_wool");
+    let ctx = |fire: bool, col: &str, sheared: bool| LootContext {
+        killed_by_player: true,
+        this_entity: Some(EntityProps { on_fire: fire, sheep_color: Some(col.into()), sheared, baby: false }),
+        ..Default::default()
+    };
+    let d = gd.loot("entities/sheep", &ctx(false, "lime", false), &mut rng);
+    assert!(d.iter().any(|s| s.0 == lime) && !d.iter().any(|s| s.0 == white), "{d:?}");
+    assert!(d.iter().any(|s| s.0 == mutton));
+    let d = gd.loot("entities/sheep", &ctx(true, "white", true), &mut rng);
+    assert!(d.iter().any(|s| s.0 == cooked) && !d.iter().any(|s| s.0 == white), "{d:?}");
+}
