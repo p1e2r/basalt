@@ -14,6 +14,7 @@
 pub mod adapt;
 pub mod jigsaw;
 pub mod place;
+pub mod temple;
 pub mod template;
 
 use crate::random::{set_large_feature_seed, JavaRandom, Rng};
@@ -156,6 +157,8 @@ pub enum PieceKind {
     /// Swamp hut (measured layout, place::swamp_hut) with its box corner and orientation
     /// (vanilla's `O`: 0 south, 1 west, 2 north, 3 east).
     SwampHut { origin: [i32; 3], o: u8 },
+    /// Desert pyramid / jungle temple (measured layouts, temple.rs): box corner + vanilla `O`.
+    Temple { jungle: bool, origin: [i32; 3], o: u8 },
 }
 
 #[derive(Clone, Debug, Default)]
@@ -780,13 +783,19 @@ impl Generator {
                 .map(|c| self.first_free(c.0, c.1, false))
                 .min()
                 .unwrap_or(0);
-                if low <= self.sea_level() {
+                if low <= self.sea_level() && std::env::var_os("BASALT_TEMPLE_NOCHECK").is_none() {
                     return None;
                 }
                 let y = self.first_free(mx, mz, false) - 1;
                 Some(Stub {
                     pos: [mx, y, mz],
-                    pieces: Vec::new(),
+                    pieces: vec![temple::temple(
+                        self,
+                        matches!(d.kind, Kind::JunglePyramid),
+                        cx,
+                        cz,
+                        r,
+                    )],
                 })
             }
             Kind::Mineshaft { .. } => {
