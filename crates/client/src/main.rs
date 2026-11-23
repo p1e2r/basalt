@@ -5,6 +5,8 @@
 //!                      [--scenario NAME|all] [--auto-respawn]
 //! Without an address (windowed) it starts at the title screen.
 mod assets;
+mod assetgrid;
+mod bench;
 mod container;
 mod entity;
 mod lang;
@@ -42,12 +44,17 @@ pub struct Args {
     data: String, addr: String, addr_given: bool, name: String, jar: String, screenshot: Option<String>, wait: f32, size: (u32, u32), pos: Option<[f64; 3]>, look: Option<(f32, f32)>,
     cmds: Vec<String>, walk: f32, chat: Vec<String>, click: Option<char>, clicks: Vec<(i16, i8, i32)>, hold: f32, later: Vec<(f32, String)>, attack: u32, attack_every: f32,
     scenario: Option<String>, vanilla: Option<String>, assets: Option<String>, asset_index: Option<String>, auto_respawn: bool,
+    // visual parity / asset grid / benchmark
+    time: Option<i64>, fov: Option<f32>, render_distance: Option<u32>, gui_scale: Option<u32>, no_gui: bool, options: Option<String>,
+    asset_grid: Option<String>, grid_items: bool, allowlist: String, bench: Option<String>, seconds: f32, bench_mode: String,
 }
 
 fn parse_args() -> Args {
     let mut a = Args { data: "data".into(), addr: "127.0.0.1:25566".into(), addr_given: false, name: "Basalt".into(), jar: std::env::var("BASALT_JAR").unwrap_or_else(|_| "vanilla/client.jar".into()),
         screenshot: None, wait: 8.0, size: (1280, 720), pos: None, look: None, cmds: Vec::new(), walk: 0.0, chat: Vec::new(), click: None, clicks: Vec::new(), hold: 1.0, later: Vec::new(), attack: 0, attack_every: 0.7,
-        scenario: None, vanilla: None, assets: None, asset_index: None, auto_respawn: false };
+        scenario: None, vanilla: None, assets: None, asset_index: None, auto_respawn: false,
+        time: None, fov: None, render_distance: None, gui_scale: None, no_gui: false, options: None, asset_grid: None, grid_items: false, allowlist: "tools/asset-allowlist.txt".into(),
+        bench: None, seconds: 20.0, bench_mode: "rotate".into() };
     let mut it = std::env::args().skip(1);
     let triple = |s: String| -> Option<[f64; 3]> { let v: Vec<f64> = s.split(',').filter_map(|p| p.parse().ok()).collect(); (v.len() == 3).then(|| [v[0], v[1], v[2]]) };
     while let Some(k) = it.next() {
@@ -76,6 +83,18 @@ fn parse_args() -> Args {
             "--scenario" => a.scenario = Some(v()),
             "--vanilla" => a.vanilla = Some(v()),
             "--auto-respawn" => a.auto_respawn = true,
+            "--time" => a.time = v().parse().ok(),
+            "--fov" => a.fov = v().parse().ok(),
+            "--render-distance" => a.render_distance = v().parse().ok(),
+            "--gui-scale" => a.gui_scale = v().parse().ok(),
+            "--no-gui" => a.no_gui = true,
+            "--options" => a.options = Some(v()),
+            "--asset-grid" => a.asset_grid = Some(v()),
+            "--blocks" => a.grid_items = false, "--items" => a.grid_items = true,
+            "--allowlist" => a.allowlist = v(),
+            "--bench" => a.bench = Some(v()),
+            "--seconds" => a.seconds = v().parse().unwrap_or(20.0),
+            "--bench-mode" => a.bench_mode = v(),
             other if !other.starts_with("--") => { a.addr = other.to_string(); a.addr_given = true; }
             other => eprintln!("unknown argument {other}"),
         }
@@ -85,7 +104,7 @@ fn parse_args() -> Args {
 
 // ---------------------------------------------------------------- meshing workers
 
-struct Mesher { jobs: mpsc::Sender<((i32, i32, i32), Snapshot)>, done: mpsc::Receiver<((i32, i32, i32), SectionMesh)> }
+struct Mesher { jobs: mpsc::Sender<((i32, i32, i32), Snapshot)>, done: mpsc::Receiver<((i32, i32, i32), SectionMesh, Duration)> }
 
 impl Mesher {
     fn new(assets: Arc<Assets>, biomes: Arc<Mutex<Arc<Vec<Biome>>>>) -> Mesher {
@@ -99,7 +118,9 @@ impl Mesher {
                 let job = jrx.lock().unwrap().recv();
                 let Ok((key, snap)) = job else { return };
                 let b = biomes.lock().unwrap().clone();
-                if dtx.send((key, mesh::mesh_section(&assets, &b, &snap))).is_err() { return; }
+                let t = Instant::now();
+                let m = mesh::mesh_section(&assets, &b, &snap);
+                if dtx.send((key, m, t.elapsed())).is_err() { return; }
             }).unwrap();
         }
         Mesher { jobs: jtx, done: drx }
@@ -126,6 +147,10 @@ fn snapshot(w: &World, cx: i32, sy: i32, cz: i32) -> Snapshot {
 const EDGE_MESH_DELAY: Duration = Duration::from_millis(400);
 
 // ---------------------------------------------------------------- game state
+
+/// Measurements for --bench.
+#[derive(Default)]
+pub struct Stats { pub mesh_ms: Vec<f32>, pub sections_meshed: u64, pub chunk_arrived: HashMap<(i32, i32), Instant>, pub chunk_latency_ms: Vec<f32> }
 
 pub struct Dig { pub block: [i32; 3], pub face: u8, pub ticks: u32, pub total: u32 }
 
@@ -191,6 +216,12 @@ pub struct Game {
     fullscreen_changed: bool,
     hide_entities: bool,
     hide_cracks: bool,
+    /// F1: no HUD, no hand
+    hide_gui: bool,
+    /// fixed time of day for deterministic captures (overrides the server)
+    fixed_time: Option<i64>,
+    last_chunk_at: Instant,
+    stats: Stats,
     clicks_sent: u32,
     ticks: u64,
     frames: (u32, Instant, f32),
@@ -217,7 +248,7 @@ impl Game {
             spawned: false, loaded_sent: false, connected: false, keys: HashSet::new(), mouse: [false; 2], mouse_pos: (0.0, 0.0), slider_drag: None, last_tick: Instant::now(),
             last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, step_dist: 0.0,
             last_place: Instant::now(), last_space: None, debug: false, disconnected: None, death_msg: None, respawn_at: None, auto_respawn: o.auto_respawn,
-            screen: Some(Screen::Title), cfg: o.cfg, sounds, last_addr: String::new(), quit: false, fullscreen_changed: false, hide_entities: false, hide_cracks: false, clicks_sent: 0, ticks: 0,
+            screen: Some(Screen::Title), cfg: o.cfg, sounds, last_addr: String::new(), quit: false, fullscreen_changed: false, hide_entities: false, hide_cracks: false, hide_gui: false, fixed_time: None, last_chunk_at: Instant::now(), stats: Stats::default(), clicks_sent: 0, ticks: 0,
             frames: (0, Instant::now(), 0.0),
         };
         if let Some(a) = o.addr { g.connect(&a); }
@@ -289,7 +320,7 @@ impl Game {
                 if matches!(self.screen, Some(Screen::Death { .. })) { self.screen = None; }
             }
             Event::Chunk { cx, cz, raw } => match net::decode_chunk(&raw, self.world.nsections()) {
-                Ok(c) => { self.world.chunks.insert((cx, cz), c); self.mark_chunk(cx, cz); }
+                Ok(c) => { self.world.chunks.insert((cx, cz), c); self.mark_chunk(cx, cz); self.last_chunk_at = Instant::now(); self.stats.chunk_arrived.entry((cx, cz)).or_insert_with(Instant::now); }
                 Err(e) => log::warn!("chunk {cx},{cz}: {e:#}"),
             },
             Event::Light { cx, cz, raw } => {
@@ -422,7 +453,14 @@ impl Game {
     fn pump(&mut self) {
         let start = Instant::now();
         while let Ok(ev) = self.events.try_recv() { self.handle(ev); if start.elapsed() > Duration::from_millis(30) { break; } }
-        while let Ok((k, m)) = self.mesher.done.try_recv() { self.in_flight.remove(&k); if self.world.chunks.contains_key(&(k.0, k.2)) { self.gpu.set_section(k, &m); } }
+        while let Ok((k, m, dt)) = self.mesher.done.try_recv() {
+            self.in_flight.remove(&k);
+            self.stats.mesh_ms.push(dt.as_secs_f32() * 1000.0); self.stats.sections_meshed += 1;
+            if self.world.chunks.contains_key(&(k.0, k.2)) {
+                self.gpu.set_section(k, &m);
+                if let Some(t) = self.stats.chunk_arrived.remove(&(k.0, k.2)) { self.stats.chunk_latency_ms.push(t.elapsed().as_secs_f32() * 1000.0); }
+            }
+        }
         // queue dirty sections, nearest first: those with all horizontal neighbours loaded at once,
         // edge sections (a neighbour missing) after a short wait; they are re-meshed when it arrives
         if self.in_flight.len() < 64 && !self.dirty.is_empty() {
@@ -911,7 +949,8 @@ impl Game {
         let biomes = self.biomes.lock().unwrap().clone();
         let bi = self.world.biome(eye[0].floor() as i32, eye[1].floor() as i32, eye[2].floor() as i32) as usize;
         let (sky, fog) = biomes.get(bi).map(|b| (b.sky, b.fog)).unwrap_or((0x78A7FF, 0xC0D8FF));
-        let theta = (self.day_time.rem_euclid(24000) as f32 / 24000.0) * std::f32::consts::TAU;
+        let day_time = self.fixed_time.unwrap_or(self.day_time);
+        let theta = (day_time.rem_euclid(24000) as f32 / 24000.0) * std::f32::consts::TAU;
         let sun = [theta.cos(), theta.sin(), 0.0];
         let daylight = (0.5 + 2.0 * theta.sin()).clamp(0.2, 1.0);
         let col = |c: u32, k: f32| [(c >> 16 & 255) as f32 / 255.0 * k, (c >> 8 & 255) as f32 / 255.0 * k, (c & 255) as f32 / 255.0 * k, 1.0];
@@ -921,7 +960,7 @@ impl Game {
         let u = Uniforms {
             vp: vp.to_cols_array_2d(), inv_vp: vp.inverse().to_cols_array_2d(),
             cam: [eye[0] as f32, eye[1] as f32, eye[2] as f32, 0.0], fog_color: fogc, sky_color: col(sky, dk),
-            params: [fog_start, fog_end, daylight, self.day_time as f32], screen: [w, h, underwater as u8 as f32, 0.0], sun: [sun[0], sun[1], sun[2], 0.0],
+            params: [fog_start, fog_end, daylight, day_time as f32], screen: [w, h, underwater as u8 as f32, 0.0], sun: [sun[0], sun[1], sun[2], 0.0],
         };
         let cam = Vec3::new(eye[0] as f32, eye[1] as f32, eye[2] as f32);
         let mut fd = FrameData { u, cam, vp, render_dist, extra: MeshData::default(), skinned: MeshData::default(), items3d: MeshData::default(), overlay: MeshData::default(), layers: Vec::new() };
@@ -969,7 +1008,7 @@ impl Game {
                 }
             }
             // first-person arm
-            if self.screen.is_none() && self.player.gamemode != 3 && self.hotbar[self.held as usize].count == 0 {
+            if self.screen.is_none() && !self.hide_gui && self.player.gamemode != 3 && self.hotbar[self.held as usize].count == 0 {
                 let sw = if self.fp_swing >= 0 { (self.fp_swing as f32 + a) / 6.0 } else { 0.0 };
                 let (sl, bl) = self.world.light(eye[0].floor() as i32, eye[1].floor() as i32, eye[2].floor() as i32);
                 entity::first_person_arm(&self.entity_atlas, &net::offline_uuid(&self.name), cam, self.player.yaw, self.player.pitch, sw, 0.0, [sl * 17, bl * 17], &mut fd.skinned);
@@ -977,7 +1016,7 @@ impl Game {
         }
         // 2D: HUD, then the open screen
         let (mut ui, mut items, mut deco) = (MeshData::default(), MeshData::default(), MeshData::default());
-        self.build_hud(&mut ui, &mut items, &mut deco, &vp, alpha as f32);
+        if !self.hide_gui { self.build_hud(&mut ui, &mut items, &mut deco, &vp, alpha as f32); }
         // held item in the corner of the view (flat, simple)
         fd.layers.push((ui, Tex::Ui)); fd.layers.push((items, Tex::Blocks)); fd.layers.push((deco, Tex::Ui));
         match &self.screen {
@@ -1105,8 +1144,9 @@ impl ApplicationHandler for App {
 
 fn run_screenshot(args: &Args, assets: Arc<Assets>, out: &str) -> Result<()> {
     let rules = load_rules(args);
-    let cfg = menu::Config { name: args.name.clone(), ..Default::default() };
+    let cfg = config_from_args(args);
     let mut g = Game::new(None, args.size, assets, rules, GameOpts { name: args.name.clone(), addr: Some(args.addr.clone()), auto_respawn: true, sounds: load_sounds(args, false), cfg })?;
+    g.fixed_time = args.time; g.hide_gui = args.no_gui;
     let start = Instant::now();
     let mut placed = false;
     let mut walked_from: Option<Instant> = None;
@@ -1150,10 +1190,10 @@ fn run_screenshot(args: &Args, assets: Arc<Assets>, out: &str) -> Result<()> {
         if let Some(d) = &g.disconnected { anyhow::bail!("disconnected: {d}"); }
         std::thread::sleep(Duration::from_millis(5));
     }
-    // let outstanding meshes land
+    // wait until every chunk the server sends has arrived (none for 1.5 s) and is meshed
     let t = Instant::now();
-    while (!g.in_flight.is_empty() || !g.dirty.is_empty()) && t.elapsed() < Duration::from_secs(10) { g.pump(); std::thread::sleep(Duration::from_millis(5)); }
-    g.debug = true;
+    while (!g.in_flight.is_empty() || !g.dirty.is_empty() || g.last_chunk_at.elapsed() < Duration::from_millis(1500)) && t.elapsed() < Duration::from_secs(30) { g.update(); if let Some((y, p)) = args.look { g.player.yaw = y; g.player.pitch = p; } std::thread::sleep(Duration::from_millis(5)); }
+    g.debug = !args.no_gui;
     g.render(1.0, Some(out))?;
     if std::env::var("BASALT_DIAG").is_ok() {
         let ks: Vec<_> = g.world.chunks.keys().copied().collect();
@@ -1175,6 +1215,30 @@ fn run_screenshot(args: &Args, assets: Arc<Assets>, out: &str) -> Result<()> {
     Ok(())
 }
 
+/// Options for deterministic captures: defaults, then the vanilla client's options.txt (--options), then flags.
+pub fn config_from_args(args: &Args) -> menu::Config {
+    let mut c = menu::Config { name: args.name.clone(), ..Default::default() };
+    if let Some(p) = &args.options {
+        match std::fs::read_to_string(p) {
+            Ok(s) => for line in s.lines() {
+                let Some((k, v)) = line.split_once(':') else { continue };
+                match k {
+                    // vanilla stores FOV normalised: 70 + v·40
+                    "fov" => if let Ok(f) = v.parse::<f32>() { c.fov = 70.0 + f * 40.0; },
+                    "renderDistance" => if let Ok(r) = v.parse() { c.render_distance = r; },
+                    "guiScale" => if let Ok(g) = v.parse() { c.gui_scale = g; },
+                    _ => {}
+                }
+            },
+            Err(e) => log::warn!("options file {p}: {e}"),
+        }
+    }
+    if let Some(f) = args.fov { c.fov = f; }
+    if let Some(r) = args.render_distance { c.render_distance = r; }
+    if let Some(g) = args.gui_scale { c.gui_scale = g; }
+    c
+}
+
 fn load_rules(args: &Args) -> Option<Arc<basalt_game::GameData>> {
     match basalt_game::GameData::load(std::path::Path::new(&args.data)) {
         Ok(d) => Some(Arc::new(d)),
@@ -1194,6 +1258,8 @@ fn main() -> Result<()> {
     let t = Instant::now();
     let assets = Arc::new(Assets::load(&args.jar).with_context(|| format!("loading assets from {} (pass --jar path/to/26.2.jar)", args.jar))?);
     log::info!("assets loaded in {:.2?}: {} models, atlas {}x{}", t.elapsed(), assets.models.len(), assets.atlas.w, assets.atlas.h);
+    if let Some(out) = args.asset_grid.clone() { let ok = assetgrid::run(&args, assets, &out)?; std::process::exit(if ok { 0 } else { 1 }); }
+    if let Some(out) = args.bench.clone() { return bench::run(&args, assets, &out); }
     if let Some(name) = args.scenario.clone() { let ok = scenario::run(&args, assets, &name)?; std::process::exit(if ok { 0 } else { 1 }); }
     if let Some(out) = args.screenshot.clone() { return run_screenshot(&args, assets, &out); }
     let el = EventLoop::new()?;

@@ -220,6 +220,15 @@ impl Gpu {
         Ok(())
     }
 
+    /// Render to the offscreen target and wait for the GPU (benchmarks).
+    pub fn render_offscreen(&mut self, f: &Frame) {
+        if let Some(t) = &self.offscreen { let view = t.create_view(&Default::default()); self.draw(&view, f); self.device.poll(wgpu::Maintain::Wait); }
+    }
+    /// Bytes of vertex + index buffers held for chunk sections.
+    pub fn section_bytes(&self) -> u64 {
+        self.sections.values().flat_map(|s| s.layers.iter().flatten()).map(|m| m.vb.size() + m.ib.size()).sum()
+    }
+
     /// Render offscreen and write a PNG.
     pub fn screenshot(&mut self, f: &Frame, path: &str) -> Result<()> { let rgb = self.capture(f)?; save_png(path, self.size.0, self.size.1, &rgb) }
 

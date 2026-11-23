@@ -1,7 +1,7 @@
 //! Headless scenario tests: `basalt-client --scenario <name|all> --addr HOST:PORT [--vanilla HOST:PORT]`.
 //! Each scenario drives a real (offscreen) client against the server through the same input entry
 //! points the window uses, asserts on client state and on rendered pixels, and prints
-//! `SCENARIO m7/<name> PASS|FAIL|SKIP <details>`.
+//! `SCENARIO M7/<name> PASS|FAIL|SKIP <details>`.
 use crate::container::Kind;
 use crate::menu::{Config, Screen};
 use crate::net::ItemStack;
@@ -45,9 +45,9 @@ pub fn run(args: &Args, assets: Arc<Assets>, name: &str) -> Result<bool> {
         };
         let secs = t.elapsed().as_secs_f32();
         match r {
-            Ok(Outcome::Pass(d)) => println!("SCENARIO m7/{s} PASS {d} ({secs:.1}s)"),
-            Ok(Outcome::Skip(d)) => println!("SCENARIO m7/{s} SKIP {d}"),
-            Err(e) => { ok = false; println!("SCENARIO m7/{s} FAIL {e:#} ({secs:.1}s)"); }
+            Ok(Outcome::Pass(d)) => println!("SCENARIO M7/{s} PASS {d} ({secs:.1}s)"),
+            Ok(Outcome::Skip(d)) => println!("SCENARIO M7/{s} SKIP {d}"),
+            Err(e) => { ok = false; println!("SCENARIO M7/{s} FAIL {e:#} ({secs:.1}s)"); }
         }
     }
     let _ = std::fs::remove_dir_all(&dir);

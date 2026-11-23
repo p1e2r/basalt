@@ -1,0 +1,30 @@
+# Known-unrenderable blocks/items for `basalt-client --asset-grid` (pattern, then reason).
+# `*` wildcards; optional `block:` / `item:` prefix. Keep reasons honest: entries marked
+# "not implemented" are client gaps, not vanilla behaviour.
+block:air                 invisible in vanilla
+block:cave_air            invisible in vanilla
+block:void_air            invisible in vanilla
+block:barrier             invisible unless holding a barrier (particle only)
+block:light               invisible unless holding a light block (particle only)
+block:structure_void      invisible in vanilla
+block:moving_piston       rendered by the piston block-entity renderer (not implemented)
+block:end_portal          special end-portal shader (not implemented)
+block:end_gateway         special end-portal shader (not implemented)
+block:pitcher_crop        upper half of young stages has no elements in vanilla
+block:*chest              block-entity renderer (not implemented)
+block:*shulker_box        block-entity renderer (not implemented)
+block:*banner             block-entity renderer (not implemented)
+block:*_head              block-entity renderer (not implemented)
+block:*_skull             block-entity renderer (not implemented)
+block:decorated_pot       block-entity renderer (not implemented)
+block:conduit             block-entity renderer (not implemented)
+block:*copper_golem_statue  block-entity renderer (not implemented)
+item:air                  no item
+item:*chest               special item model (block-entity) (not implemented)
+item:*_bed                special item model (block-entity) (not implemented)
+item:*_banner             special item model (block-entity) (not implemented)
+item:*_head               special item model (block-entity) (not implemented)
+item:*_skull              special item model (block-entity) (not implemented)
+item:decorated_pot        special item model (block-entity) (not implemented)
+item:shield               special item model (not implemented)
+item:*copper_golem_statue special item model (block-entity) (not implemented)

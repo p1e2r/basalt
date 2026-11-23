@@ -33,6 +33,8 @@ pub struct Model {
     pub boxes: Vec<[f32; 6]>,
     pub occludes: bool,
     pub full_cube: bool,
+    /// a face referenced a texture that could not be resolved / is not in the atlas
+    pub missing: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -180,6 +182,8 @@ impl<'a> Baker<'a> {
 
     fn resolve_tex(m: &RawModel, t: &str) -> Option<String> {
         let mut t = t.to_string();
+        // a bare key ("all") is a texture variable reference too
+        if !t.starts_with('#') && !t.contains('/') && !t.contains(':') && m.textures.contains_key(&t) { t = format!("#{t}"); }
         for _ in 0..16 {
             match t.strip_prefix('#') { Some(k) => t = m.textures.get(k)?.clone(), None => return Some(strip(&t).to_string()) }
         }
@@ -188,7 +192,7 @@ impl<'a> Baker<'a> {
 
     /// Bake one model with a variant rotation into quads appended to `out`.
     fn bake(&mut self, model: &str, rx: i32, ry: i32, uvlock: bool, out: &mut Model) {
-        let Some(m) = self.raw(model) else { return };
+        let Some(m) = self.raw(model) else { out.missing = true; return };
         let Some(elements) = &m.elements else { return };
         let _ = m.ao;
         for el in elements {
@@ -254,7 +258,8 @@ impl<'a> Baker<'a> {
                         uvs[i] = match dir { DOWN => [p[0], 16.0 - p[2]], UP => [p[0], p[2]], NORTH => [16.0 - p[0], 16.0 - p[1]], SOUTH => [p[0], 16.0 - p[1]], WEST => [p[2], 16.0 - p[1]], _ => [16.0 - p[2], 16.0 - p[1]] };
                     }
                 }
-                let Some(tex) = face.get("texture").and_then(|t| t.as_str()).and_then(|t| Self::resolve_tex(&m, t)) else { continue };
+                let Some(tex) = face.get("texture").and_then(|t| t.as_str()).and_then(|t| Self::resolve_tex(&m, t)) else { out.missing = true; continue };
+                if !self.atlas.rects.contains_key(&tex) { out.missing = true; }
                 let (rect, layer) = self.atlas.rects.get(&tex).or_else(|| self.atlas.rects.get("missing")).copied().unwrap();
                 for u in uvs.iter_mut() {
                     // inset slightly to avoid bleeding
@@ -394,6 +399,9 @@ pub struct Assets {
     /// item id -> baked block model (3D icon / dropped mini-block), tinted with `item_tint`
     pub item_models: Vec<Option<u32>>,
     pub item_tint: Vec<Option<u32>>,
+    /// per block state: the blockstate file applied no model at all
+    /// 0 = has a model, 1 = the blockstate file applied no model, 2 = multipart with no matching part (renders nothing, like vanilla)
+    pub no_model: Vec<u8>,
 }
 
 impl Assets {
@@ -403,6 +411,7 @@ impl Assets {
         let mut models: Vec<Model> = vec![Model::default()];
         let mut states = Vec::with_capacity(basalt_data::blocks::STATE_COUNT);
         crate::lang::init(jar.files.get("assets/minecraft/lang/en_us.json").map(|v| v.as_slice()));
+        let mut no_model = Vec::with_capacity(basalt_data::blocks::STATE_COUNT);
         let (mut item_models, mut item_tint, mut item_icons): (Vec<Option<u32>>, Vec<Option<u32>>, Vec<Option<String>>) = (Vec::new(), Vec::new(), Vec::new());
         {
             let mut baker = Baker { jar: &jar, raw: HashMap::new(), atlas: &atlas };
@@ -426,6 +435,8 @@ impl Assets {
                         for p in parts { if p.get("when").map(|w| cond_matches(w, st)).unwrap_or(true) { if let Some(a) = p.get("apply") { push(a); } } }
                     }
                 }
+                // a multipart state matching no part renders nothing in vanilla either (e.g. an isolated wall without post)
+                no_model.push(if !applied.is_empty() { 0 } else if bs.as_ref().map(|b| b.get("multipart").is_some()).unwrap_or(false) { 2 } else { 1 });
                 let key = format!("{applied:?}");
                 let mi = match cache.get(&key) { Some(i) => *i, None => {
                     let mut m = Model::default();
@@ -516,7 +527,7 @@ impl Assets {
             water_still: uvrect("block/water_still"), water_flow: uvrect("block/water_flow"), lava_still: uvrect("block/lava_still"),
             grass_map: jar.png("assets/minecraft/textures/colormap/grass.png"), foliage_map: jar.png("assets/minecraft/textures/colormap/foliage.png"),
             font: jar.png("assets/minecraft/textures/font/ascii.png"),
-            atlas, models, states, biome_json, dimension_types, gui, entity_tex, item_icons, item_models, item_tint,
+            atlas, models, states, biome_json, dimension_types, gui, entity_tex, item_icons, item_models, item_tint, no_model,
         })
     }
 
