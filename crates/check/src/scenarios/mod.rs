@@ -85,6 +85,7 @@ pub static ALL: &[Spec] = &[
     spec!("Items", "items_tracking", m4::item_tracking, Flat, Both, true, "item add_entity carries velocity; update cadence; position matches server"),
     // appended last: a scenario's arena is placed by its index, so inserting earlier would move the others
     spec!("M2", "m2_command_forms", m1::command_forms, Flat, Both, false, "Brigadier parsing: tp/time/gamemode/enchant/help/effect/setblock forms accepted or rejected with vanilla's keys; /kill kills creative players"),
+    spec!("M13", "m13_world_commands", m1::world_commands, Flat, Both, true, "/seed /spawnpoint /defaultgamemode /item replace /clone /msg /me: replies and effects vs vanilla"),
     spec!("M2", "m2_command_effects", m1::command_effects, Flat, Both, true, "/tellraw /title /damage /playsound: replies and effects vs vanilla"),
     spec!("M4", "m4_dig_accept", m4::dig_accept, Flat, Both, false, "stop accepted at progress*(ticks+1) >= 0.7 (stone/hand 104, wool/hand 16), on_ground flag ignored, 5x slower above the floor"),
     spec!("M8", "m8_execute_in", m8::execute_in, Flat, Both, true, "execute in the_nether run tp: respawn into the nether (layout 0..256, bedrock floor/roof), seed-12345 nether columns over the wire, and back"),

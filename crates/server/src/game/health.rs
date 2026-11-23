@@ -103,13 +103,17 @@ impl Game {
     /// client_command 0: perform respawn.
     pub(super) fn respawn(&mut self, eid: i32) {
         // players always respawn at the world spawn in the overworld (no beds / anchors yet)
-        if self.cur != super::dim::OVERWORLD && self.players.get(&eid).map(|p| p.dead).unwrap_or(false) {
+        // a /spawnpoint wins (Basalt has no beds / anchors yet), else the overworld's world spawn
+        // (the respawn packet below is overworld-only, so other dimensions' points are ignored)
+        let point = self.players.get(&eid).and_then(|p| p.spawn_point).filter(|(_, d)| *d == super::dim::OVERWORLD);
+        let home = super::dim::OVERWORLD;
+        if self.cur != home && self.players.get(&eid).map(|p| p.dead).unwrap_or(false) {
             let Some(p) = self.players.remove(&eid) else { return };
             for o in self.players.values() { let mut w = Writer::with_id(cb::REMOVE_ENTITIES); w.varint(1).varint(eid); o.send(w); }
-            self.enter(super::dim::OVERWORLD);
+            self.enter(home);
             self.players.insert(eid, p);
         }
-        let spawn = self.spawn;
+        let spawn = point.map(|(b, _)| [b[0] as f64 + 0.5, b[1] as f64, b[2] as f64 + 0.5]).unwrap_or(self.spawn);
         let dims = self.sh.registries.entries("minecraft:dimension_type");
         let dim_type = dims.iter().position(|d| d == "minecraft:overworld").unwrap_or(0) as i32;
         let seed_hash = self.hashed_seed();

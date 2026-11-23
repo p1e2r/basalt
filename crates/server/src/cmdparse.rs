@@ -124,7 +124,25 @@ impl Tree {
 
     /// Brigadier-style smart usage of a top-level command (`<targets> <item> [<count>]`, `(a|b)` for alternatives).
     pub fn usage(&self, name: &str) -> String {
-        fn rec(t: &Tree, n: &Value) -> String {
+        fn rec(t: &Tree, n: &Value, depth: usize) -> String {
+            // a redirect ends the usage like Brigadier's ("..." back to the root, "-> x" otherwise);
+            // without this, execute's subcommands (which redirect to execute) recurse forever
+            let own = n
+                .get("children")
+                .and_then(|c| c.as_object())
+                .map(|c| !c.is_empty())
+                .unwrap_or(false);
+            if let (false, Some(r)) = (own, n.get("redirect").and_then(|r| r.as_array())) {
+                let p: Vec<&str> = r.iter().filter_map(|s| s.as_str()).collect();
+                return if p.is_empty() {
+                    "...".into()
+                } else {
+                    format!("-> {}", p.join(" "))
+                };
+            }
+            if depth > 32 {
+                return String::new();
+            }
             let kids = t.children(n);
             if kids.is_empty() {
                 return String::new();
@@ -137,7 +155,7 @@ impl Tree {
                 }
             };
             let part = |c: &(&str, &Value)| {
-                let sub = rec(t, c.1);
+                let sub = rec(t, c.1, depth + 1);
                 if sub.is_empty() {
                     label(c)
                 } else {
@@ -159,7 +177,9 @@ impl Tree {
                 format!("({body})")
             }
         }
-        self.node(&[name]).map(|n| rec(self, n)).unwrap_or_default()
+        self.node(&[name])
+            .map(|n| rec(self, n, 0))
+            .unwrap_or_default()
     }
 
     /// Parse `input` (without the leading slash).

@@ -567,6 +567,174 @@ impl Game {
                 );
             }
             path if path.starts_with("time") => self.cmd_time(eid, p, path)?,
+            "seed" => {
+                let seed = tr("chat.square_brackets", vec![s(self.sh.cfg.seed)]);
+                self.ok(eid, "commands.seed.success", vec![seed]);
+            }
+            "me action" => {
+                // vanilla sends this as player chat (chat type emote_command); Basalt is offline and
+                // sends all chat as system messages
+                let m = p.arg("action").to_string();
+                self.system_chat(tr(
+                    "chat.type.emote",
+                    vec![text::plain(&sender_name), text::plain(&m)],
+                ));
+            }
+            "msg targets message" | "tell targets message" | "w targets message" => {
+                let targets = self.resolve(eid, p.arg("targets"), true)?;
+                let m = p.arg("message").to_string();
+                for t in Self::players_of(&targets) {
+                    let to = self
+                        .players
+                        .get(&t)
+                        .map(|p| p.name.clone())
+                        .unwrap_or_default();
+                    self.tell(
+                        eid,
+                        tr(
+                            "commands.message.display.outgoing",
+                            vec![text::plain(&to), text::plain(&m)],
+                        ),
+                    );
+                    self.tell(
+                        t,
+                        tr(
+                            "commands.message.display.incoming",
+                            vec![text::plain(&sender_name), text::plain(&m)],
+                        ),
+                    );
+                }
+            }
+            "defaultgamemode gamemode" => {
+                let (gm, name) = match p.arg("gamemode") {
+                    "creative" => (1, "creative"),
+                    "adventure" => (2, "adventure"),
+                    "spectator" => (3, "spectator"),
+                    _ => (0, "survival"),
+                };
+                self.default_gamemode = gm;
+                self.ok(
+                    eid,
+                    "commands.defaultgamemode.success",
+                    vec![tr(&format!("gameMode.{name}"), vec![])],
+                );
+            }
+            "setworldspawn" | "setworldspawn pos" | "setworldspawn pos rotation" => {
+                let b = if p.has("pos") {
+                    self.block_pos_from(eid, p.arg("pos"))?
+                } else {
+                    let q = self.players.get(&eid).map(|p| p.pos).unwrap_or(self.spawn);
+                    [
+                        q[0].floor() as i32,
+                        q[1].floor() as i32,
+                        q[2].floor() as i32,
+                    ]
+                };
+                self.check_block_pos(b)?;
+                self.spawn = [b[0] as f64 + 0.5, b[1] as f64, b[2] as f64 + 0.5];
+                self.send_world_spawn();
+                self.ok(
+                    eid,
+                    "commands.setworldspawn.success",
+                    vec![
+                        s(b[0]),
+                        s(b[1]),
+                        s(b[2]),
+                        s(0),
+                        s(0),
+                        s("minecraft:overworld"),
+                    ],
+                );
+            }
+            "spawnpoint"
+            | "spawnpoint targets"
+            | "spawnpoint targets pos"
+            | "spawnpoint targets pos rotation" => {
+                let ids = if p.has("targets") {
+                    Self::players_of(&self.resolve(eid, p.arg("targets"), true)?)
+                } else {
+                    vec![eid]
+                };
+                let b = if p.has("pos") {
+                    self.block_pos_from(eid, p.arg("pos"))?
+                } else {
+                    let q = self.players.get(&eid).map(|p| p.pos).unwrap_or(self.spawn);
+                    [
+                        q[0].floor() as i32,
+                        q[1].floor() as i32,
+                        q[2].floor() as i32,
+                    ]
+                };
+                self.check_block_pos(b)?;
+                let dim = super::dim::DIMS[self.cur].id;
+                for &t in &ids {
+                    if let Some(pl) = self.players.get_mut(&t) {
+                        pl.spawn_point = Some((b, self.cur));
+                    }
+                }
+                let who = if ids.len() == 1 {
+                    text::plain(&self.players[&ids[0]].name)
+                } else {
+                    s(ids.len())
+                };
+                self.ok(
+                    eid,
+                    &plural("commands.spawnpoint.success", ids.len()),
+                    vec![s(b[0]), s(b[1]), s(b[2]), s(0), s(0), s(dim), who],
+                );
+            }
+            "item replace entity targets slot with item"
+            | "item replace entity targets slot with item count" => {
+                let targets = self.resolve(eid, p.arg("targets"), false)?;
+                let slot_name = p.arg("slot").to_string();
+                let item_raw = p.arg("item");
+                let id_text = item_raw.split('[').next().unwrap_or("");
+                let item = basalt_data::registry_id(reg::ITEM, id_text)
+                    .ok_or_else(|| err("argument.item.id.invalid", &[id_text]))?;
+                let count: i32 = if p.has("count") {
+                    p.arg("count").parse().unwrap_or(1)
+                } else {
+                    1
+                };
+                let mut proto = Stack {
+                    item,
+                    count,
+                    damage: 0,
+                    ench: NO_ENCH,
+                };
+                self.apply_components(item_raw, &mut proto);
+                let ids = Self::players_of(&targets);
+                let mut done = Vec::new();
+                for &t in &ids {
+                    let Some(pl) = self.players.get_mut(&t) else {
+                        continue;
+                    };
+                    let Some(w) = player_slot(&slot_name, pl.held) else {
+                        continue;
+                    };
+                    pl.inv[w] = if count > 0 { proto } else { Stack::default() };
+                    Self::send_window(pl);
+                    done.push(t);
+                }
+                if done.is_empty() {
+                    return Err(err("commands.item.target.no_such_slot", &[&slot_name]));
+                }
+                let comp = tr("chat.square_brackets", vec![item_name(item)]);
+                if done.len() == 1 {
+                    self.ok(
+                        eid,
+                        "commands.item.entity.set.success.single",
+                        vec![text::plain(&self.players[&done[0]].name), comp],
+                    );
+                } else {
+                    self.ok(
+                        eid,
+                        "commands.item.entity.set.success.multiple",
+                        vec![s(done.len()), comp],
+                    );
+                }
+            }
+            path if path.starts_with("clone begin end destination") => self.cmd_clone(eid, p)?,
             "say message" => {
                 let m = p.arg("message").to_string();
                 self.system_chat(tr(
@@ -1256,6 +1424,93 @@ impl Game {
     }
 
     // ------------------------------------------------------------ /fill
+
+    /// `/clone begin end destination [replace|masked [force|move|normal]]` (also `filtered <filter>`).
+    /// Vanilla counts every block copied (identical blocks included); overlap needs `force`.
+    fn cmd_clone(&mut self, eid: i32, p: &Parsed) -> R<()> {
+        let (a, b, d) = (
+            self.block_pos_from(eid, p.arg("begin"))?,
+            self.block_pos_from(eid, p.arg("end"))?,
+            self.block_pos_from(eid, p.arg("destination"))?,
+        );
+        let lo: [i32; 3] = std::array::from_fn(|i| a[i].min(b[i]));
+        let hi: [i32; 3] = std::array::from_fn(|i| a[i].max(b[i]));
+        let size: [i32; 3] = std::array::from_fn(|i| hi[i] - lo[i] + 1);
+        let vol = size.iter().map(|v| *v as i64).product::<i64>();
+        if vol > 32768 {
+            return Err(err("commands.clone.toobig", &["32768", &vol.to_string()]));
+        }
+        for pt in [
+            lo,
+            hi,
+            d,
+            [d[0] + size[0] - 1, d[1] + size[1] - 1, d[2] + size[2] - 1],
+        ] {
+            self.check_block_pos(pt)?;
+        }
+        let has = |w: &str| p.path.iter().any(|n| n == w);
+        let overlap = (0..3).all(|i| d[i] <= hi[i] && d[i] + size[i] > lo[i]);
+        if overlap && !has("force") && !has("move") {
+            return Err(err("commands.clone.overlap", &[]));
+        }
+        let masked = has("masked");
+        let filter = p.has("filter").then(|| p.arg("filter").to_string());
+        for (x0, x1, z0, z1) in [
+            (lo[0], hi[0], lo[2], hi[2]),
+            (d[0], d[0] + size[0] - 1, d[2], d[2] + size[2] - 1),
+        ] {
+            for cx in (x0 >> 4)..=(x1 >> 4) {
+                for cz in (z0 >> 4)..=(z1 >> 4) {
+                    self.ensure_chunk(cx, cz);
+                }
+            }
+        }
+        // snapshot the source first (source and destination may overlap)
+        let mut copy = Vec::new();
+        for x in 0..size[0] {
+            for y in 0..size[1] {
+                for z in 0..size[2] {
+                    let src = [lo[0] + x, lo[1] + y, lo[2] + z];
+                    let st = self.world.get_block(src[0], src[1], src[2]);
+                    if masked && BlockState(st).is_air() {
+                        continue;
+                    }
+                    if let Some(f) = &filter {
+                        if !self.block_matches(f, st) {
+                            continue;
+                        }
+                    }
+                    copy.push((
+                        src,
+                        [d[0] + x, d[1] + y, d[2] + z],
+                        st,
+                        self.bes.get(&src).cloned(),
+                    ));
+                }
+            }
+        }
+        if copy.is_empty() {
+            return Err(err("commands.clone.failed", &[]));
+        }
+        let air = block_default("air").unwrap_or(0);
+        if has("move") {
+            for (src, ..) in &copy {
+                self.be_remove(*src);
+                self.set_block(src[0], src[1], src[2], air);
+            }
+        }
+        for (_, dst, st, be) in &copy {
+            self.set_block(dst[0], dst[1], dst[2], *st);
+            if let Some(mut be) = be.clone() {
+                be.viewers.clear();
+                self.be_remove(*dst);
+                self.bes.insert(*dst, be);
+                self.be_save(*dst);
+            }
+        }
+        self.ok(eid, "commands.clone.success", vec![s(copy.len())]);
+        Ok(())
+    }
 
     fn cmd_fill(&mut self, eid: i32, p: &Parsed) -> R<()> {
         let (a, b) = (
@@ -2224,4 +2479,29 @@ fn look_angles(from: [f64; 3], to: [f64; 3]) -> (Option<f32>, Option<f32>) {
         Some((-dx.atan2(dz).to_degrees()) as f32),
         Some((-dy.atan2(h).to_degrees()) as f32),
     )
+}
+
+/// Window slot (Basalt's player inventory index) for an `/item` slot name.
+fn player_slot(name: &str, held: usize) -> Option<usize> {
+    let (kind, n) = name.split_once('.').unwrap_or((name, ""));
+    let n: Option<usize> = n.parse().ok();
+    Some(match (kind, n) {
+        ("armor", _) => match name {
+            "armor.head" => 5,
+            "armor.chest" => 6,
+            "armor.legs" => 7,
+            "armor.feet" => 8,
+            _ => return None,
+        },
+        ("weapon", _) => match name {
+            "weapon" | "weapon.mainhand" => 36 + held,
+            "weapon.offhand" => 45,
+            _ => return None,
+        },
+        ("hotbar", Some(i)) if i < 9 => 36 + i,
+        ("inventory", Some(i)) if i < 27 => 9 + i,
+        ("container", Some(i)) if i < 9 => 36 + i,
+        ("container", Some(i)) if i < 36 => i,
+        _ => return None,
+    })
 }

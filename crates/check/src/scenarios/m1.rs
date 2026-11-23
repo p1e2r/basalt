@@ -450,6 +450,63 @@ pub fn command_effects(ctx: &mut Ctx) -> Result<()> {
     Ok(())
 }
 
+/// /seed /me /msg /spawnpoint /defaultgamemode /item replace /clone: reply keys, effects (slots
+/// filled, blocks copied, overlap refused) vs vanilla. Leaves world spawn and default game mode as
+/// they were (defaultgamemode survival is vanilla's own setting on 25566).
+pub fn world_commands(ctx: &mut Ctx) -> Result<()> {
+    let bot = ctx.bot()?;
+    let name = bot.name.clone();
+    let o = ctx.arena(&bot, 8, 8, 6)?;
+    ctx.stand(&bot, o[0] + 1, o[2] + 1, "survival")?;
+    let key = |bot: &Bot, c: &str| -> Result<(String, Vec<String>)> {
+        let r = bot.cmd_reply(c)?;
+        Ok(r.first().map(|l| (l.key.clone().unwrap_or_default(), l.args.iter().map(|a| a.replace(&name, "BOT")).collect())).unwrap_or_default())
+    };
+    let mut log = Vec::new();
+    let mut is = |ctx: &mut Ctx, label: &str, c: &str, want: &str| -> Result<Vec<String>> {
+        let (k, a) = key(&bot, c)?;
+        log.push(format!("{label}: {k} {a:?}"));
+        ctx.metric(&format!("{label}_ok"), (k == want) as u8 as f64, 0.0);
+        Ok(a)
+    };
+    is(ctx, "seed", "seed", "commands.seed.success")?;
+    let (x, y, z) = (o[0] + 2, ARENA_Y + 1, o[2] + 2);
+    let a = is(ctx, "spawnpoint", &format!("spawnpoint @s {x} {y} {z}"), "commands.spawnpoint.success.single")?;
+    ctx.metric("spawnpoint_args", (a.first().map(|v| v.as_str()) == Some(&x.to_string()) && a.get(5).map(|v| v.as_str()) == Some("minecraft:overworld")) as u8 as f64, 0.0);
+    is(ctx, "defaultgamemode", "defaultgamemode survival", "commands.defaultgamemode.success")?;
+    is(ctx, "item_head", "item replace entity @s armor.head with iron_helmet", "commands.item.entity.set.success.single")?;
+    is(ctx, "item_hotbar", "item replace entity @s hotbar.3 with stone 5", "commands.item.entity.set.success.single")?;
+    is(ctx, "item_container", "item replace entity @s container.20 with dirt", "commands.item.entity.set.success.single")?;
+    bot.wait_ticks(5);
+    let st = bot.st();
+    ctx.metric("head_slot", (st.inv[5].name() == "iron_helmet") as u8 as f64, 0.0);
+    ctx.metric("hotbar3_count", if st.inv[39].name() == "stone" { st.inv[39].count as f64 } else { 0.0 }, 0.0);
+    ctx.metric("container20", (st.inv[20].name() == "dirt") as u8 as f64, 0.0);
+    drop(st);
+    // clone a 2x1x2 stone/air pattern up one block, twice (vanilla counts unchanged blocks too)
+    let (cx, cz) = (o[0] + 4, o[2] + 4);
+    setblock(&bot, [cx, y, cz], "stone")?;
+    setblock(&bot, [cx + 1, y, cz + 1], "oak_planks")?;
+    let src = format!("{cx} {y} {cz} {} {y} {}", cx + 1, cz + 1);
+    let a = is(ctx, "clone", &format!("clone {src} {cx} {} {cz}", y + 1), "commands.clone.success")?;
+    ctx.metric("clone_count", a.first().and_then(|v| v.parse().ok()).unwrap_or(-1.0), 0.0);
+    let a = is(ctx, "clone_masked", &format!("clone {src} {cx} {} {cz} masked", y + 2), "commands.clone.success")?;
+    ctx.metric("clone_masked_count", a.first().and_then(|v| v.parse().ok()).unwrap_or(-1.0), 0.0);
+    is(ctx, "clone_overlap", &format!("clone {src} {} {y} {cz}", cx + 1), "commands.clone.overlap")?;
+    bot.wait_ticks(3);
+    ctx.metric("cloned_stone", ctx.block_is(&bot, [cx, y + 1, cz], "stone")? as u8 as f64, 0.0);
+    ctx.metric("cloned_planks", ctx.block_is(&bot, [cx + 1, y + 2, cz + 1], "oak_planks")? as u8 as f64, 0.0);
+    let before = bot.st().chat.len();
+    bot.cmd(&format!("msg {name} psst"));
+    bot.cmd("me waves");
+    bot.wait_ticks(10);
+    let chat: Vec<String> = bot.st().chat[before..].iter().map(|l| l.text.plain.clone()).collect();
+    ctx.metric("msg_seen", chat.iter().any(|l| l.contains("psst")) as u8 as f64, 0.0);
+    ctx.metric("me_seen", chat.iter().any(|l| l.contains("waves")) as u8 as f64, 0.0);
+    ctx.note(log.join(" | "));
+    Ok(())
+}
+
 /// Admin files (Basalt only: changes ops/bans): without ops.json everyone is an operator; /op
 /// creates ops.json and from then on a non-op is refused op commands; ops survive a restart;
 /// /ban kicks and refuses the player, /pardon lets them back in; /whitelist on refuses others.

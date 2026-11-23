@@ -61,6 +61,8 @@ struct Player {
     pitch: f32,
     on_ground: bool,
     gamemode: u8,
+    /// /spawnpoint: block position and dimension index
+    spawn_point: Option<([i32; 3], usize)>,
     flying: bool,
     inv: [Stack; 46],
     held: usize,
@@ -157,6 +159,8 @@ pub struct Game {
     gravity_checks: Vec<(u64, [i32; 3])>,
     /// gamerule random_tick_speed (vanilla default 3)
     random_tick_speed: i32,
+    /// game mode new players get (/defaultgamemode, --gamemode)
+    default_gamemode: u8,
     /// 0 peaceful, 1 easy, 2 normal, 3 hard (saved in basalt.json; Basalt's default is Easy)
     pub(crate) difficulty: u8,
     orbs: HashMap<i32, xporb::Orb>,
@@ -215,8 +219,9 @@ impl Game {
         let player_type = registry_id(reg::ENTITY_TYPE, "player").unwrap_or(0);
         let data = sh.data.clone();
         let sh_difficulty = sh.cfg.difficulty;
-        let mut g = Game { sh, world: s.world, gen: s.gen, players: s.players, tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir, data, commands_body: None, weather: Weather::default(), items: s.items, mobs: s.mobs, arrows: s.arrows, fallers: s.fallers, gravity_checks: s.gravity_checks, random_tick_speed: 3, difficulty: sh_difficulty, orbs: s.orbs, bes: s.bes, path_budget: 0, no_spawning: false, rng: rand::rngs::StdRng::from_entropy(), cur: dim::OVERWORLD, parked: states, cmd_dim: None, portals: s.portals, portal_quiet: false };
+        let mut g = Game { sh, world: s.world, gen: s.gen, players: s.players, tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir, data, commands_body: None, weather: Weather::default(), items: s.items, mobs: s.mobs, arrows: s.arrows, fallers: s.fallers, gravity_checks: s.gravity_checks, random_tick_speed: 3, default_gamemode: 0, difficulty: sh_difficulty, orbs: s.orbs, bes: s.bes, path_budget: 0, no_spawning: false, rng: rand::rngs::StdRng::from_entropy(), cur: dim::OVERWORLD, parked: states, cmd_dim: None, portals: s.portals, portal_quiet: false };
         g.no_spawning = g.sh.cfg.no_spawning;
+        g.default_gamemode = g.sh.cfg.gamemode;
         g.commands_body = crate::commands::build_packet(&g.sh.cfg.data_dir, crate::commands::IMPLEMENTED);
         if g.commands_body.is_none() { log::warn!("no reports/commands.json: using the built-in command tree"); }
         g.load_level();
@@ -372,6 +377,15 @@ impl Game {
     fn broadcast_chunk(&self, c: (i32, i32), except: Option<i32>, make: impl Fn() -> Writer) {
         for p in self.players.values() { if Some(p.eid) != except && p.sees_chunk(c) { p.send(make()); } }
     }
+    fn world_spawn_packet(&self) -> Writer {
+        let mut w = Writer::with_id(cb::SET_DEFAULT_SPAWN_POSITION);
+        w.str("minecraft:overworld").position(self.spawn[0].floor() as i32, self.spawn[1] as i32, self.spawn[2].floor() as i32).f32(0.0).f32(0.0);
+        w
+    }
+    /// /setworldspawn: tell every player in the overworld (the compass target).
+    fn send_world_spawn(&self) {
+        for p in self.all_players() { p.send(self.world_spawn_packet()); }
+    }
     fn system_chat(&self, msg: basalt_nbt::Tag) {
         log::info!("[chat] {}", text::to_plain(&msg));
         self.broadcast_all(None, || { let mut w = Writer::with_id(cb::SYSTEM_CHAT); w.nbt(&msg).bool(false); w });
@@ -483,7 +497,7 @@ impl Game {
         }
         let mut p = Player {
             eid, uuid, name: name.clone(), out, view: (view as i32).min(self.sh.cfg.view_distance as i32), pos: self.spawn, yaw: 0.0, pitch: 0.0, on_ground: false,
-            gamemode: self.sh.cfg.gamemode, flying: false, inv: [Stack::default(); 46], held: 0, loaded: HashSet::new(), center: (i32::MAX, i32::MAX),
+            gamemode: self.default_gamemode, spawn_point: None, flying: false, inv: [Stack::default(); 46], held: 0, loaded: HashSet::new(), center: (i32::MAX, i32::MAX),
             pending_tp: None, next_tp: 0, batch_outstanding: false, chunks_per_tick: 9.0, keepalive: None, last_keepalive: Instant::now(),
             last_sent_pos: ([0.0; 3], 0.0, 0.0), sneaking: false,
             dead: false, health: 20.0, food: 20, saturation: 5.0, exhaustion: 0.0, fall_start: None, hurt_cooldown: 0, regen_timer: 0,
@@ -518,8 +532,7 @@ impl Game {
         let mut w = Writer::with_id(cb::INITIALIZE_BORDER);
         w.f64(0.0).f64(0.0).f64(59999968.0).f64(59999968.0).varlong(0).varint(29999984).varint(5).varint(300); p.send(w);
         p.send(self.set_time_packet());
-        let mut w = Writer::with_id(cb::SET_DEFAULT_SPAWN_POSITION);
-        w.str("minecraft:overworld").position(self.spawn[0].floor() as i32, self.spawn[1] as i32, self.spawn[2].floor() as i32).f32(0.0).f32(0.0); p.send(w);
+        p.send(self.world_spawn_packet());
         let mut w = Writer::with_id(cb::GAME_EVENT); w.u8(13).f32(0.0); p.send(w);
         if self.cur == dim::OVERWORLD && self.weather.rain > 0.0 {
             for (id, v) in [(1u8, 0.0f32), (7, self.weather.rain), (8, self.weather.thunder)] { let mut w = Writer::with_id(cb::GAME_EVENT); w.u8(id).f32(v); p.send(w); }
