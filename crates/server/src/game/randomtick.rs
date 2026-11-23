@@ -34,7 +34,19 @@ impl Game {
             return;
         }
         let mut picks: Vec<[i32; 3]> = Vec::new();
-        for (cx, cz) in self.world.loaded_chunks() {
+        // only chunks some player has loaded (vanilla ticks within the simulation distance; in-memory
+        // worlds keep every chunk they ever loaded)
+        let watched: std::collections::HashSet<(i32, i32)> = self
+            .players
+            .values()
+            .flat_map(|p| p.loaded.iter().copied())
+            .collect();
+        for (cx, cz) in self
+            .world
+            .loaded_chunks()
+            .into_iter()
+            .filter(|c| watched.contains(c))
+        {
             let Some(c) = self.world.chunk(cx, cz) else {
                 continue;
             };

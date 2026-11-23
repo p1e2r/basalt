@@ -134,11 +134,16 @@ impl Game {
                 // any other command runs in the target dimension: the sender visits it for the
                 // duration (no packets about the move are sent)
                 let back = self.cur;
-                let Some(p) = self.players.remove(&eid) else { return };
+                let Some(p) = self.players.remove(&eid) else {
+                    return;
+                };
                 self.enter(d);
                 self.players.insert(eid, p);
                 self.command(eid, inner);
-                if let Some(p) = self.players.remove(&eid) { self.enter(back); self.players.insert(eid, p); }
+                if let Some(p) = self.players.remove(&eid) {
+                    self.enter(back);
+                    self.players.insert(eid, p);
+                }
             }
             return;
         }
@@ -836,7 +841,11 @@ impl Game {
                 pitch = pi;
             }
         }
-        let who = if targets.len() == 1 { self.display_name(targets[0]) } else { s(targets.len()) };
+        let who = if targets.len() == 1 {
+            self.display_name(targets[0])
+        } else {
+            s(targets.len())
+        };
         for &t in &targets {
             match t {
                 Target::Player(e) if self.cmd_dim.is_some_and(|d| d != self.cur) => {
