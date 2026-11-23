@@ -92,7 +92,8 @@ pub fn mesh_block(a: &Assets, biomes: &[Biome], s: &Snapshot, x: i32, y: i32, z:
             // the face plane is the neighbour layer when the face lies on the block boundary, else
             // the block's own layer. Each corner of that unit square averages 4 cells (centre, the
             // two side cells, the diagonal): AO factor = mean of 0.2 (occluder) / 1.0, sky light =
-            // mean with unlit (0) cells taking the centre's sky value, block light = plain mean.
+            // mean with unlit (0) cells taking the centre's sky value, block light = mean where only
+            // completely dark cells (sky 0 and block 0) take the centre's value.
             // Vertices interpolate the four corners bilinearly by their position on the face.
             let smooth = q.ao && info.emission == 0;
             let (t1, t2) = match axis { 0 => (1, 2), 1 => (0, 2), _ => (0, 1) };
@@ -109,7 +110,7 @@ pub fn mesh_block(a: &Assets, biomes: &[Biome], s: &Snapshot, x: i32, y: i32, z:
                         ao += if a.info(s.blocks[ix]).ao_occluder { 0.2 } else { 1.0 };
                         let l = s.light[ix];
                         sky += if l >> 4 == 0 { (fl >> 4) as f32 } else { (l >> 4) as f32 };
-                        blk += (l & 15) as f32;
+                        blk += if l == 0 { (fl & 15) as f32 } else { (l & 15) as f32 };
                     }
                     corner[ci] = [ao / 4.0, sky / 4.0, blk / 4.0];
                 }
@@ -126,7 +127,7 @@ pub fn mesh_block(a: &Assets, biomes: &[Biome], s: &Snapshot, x: i32, y: i32, z:
                     let l = if q.cull < 6 { s.light[sidx(x + d[0], y + d[1], z + d[2])] } else { own_light };
                     sky = (l >> 4) as f32; blk = (l & 15) as f32; aof = 1.0;
                 }
-                blk = blk.max(info.emission as f32);
+                blk = if info.full_bright { 15.0 } else { blk.max(info.emission as f32) };
                 let br = shade * aof;
                 let t = if q.tinted { tint } else { [1.0; 3] };
                 aos[i] = ((1.0 - aof) * 10.0) as u8;

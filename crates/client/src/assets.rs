@@ -54,6 +54,8 @@ pub struct StateInfo {
     pub emits_light: bool,
     /// block light emitted (0..15)
     pub emission: u8,
+    /// drawn at full block light regardless of surroundings (magma, active sculk sensors)
+    pub full_bright: bool,
     /// casts ambient occlusion on neighbouring faces (full-cube collidable models that are not glass-like)
     pub ao_occluder: bool,
 }
@@ -494,6 +496,7 @@ impl Assets {
                 states.push(StateInfo {
                     model: mi, tint: tint_for(name), occludes: m.occludes, self_cull: m.full_cube && !m.occludes && !name.ends_with("leaves"), collides, fluid, fluid_level: level,
                     emits_light: basalt_world::props::emission(id) > 0, emission: basalt_world::props::emission(id),
+                    full_bright: name == "magma_block" || (name.ends_with("sculk_sensor") && st.get("sculk_sensor_phase") == Some("active")),
                     ao_occluder: m.full_cube && collides && !(m.full_cube && !m.occludes && !name.ends_with("leaves")),
                 });
             }
