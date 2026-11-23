@@ -211,7 +211,10 @@ impl Game {
             t.ticks += 1;
             let ground_changed = e.on_ground != t.on_ground;
             let first = t.ticks == 1;
-            if t.ticks % ITEM_UPDATE_INTERVAL != 0 && !ground_changed && !first { continue; }
+            // vanilla also re-checks the velocity 2 ticks after each update (resting items: gravity builds
+            // up between their every-4th-tick moves, then the move zeroes it) -> a second motion packet
+            let recheck = t.ticks % ITEM_UPDATE_INTERVAL == 2;
+            if t.ticks % ITEM_UPDATE_INTERVAL != 0 && !recheck && !ground_changed && !first { continue; }
             let mut ws = Vec::new();
             let q = [quantize(e.pos[0]), quantize(e.pos[1]), quantize(e.pos[2])];
             let d = [q[0] - t.pos_q[0], q[1] - t.pos_q[1], q[2] - t.pos_q[2]];
@@ -221,7 +224,9 @@ impl Game {
             if motion_changed && !first {
                 let mut w = Writer::with_id(cb::SET_ENTITY_MOTION); w.varint(e.eid).lpvec3(e.vel); ws.push(w); t.vel = e.vel;
             }
-            if ground_changed || d.iter().any(|c| c.abs() > i16::MAX as i64) {
+            if recheck && !ground_changed {
+                // motion only
+            } else if ground_changed || d.iter().any(|c| c.abs() > i16::MAX as i64) {
                 let mut w = Writer::with_id(cb::ENTITY_POSITION_SYNC);
                 w.varint(e.eid).f64(e.pos[0]).f64(e.pos[1]).f64(e.pos[2]).f64(e.vel[0]).f64(e.vel[1]).f64(e.vel[2]).f32(0.0).f32(0.0).bool(e.on_ground);
                 ws.push(w); t.pos_q = q;

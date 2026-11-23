@@ -355,7 +355,7 @@ pub fn item_tracking(ctx: &mut Ctx) -> Result<()> {
     let (moves, motion, syncs) = (count(cb::MOVE_ENTITY_POS) + count(cb::MOVE_ENTITY_POS_ROT), count(cb::SET_ENTITY_MOTION), count(cb::ENTITY_POSITION_SYNC));
     ctx.note(format!("60 ticks: {moves} move_entity_pos, {motion} set_entity_motion, {syncs} entity_position_sync"));
     ctx.metric("pos_packets_60t", moves + syncs, 1.0);
-    ctx.metric("motion_packets_60t", motion, 1.0);
+    ctx.metric("motion_packets_60t", motion, 3.0);
     ctx.metric("sync_packets_60t", syncs, 1.0);
     ctx.check(moves + syncs >= 1.0 && moves + syncs <= 8.0, "item position update count outside 1..8 per 60 ticks");
     // the bot's tracked position should match the server's
