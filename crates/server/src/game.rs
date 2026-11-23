@@ -16,6 +16,7 @@ mod items;
 mod mob;
 mod path;
 mod place;
+mod playerdat;
 mod portal;
 mod randomtick;
 mod spawn;
@@ -265,16 +266,17 @@ impl Game {
             "dimension": dim::DIMS[self.dim_of(p.eid).unwrap_or(self.cur)].id });
         let _ = std::fs::create_dir_all(d.join("players"));
         let _ = std::fs::write(d.join("players").join(format!("{}.json", p.uuid)), j.to_string());
+        self.save_player_dat(p);
     }
     /// Dimension a player was saved in (overworld if unknown).
     fn saved_dim(&self, uuid: Uuid) -> usize {
         let Some(d) = &self.dir else { return dim::OVERWORLD };
-        let Ok(s) = std::fs::read_to_string(d.join("players").join(format!("{uuid}.json"))) else { return dim::OVERWORLD };
+        let Ok(s) = std::fs::read_to_string(d.join("players").join(format!("{uuid}.json"))) else { return self.dat_dim(uuid).unwrap_or(dim::OVERWORLD) };
         serde_json::from_str::<serde_json::Value>(&s).ok().and_then(|v| v["dimension"].as_str().and_then(dim::dim_index)).unwrap_or(dim::OVERWORLD)
     }
     fn load_player(&self, p: &mut Player) {
         let Some(d) = &self.dir else { return };
-        let Ok(s) = std::fs::read_to_string(d.join("players").join(format!("{}.json", p.uuid))) else { return };
+        let Ok(s) = std::fs::read_to_string(d.join("players").join(format!("{}.json", p.uuid))) else { self.load_player_dat(p); return };
         let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) else { return };
         if let Some(a) = v["pos"].as_array() { if a.len() == 3 { p.pos = [a[0].as_f64().unwrap_or(0.0), a[1].as_f64().unwrap_or(0.0), a[2].as_f64().unwrap_or(0.0)]; } }
         p.yaw = v["yaw"].as_f64().unwrap_or(0.0) as f32; p.pitch = v["pitch"].as_f64().unwrap_or(0.0) as f32;

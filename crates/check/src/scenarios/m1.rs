@@ -297,6 +297,56 @@ pub fn persistence(ctx: &mut Ctx) -> Result<()> {
     Ok(())
 }
 
+/// Vanilla level and player files (M16): after a save the world has level.dat, the data/minecraft
+/// files and players/data/<uuid>.dat; with Basalt's own players/<uuid>.json deleted, a restart
+/// loads the player (position, items with damage/enchantments, armor, XP) from vanilla's .dat.
+/// The other direction (the official 26.2 server reading these files) was checked by hand.
+pub fn vanilla_files(ctx: &mut Ctx) -> Result<()> {
+    let bot = ctx.bot()?;
+    let name = bot.name.clone();
+    let o = ctx.arena(&bot, 6, 6, 4)?;
+    ctx.stand(&bot, o[0] + 2, o[2] + 2, "survival")?;
+    give(&bot, "diamond_sword", 1)?;
+    hold(&bot, "diamond_sword")?;
+    bot.cmd("enchant @s sharpness 3");
+    give(&bot, "dirt", 17)?;
+    give(&bot, "iron_helmet", 1)?;
+    let helm = bot.st().find("iron_helmet").unwrap_or(9) as i16;
+    bot.click(helm, 0, 0);
+    bot.wait_ticks(2);
+    bot.click(5, 0, 0);
+    bot.wait_ticks(3);
+    bot.cmd("xp add @s 5 levels");
+    bot.wait_ticks(5);
+    let pos = bot.st().pos();
+    bot.quit();
+    std::thread::sleep(Duration::from_millis(300));
+    let world = ctx.basalt.as_ref().and_then(|b| b.args.windows(2).find(|w| w[0] == "--world").map(|w| std::path::PathBuf::from(&w[1])));
+    let Some(world) = world else { anyhow::bail!("no --world for this scenario") };
+    ctx.restart()?; // saves on stop
+    for f in ["level.dat", "data/minecraft/world_gen_settings.dat", "data/minecraft/world_clocks.dat"] {
+        ctx.check(world.join(f).exists(), format!("{f} not written"));
+    }
+    let jsons: Vec<_> = std::fs::read_dir(world.join("players"))?.flatten().map(|e| e.path()).filter(|p| p.extension().map(|x| x == "json").unwrap_or(false)).collect();
+    let dats = std::fs::read_dir(world.join("players/data")).map(|r| r.count()).unwrap_or(0);
+    ctx.check(dats >= 1, "no players/data/<uuid>.dat");
+    for j in &jsons { std::fs::remove_file(j)?; }
+    ctx.restart()?;
+    let bot = Bot::connect(&ctx.addr(), &name)?;
+    bot.wait_chunks(1, Duration::from_secs(10))?;
+    bot.wait_ticks(10);
+    let st = bot.st();
+    let p = st.pos();
+    ctx.check((0..3).all(|i| (p[i] - pos[i]).abs() < 0.1), format!("position from .dat {p:?}, was {pos:?}"));
+    ctx.check(st.count("dirt") == 17, format!("dirt from .dat: {}", st.count("dirt")));
+    ctx.check(st.count("diamond_sword") == 1, "sword missing after loading the .dat");
+    ctx.check(st.inv[5].name() == "iron_helmet", format!("helmet slot from .dat: {}", st.inv[5].name()));
+    drop(st);
+    let k = bot.cmd_reply("xp query @s levels")?.first().map(|l| l.args.join(",")).unwrap_or_default();
+    ctx.check(k.contains('5'), format!("xp levels from .dat: {k}"));
+    Ok(())
+}
+
 /// Two-block blocks, connection shapes, support checks and trapdoor/shift rules, measured against vanilla (differential).
 pub fn place_shapes(ctx: &mut Ctx) -> Result<()> {
     let bot = ctx.bot()?;

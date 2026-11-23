@@ -128,7 +128,7 @@ Read NOTES.md for verified packet formats.
 - [ ] M9 redstone  - [ ] M10 enchant/anvil/brewing/smithing/XP  - [ ] M11 villagers/raids/AI
 - [ ] M12 bosses/endgame  - [ ] M13 commands/datapacks/advancements/scoreboards
 - [ ] M14 client polish
-- [~] M16 lossless vanilla worlds + admin files (admin done: server.properties / ops.json / whitelist.json / banned-*.json in vanilla formats, op levels from commands.json, op/deop/whitelist/ban/ban-ip/pardon/pardon-ip/banlist/kick, login refusals; no ops.json = everyone op; scenario m2_admin)  - [ ] M17 performance  - [~] M18 tests/CI/docs/plugins
+- [~] M16 lossless vanilla worlds + admin files (admin done: server.properties / ops.json / whitelist.json / banned-*.json in vanilla formats, op levels from commands.json, op/deop/whitelist/ban/ban-ip/pardon/pardon-ip/banlist/kick, login refusals; no ops.json = everyone op; scenario m2_admin; level files done: vanilla overworld region path, level.dat + data/minecraft/*.dat and players/data/<uuid>.dat read and written keeping unknown tags — the official 26.2 server opens Basalt's saves (blocks, seed, player position/inventory/enchantments/XP checked), scenario m16_vanilla_files; todo: entities/ and poi/ folders, block/fluid ticks, structures in chunks)  - [ ] M17 performance  - [~] M18 tests/CI/docs/plugins
       (done: crates/check harness, check-all.sh, CI workflow; todo: --client group (visual/asset/input/UI/perf), docs, plugins)
 - Server gaps: survival drops go straight to inventory (no item entities), no container_click /
   crafting, no mobs, no fluids/redstone ticking (Basalt is offline-mode only by design). Real-client walking/
