@@ -48,6 +48,8 @@ fn mark(label: &str) {
 struct Run {
     g: Game,
     t0: Instant,
+    /// `--frames DIR --fps N`: rendered frames (PNG, named by script tick and frame number)
+    frames: Option<(std::path::PathBuf, f32, Instant, u64)>,
 }
 
 impl Run {
@@ -56,7 +58,17 @@ impl Run {
             (self.t0.elapsed().as_millis() / 50) as u64,
             Ordering::Relaxed,
         );
-        self.g.update();
+        let alpha = self.g.update();
+        if let Some((dir, fps, last, n)) = &mut self.frames {
+            if self.g.spawned && last.elapsed().as_secs_f32() >= 1.0 / *fps {
+                *last = Instant::now();
+                let rgb = self.g.capture(alpha)?;
+                let (w, h) = self.g.gpu.size;
+                let path = dir.join(format!("f{:05}_t{:05}.png", *n, TICK.load(Ordering::Relaxed)));
+                crate::render::save_png(&path.to_string_lossy(), w, h, &rgb)?;
+                *n += 1;
+            }
+        }
         if let Some(d) = &self.g.disconnected {
             if self.g.connected
                 || !matches!(self.g.screen, Some(crate::menu::Screen::Connecting { .. }))
@@ -116,7 +128,19 @@ impl Run {
     fn exec(&mut self, op: &Value) -> Result<()> {
         let name = op["op"].as_str().ok_or_else(|| anyhow!("op missing"))?;
         match name {
-            "connect" | "grab" | "disconnect" | "log" | "flush" | "release_all" => {}
+            // oracle-only recorders (bone/first-person dumps, camera/bob options) have no effect here
+            "connect" | "grab" | "disconnect" | "log" | "flush" | "release_all" | "bones" | "fp" | "bob" | "camera" => {}
+            "hud" => self.g.hide_gui = !op["on"].as_bool().unwrap_or(true),
+            // {"op":"frames","dir":D,"fps":N} starts dumping rendered frames, {"op":"frames"} stops
+            "frames" => {
+                self.frames = match op["dir"].as_str() {
+                    Some(d) => {
+                        std::fs::create_dir_all(d)?;
+                        Some((d.into(), op["fps"].as_f64().unwrap_or(20.0) as f32, Instant::now(), 0))
+                    }
+                    None => None,
+                };
+            }
             "wait_join" => {
                 if !self.wait_until(30.0, |g| g.spawned && g.loaded_sent && g.screen.is_none())? {
                     bail!("did not join");
@@ -251,7 +275,7 @@ pub fn run(args: &Args, assets: Arc<Assets>, file: &str) -> Result<()> {
     let sounds = crate::load_sounds(args, false);
     let g = Game::new(
         None,
-        (854, 480),
+        if args.frames.is_some() { args.size } else { (854, 480) },
         assets,
         crate::load_rules(args),
         GameOpts {
@@ -262,9 +286,20 @@ pub fn run(args: &Args, assets: Arc<Assets>, file: &str) -> Result<()> {
             cfg,
         },
     )?;
+    let frames = match &args.frames {
+        Some(d) => {
+            std::fs::create_dir_all(d)?;
+            Some((std::path::PathBuf::from(d), args.fps.max(1.0), Instant::now(), 0))
+        }
+        None => None,
+    };
+    let mut g = g;
+    // --time T pins the sky/daylight (recordings compared against the vanilla client)
+    g.fixed_time = args.time;
     let mut r = Run {
         g,
         t0: Instant::now(),
+        frames,
     };
     let res = (|| -> Result<()> {
         for (i, op) in ops.iter().enumerate() {

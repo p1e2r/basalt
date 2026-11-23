@@ -117,10 +117,10 @@ public final class Control {
             while ((c = QUEUE.poll()) != null) LOCAL.add(c);
             while (true) {
                 if (blocking != null) {
-                    if (!finishBlocking(mc)) return;
+                    if (!finishBlocking(mc)) { Anim.onTick(mc); return; }
                 }
                 Cmd next = LOCAL.poll();
-                if (next == null) return;
+                if (next == null) { Anim.onTick(mc); return; }
                 run(mc, next);
             }
         } catch (Throwable e) { e.printStackTrace(); }
@@ -179,6 +179,12 @@ public final class Control {
                 case "mark" -> PacketLog.mark(c.req.get("label").getAsString());
                 case "flush" -> { PacketLog.flush(); o.addProperty("packets", PacketLog.count()); }
                 case "query" -> state(mc, o);
+                case "bones" -> Anim.bonesOp(mc, c.req, o);
+                case "fp" -> Anim.fpOp(c.req, o);
+                case "frames" -> Anim.framesOp(c.req, o);
+                case "hud" -> { boolean on = c.req.get("on").getAsBoolean(); if (mc.gui.hud.isHidden() == on) mc.gui.hud.toggle(); }
+                case "camera" -> mc.options.setCameraType(net.minecraft.client.CameraType.valueOf(c.req.get("type").getAsString()));
+                case "bob" -> mc.options.bobView().set(c.req.get("on").getAsBoolean());
                 case "release_all" -> { KeyMapping.releaseAll(); RELEASES.clear(); }
                 case "quit" -> { c.conn.send(o); PacketLog.close(); mc.stop(); return; }
                 default -> { o.addProperty("ok", false); o.addProperty("error", "unknown op " + op); }

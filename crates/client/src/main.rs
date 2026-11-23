@@ -20,6 +20,7 @@ mod player;
 mod render;
 mod scenario;
 mod script;
+mod anim;
 mod sound;
 mod status;
 mod suggest;
@@ -54,7 +55,7 @@ pub struct Args {
     // visual parity / asset grid / benchmark
     time: Option<i64>, fov: Option<f32>, render_distance: Option<u32>, gui_scale: Option<u32>, no_gui: bool, options: Option<String>,
     asset_grid: Option<String>, grid_items: bool, allowlist: String, bench: Option<String>, seconds: f32, bench_mode: String,
-    mesh_dump: Option<String>, mesh_out: String,
+    mesh_dump: Option<String>, mesh_out: String, anim_eval: Option<String>, frames: Option<String>, fps: f32,
     script: Option<String>, script_log: Option<String>,
 }
 
@@ -62,7 +63,7 @@ fn parse_args() -> Args {
     let mut a = Args { data: "data".into(), addr: "127.0.0.1:25566".into(), addr_given: false, name: "Basalt".into(), jar: basalt_paths::client_jar().to_string_lossy().into_owned(),
         screenshot: None, wait: 8.0, size: (1280, 720), pos: None, look: None, cmds: Vec::new(), walk: 0.0, chat: Vec::new(), click: None, clicks: Vec::new(), hold: 1.0, later: Vec::new(), attack: 0, attack_every: 0.7,
         scenario: None, vanilla: None, assets: None, asset_index: None, auto_respawn: false,
-        time: None, fov: None, render_distance: None, gui_scale: None, no_gui: false, options: None, asset_grid: None, grid_items: false, allowlist: "tools/asset-allowlist.txt".into(), mesh_dump: None, mesh_out: "target/mesh-dump".into(), script: None, script_log: None,
+        time: None, fov: None, render_distance: None, gui_scale: None, no_gui: false, options: None, asset_grid: None, grid_items: false, allowlist: "tools/asset-allowlist.txt".into(), mesh_dump: None, mesh_out: "target/mesh-dump".into(), anim_eval: None, frames: None, fps: 20.0, script: None, script_log: None,
         bench: None, seconds: 20.0, bench_mode: "rotate".into() };
     let mut it = std::env::args().skip(1);
     let triple = |s: String| -> Option<[f64; 3]> { let v: Vec<f64> = s.split(',').filter_map(|p| p.parse().ok()).collect(); (v.len() == 3).then(|| [v[0], v[1], v[2]]) };
@@ -102,6 +103,10 @@ fn parse_args() -> Args {
             "--options" => a.options = Some(v()),
             "--asset-grid" => a.asset_grid = Some(v()),
             "--mesh-dump" => a.mesh_dump = Some(v()), "--out" => a.mesh_out = v(),
+            // animation comparer (anim.rs): oracle bone dump in, Basalt part poses out (--out)
+            "--anim-eval" => a.anim_eval = Some(v()),
+            // script mode: dump rendered frames (PNG) to DIR at --fps
+            "--frames" => a.frames = Some(v()), "--fps" => a.fps = v().parse().unwrap_or(20.0),
             "--blocks" => a.grid_items = false, "--items" => a.grid_items = true,
             "--allowlist" => a.allowlist = v(),
             "--bench" => a.bench = Some(v()),
@@ -236,6 +241,10 @@ pub struct Game {
     pub particles: particles::Particles,
     /// first-person equip progress (now, previous tick) and the (slot, item) it was raised for
     pub equip: (f32, f32), equip_for: i32,
+    /// first-person: item drawn in the hand (switches once the hand is lowered), ticks since the
+    /// last attack (attack strength), view-bob walk distance and amplitude (now, previous tick),
+    /// own hurt animation ticks left (10 -> 0)
+    shown_item: i32, attack_ticks: u32, walk_dist: (f32, f32), view_bob: (f32, f32), self_hurt: u32,
     /// item name shown above the hotbar after selecting a different item, and its remaining ticks
     pub held_name: (String, i32),
     /// title screen splash line and when the menus started (panorama spin, splash pulse)
@@ -265,11 +274,11 @@ pub struct Game {
     hide_entities: bool,
     hide_cracks: bool,
     /// F1: no HUD, no hand
-    hide_gui: bool,
+    pub(crate) hide_gui: bool,
     /// test hook: draw the HUD but not the first-person arm
     pub hide_hand: bool,
     /// fixed time of day for deterministic captures (overrides the server)
-    fixed_time: Option<i64>,
+    pub(crate) fixed_time: Option<i64>,
     last_chunk_at: Instant,
     stats: Stats,
     clicks_sent: u32,
@@ -296,7 +305,7 @@ impl Game {
             dirty: HashMap::new(), in_flight: HashSet::new(), events: rx, out: otx, entities: HashMap::new(), player_names: HashMap::new(), my_eid: 0, name: o.name,
             chat: Vec::new(), chat_input: None, cmd_tree: None, sug: Sug::default(), hp: 20.0, food: 20, hotbar: Default::default(), held: 0, inventory: vec![ItemStack::default(); 46], inv_state: 0, carried: ItemStack::default(), day_time: 6000,
             spawned: false, loaded_sent: false, connected: false, keys: HashSet::new(), mouse: [false; 2], mouse_pos: (0.0, 0.0), slider_drag: None, last_tick: Instant::now(),
-            last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, sprint_sent: false, sprinting: false, sprint_trigger: 0, fwd_was: false, sprint_key_was: false, sprint_latch: false, jump_tick: None, particles: Default::default(), equip: (1.0, 1.0), equip_for: -1, held_name: (String::new(), 0), splash: String::new(), menu_t0: Instant::now(), pings: HashMap::new(), ping_chan: mpsc::channel(), icon_slots: HashMap::new(), ping_rounds: 0, worlds: Vec::new(), integrated: None, sp_world: None, step_dist: 0.0,
+            last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, sprint_sent: false, sprinting: false, sprint_trigger: 0, fwd_was: false, sprint_key_was: false, sprint_latch: false, jump_tick: None, particles: Default::default(), equip: (1.0, 1.0), equip_for: -1, shown_item: -1, attack_ticks: 100, walk_dist: (0.0, 0.0), view_bob: (0.0, 0.0), self_hurt: 0, held_name: (String::new(), 0), splash: String::new(), menu_t0: Instant::now(), pings: HashMap::new(), ping_chan: mpsc::channel(), icon_slots: HashMap::new(), ping_rounds: 0, worlds: Vec::new(), integrated: None, sp_world: None, step_dist: 0.0,
             last_place: Instant::now(), debug: false, disconnected: None, death_msg: None, respawn_at: None, auto_respawn: o.auto_respawn,
             screen: Some(Screen::Title), cfg: o.cfg, sounds, last_addr: String::new(), quit: false, fullscreen_changed: false, hide_entities: false, hide_cracks: false, hide_gui: false, hide_hand: false, fixed_time: None, last_chunk_at: Instant::now(), stats: Stats::default(), clicks_sent: 0, ticks: 0,
             frames: (0, Instant::now(), 0.0),
@@ -464,7 +473,7 @@ impl Game {
             Event::EntityData { id, entries } => { if let Some(e) = self.entities.get_mut(&id) { e.apply_meta(&entries); } }
             Event::HeadYaw { id, yaw } => { if let Some(e) = self.entities.get_mut(&id) { e.set_head(yaw); } }
             Event::Animate { id, action } => { if action == 0 || action == 3 { if let Some(e) = self.entities.get_mut(&id) { e.swing = 0; } } }
-            Event::Hurt { id } => { if let Some(e) = self.entities.get_mut(&id) { e.hurt = 10; } }
+            Event::Hurt { id } => { if id == self.my_eid { self.self_hurt = 10; } if let Some(e) = self.entities.get_mut(&id) { e.hurt = 10; } }
             Event::EntityEvent { id, status } => { if let Some(e) = self.entities.get_mut(&id) { match status { 3 => { if e.death == 0 { e.death = 1; } } 2 => e.hurt = 10, _ => {} } } }
             Event::TakeItem { item, collector } => {
                 if collector == self.my_eid { let p = self.player.pos; self.sounds.play("entity.item.pickup", Some(p), 0.2, 1.4); }
@@ -651,15 +660,23 @@ impl Game {
         for e in self.entities.values_mut() { e.tick(); }
         if self.fp_swing >= 0 { self.fp_swing += 1; if self.fp_swing >= 6 { self.fp_swing = -1; } }
         if !self.particles.is_empty() { self.particles.tick(&self.assets, &self.world); }
-        // switching to a different item lowers the hand, which then rises over a few ticks
+        // equip height (measured on the vanilla client, oracle "fp" recorder 2026-11-23): moves at most
+        // 0.4/tick towards (attack strength)^3, or towards 0 while a different item is still drawn;
+        // the drawn item switches once the hand is down (< 0.1)
         let h = &self.hotbar[self.held as usize];
         let now = if h.count > 0 { h.item } else { -1 };
         if now != self.equip_for {
-            if self.ticks > 0 { self.equip.0 = 0.0; }
             self.equip_for = now;
             self.held_name = if now >= 0 { (crate::lang::item_name(now), 40) } else { (String::new(), 0) };
         }
-        self.equip.1 = self.equip.0; self.equip.0 = (self.equip.0 + 0.4).min(1.0);
+        if self.ticks <= 1 { self.shown_item = now; }
+        self.attack_ticks = self.attack_ticks.saturating_add(1);
+        let strength = (self.attack_ticks as f32 / attack_cooldown(&self.assets, now)).min(1.0);
+        let target = if now != self.shown_item { 0.0 } else { strength.powi(3) };
+        self.equip.1 = self.equip.0;
+        self.equip.0 += (target - self.equip.0).clamp(-0.4, 0.4);
+        if self.equip.0 < 0.1 { self.shown_item = now; }
+        if self.self_hurt > 0 { self.self_hurt -= 1; }
         if self.held_name.1 > 0 { self.held_name.1 -= 1; }
         if self.respawn_at.map(|t| Instant::now() >= t).unwrap_or(false) { self.respawn_at = None; self.respawn(); }
         if !self.spawned || matches!(self.screen, Some(Screen::Death { .. })) { return; }
@@ -679,6 +696,15 @@ impl Game {
         }
         let before = self.player.pos;
         self.player.tick(&self.assets, &self.world, inp);
+        // view bobbing (vanilla client, oracle "fp" recorder 2026-11-23): the walk distance grows by
+        // 0.6 x horizontal distance; the amplitude eases (x0.4/tick) to min(0.1, horizontal speed)
+        // on the ground and to 0 in the air
+        {
+            let hs = ((self.player.pos[0] - before[0]).powi(2) + (self.player.pos[2] - before[2]).powi(2)).sqrt() as f32;
+            self.walk_dist.1 = self.walk_dist.0; self.walk_dist.0 += hs * 0.6;
+            let target = if self.player.on_ground && !self.player.flying { hs.min(0.1) } else { 0.0 };
+            self.view_bob.1 = self.view_bob.0; self.view_bob.0 += (target - self.view_bob.0) * 0.4;
+        }
         // footsteps
         if self.player.on_ground && !self.player.flying && !self.player.sneaking {
             self.step_dist += ((self.player.pos[0] - before[0]).powi(2) + (self.player.pos[2] - before[2]).powi(2)).sqrt();
@@ -732,7 +758,29 @@ impl Game {
     fn attack(&mut self, id: i32) {
         let mut w = Writer::with_id(sb::ATTACK); w.varint(id); send(&self.out, w);
         self.swing_arm();
+        self.attack_ticks = 0;
     }
+    /// View-space camera shake: hurt roll and walking bob (vanilla client, oracle "fp" recorder
+    /// 2026-11-23). Applied between the view and projection matrices (and so to the hand as well).
+    fn camera_bob(&self, alpha: f32) -> Mat4 {
+        let mut m = Mat4::IDENTITY;
+        if self.self_hurt > 0 {
+            // roll -14° x sin(((hurtTime - partial) / 10)^4 pi), hurtTime 10 -> 0
+            let f = ((self.self_hurt as f32 - alpha) / 10.0).max(0.0);
+            m *= Mat4::from_rotation_z((-14.0 * (f.powi(4) * std::f32::consts::PI).sin()).to_radians());
+        }
+        if self.cfg.extra.get("view_bobbing").copied().unwrap_or(1.0) > 0.5 && self.player.gamemode != 3 {
+            let (w0, w1) = (self.walk_dist.1, self.walk_dist.0);
+            let w = -(w1 + (w1 - w0) * alpha);
+            let b = self.view_bob.1 + (self.view_bob.0 - self.view_bob.1) * alpha;
+            let pi = std::f32::consts::PI;
+            m *= Mat4::from_translation(Vec3::new((w * pi).sin() * b * 0.5, -(w * pi).cos().abs() * b, 0.0))
+                * Mat4::from_rotation_z(((w * pi).sin() * b * 3.0).to_radians())
+                * Mat4::from_rotation_x(((w * pi - 0.2).cos().abs() * b * 5.0).to_radians());
+        }
+        m
+    }
+
     fn swing_arm(&mut self) {
         let mut w = Writer::with_id(sb::SWING); w.varint(0); send(&self.out, w);
         self.fp_swing = 0;
@@ -964,7 +1012,10 @@ impl Game {
         }
         if self.chat_input.is_some() { return; }
         match button {
-            0 => { if pressed { if let Some((id, _)) = self.target_entity() { self.attack(id); } else { self.mouse[0] = true; } } else { self.mouse[0] = false; } }
+            0 => { if pressed { if let Some((id, _)) = self.target_entity() { self.attack(id); } else {
+                // attacking the air swings too and resets the attack strength (vanilla client, oracle "fp" recorder)
+                if self.screen.is_none() && self.target().is_none() { self.swing_arm(); self.attack_ticks = 0; }
+                self.mouse[0] = true; } } else { self.mouse[0] = false; } }
             1 => { self.mouse[1] = pressed; if pressed { self.use_item(); } }
             _ => {}
         }
@@ -1167,7 +1218,7 @@ impl Game {
         let d = self.look_dir();
         let view = Mat4::look_to_rh(Vec3::ZERO, Vec3::new(d[0] as f32, d[1] as f32, d[2] as f32), Vec3::Y);
         let proj = Mat4::perspective_rh(self.cfg.fov.to_radians(), w / h.max(1.0), 0.05, 1024.0);
-        let vp = proj * view;
+        let vp = proj * if self.connected && self.spawned { self.camera_bob(alpha as f32) } else { Mat4::IDENTITY } * view;
         let render_dist: f32 = self.cfg.render_distance.clamp(2, 32) as f32 * 16.0;
         let biomes = self.biomes.lock().unwrap().clone();
         let bi = self.world.biome(eye[0].floor() as i32, eye[1].floor() as i32, eye[2].floor() as i32) as usize;
@@ -1236,12 +1287,12 @@ impl Game {
             if self.screen.is_none() && !self.hide_gui && self.player.gamemode != 3 && !self.hide_hand && std::env::var("BASALT_NOHAND").is_err() {
                 let sw = if self.fp_swing >= 0 { (self.fp_swing as f32 + a) / 6.0 } else { 0.0 };
                 let (sl, bl) = self.world.light(eye[0].floor() as i32, eye[1].floor() as i32, eye[2].floor() as i32);
-                let held = &self.hotbar[self.held as usize];
-                if held.count == 0 {
-                    entity::first_person_arm(&self.entity_atlas, &net::offline_uuid(&self.name), cam, self.player.yaw, self.player.pitch, sw, 0.0, [sl * 17, bl * 17], &mut fd.hand_skin);
+                let hand = entity::hand_space(cam, self.player.yaw, self.player.pitch);
+                let equip = (self.equip.1 + (self.equip.0 - self.equip.1) * a).clamp(0.0, 1.0);
+                if self.shown_item < 0 {
+                    entity::first_person_arm(&self.entity_atlas, &net::offline_uuid(&self.name), hand, sw, equip, [sl * 17, bl * 17], &mut fd.hand_skin);
                 } else {
-                    let equip = (self.equip.1 + (self.equip.0 - self.equip.1) * a).clamp(0.0, 1.0);
-                    entity::first_person_item(&self.assets, held.item, cam, self.player.yaw, self.player.pitch, sw, equip, [sl * 17, bl * 17], &mut fd.hand_items);
+                    entity::first_person_item(&self.assets, self.shown_item, hand, sw, equip, [sl * 17, bl * 17], &mut fd.hand_items);
                 }
             }
         }
@@ -1579,6 +1630,7 @@ fn main() -> Result<()> {
     let assets = Arc::new(Assets::load(&args.jar).with_context(|| format!("loading assets from {} (pass --jar path/to/26.2.jar)", args.jar))?);
     log::info!("assets loaded in {:.2?}: {} models, atlas {}x{}", t.elapsed(), assets.models.len(), assets.atlas.w, assets.atlas.h);
     if let Some(req) = args.mesh_dump.clone() { return meshdump::run(&assets, &req, &args.mesh_out); }
+    if let Some(req) = args.anim_eval.clone() { return anim::run(&assets, &req, &args.mesh_out); }
     if let Some(out) = args.asset_grid.clone() { let ok = assetgrid::run(&args, assets, &out)?; std::process::exit(if ok { 0 } else { 1 }); }
     if let Some(out) = args.bench.clone() { return bench::run(&args, assets, &out); }
     if let Some(file) = args.script.clone() { return script::run(&args, assets, &file); }
@@ -1589,4 +1641,14 @@ fn main() -> Result<()> {
     let mut app = App { args, assets, window: None, game: None, grabbed: false };
     el.run_app(&mut app)?;
     Ok(())
+}
+
+/// Ticks for the attack strength to recharge with `item` in hand: 20 / attack speed (attack speeds
+/// of the tool classes from the Minecraft Wiki; everything else 4.0 like the empty hand).
+fn attack_cooldown(a: &Assets, item: i32) -> f32 {
+    let _ = a;
+    let n = if item >= 0 { basalt_data::registries::ITEM.get(item as usize).copied().unwrap_or("") } else { "" };
+    let speed = if n.ends_with("_sword") { 1.6 } else if n.ends_with("_pickaxe") { 1.2 } else if n.ends_with("_shovel") { 1.0 }
+        else if n.ends_with("_axe") { 0.9 } else if n.ends_with("_hoe") { 2.0 } else if n == "trident" { 1.1 } else if n == "mace" { 0.6 } else { 4.0 };
+    20.0 / speed
 }

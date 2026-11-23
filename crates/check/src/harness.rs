@@ -86,6 +86,8 @@ pub fn all() -> Vec<Entry> {
         p.extend(["crates/check/src/client/{input_diff,click_oracle,oracle,mod}.rs", "crates/check/src/fuzz/clicks.rs", "tools/oracle-mod/**", "crates/check/Cargo.toml", "crates/protocol/**", "crates/data/**", "crates/world/**", "crates/server/Cargo.toml", "Cargo.lock"].map(String::from));
         v.push(Entry { id: id.into(), kind: HKind::Script, group: "client".into(), paths: p, desc: desc.into() });
     }
+    // entity-model + first-person animation parity vs the real client's own bone/hand dumps (client/anim_diff.rs)
+    v.push(Entry { id: "client_anim".into(), kind: HKind::Script, group: "client".into(), paths: crate::client::ANIM_AFFECTED.iter().map(|s| s.to_string()).collect(), desc: "model part poses (player/mob bone dumps) and first-person hand transforms of basalt-client vs the vanilla client oracle".into() });
     for (id, group, paths, desc) in EXTRA { v.push(Entry { id: (*id).into(), kind: HKind::Script, group: (*group).into(), paths: paths.iter().map(|s| s.to_string()).collect(), desc: (*desc).into() }); }
     v
 }
