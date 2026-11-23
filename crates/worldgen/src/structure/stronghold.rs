@@ -509,9 +509,8 @@ pub fn stronghold(g: &crate::Generator, cx: i32, cz: i32, r: &mut JavaRandom) ->
 
 struct Parsed {
     id: &'static str,
-    d: i32,
-    /// (x, y, z, palette index)
-    cells: Vec<(i32, i32, i32, u8)>,
+    /// (x, y, z) -> palette index
+    grid: HashMap<(i32, i32, i32), u8>,
     /// (x, y, z) -> (field, [(value, palette index)])
     cond: HashMap<(i32, i32, i32), (u8, Vec<(i8, u8)>)>,
 }
@@ -540,21 +539,20 @@ fn layouts() -> &'static (Vec<Parsed>, Vec<u16>) {
             .collect();
         let mut out: Vec<Parsed> = LAYOUTS
             .iter()
-            .map(|(id, _w, _h, d, layers)| {
-                let mut cells = Vec::new();
+            .map(|(id, _w, _h, _d, layers)| {
+                let mut grid = HashMap::new();
                 for (y, layer) in layers.iter().enumerate() {
                     for (z, row) in layer.split('/').enumerate() {
                         for (x, c) in row.bytes().enumerate() {
                             if c != b' ' {
-                                cells.push((x as i32, y as i32, z as i32, pal_index(c)));
+                                grid.insert((x as i32, y as i32, z as i32), pal_index(c));
                             }
                         }
                     }
                 }
                 Parsed {
                     id,
-                    d: *d,
-                    cells,
+                    grid,
                     cond: HashMap::new(),
                 }
             })
@@ -590,10 +588,29 @@ impl ShPiece {
     }
 }
 
+/// Random stone bricks from one draw (measured, 2026-11-24: the shell draws of the first piece in
+/// a chunk reproduce vanilla's bricks exactly): < 0.2 cracked, < 0.5 mossy, < 0.55 infested, else
+/// plain.
+fn brick(f: f32, b: &[u16; 4]) -> u16 {
+    if f < 0.2 {
+        b[2]
+    } else if f < 0.5 {
+        b[1]
+    } else if f < 0.55 {
+        b[3]
+    } else {
+        b[0]
+    }
+}
+
 /// Place a stronghold piece into the region (clipped to `clip`): the measured layout of its type
-/// (stronghold_layout.rs) in the piece frame. Random stone bricks are drawn from the placement
-/// random with the measured shares (plain 48.6 %, mossy 28.3 %, cracked 18.5 %, infested 4.6 %;
-/// statistical, not vanilla's draw order).
+/// (stronghold_layout.rs) in the piece frame. Vanilla first fills the whole box (y, x, z order in
+/// the piece frame, cells inside the chunk only) and draws one placement-random float per cell on
+/// the box surface for the random stone bricks; that is reproduced (measured on the first piece of
+/// a chunk: every brick of the shell exact in 89 of 131 chunks, the rest differ where later steps
+/// overwrite the shell), followed by a per-type count of further draws (below), so later pieces of
+/// a chunk mostly line up too. Inner random bricks (five crossings, room pillars) are not in
+/// vanilla's order.
 pub fn place(reg: &mut crate::region::Region, clip: BBox, p: &ShPiece, r: &mut crate::features::R) {
     let (ls, pal) = layouts();
     let Some(l) = ls.iter().find(|l| l.id == p.kind.id()) else {
@@ -607,35 +624,65 @@ pub fn place(reg: &mut crate::region::Region, clip: BBox, p: &ShPiece, r: &mut c
         st("infested_stone_bricks"),
     ];
     let cave_air = st("cave_air");
-    for &(x, y, z, pi) in &l.cells {
-        let mut pi = pi;
-        if let Some((f, vals)) = l.cond.get(&(x, y, z)) {
-            let v = p.field(*f);
-            if let Some((_, c)) = vals.iter().find(|(a, _)| *a == v) {
-                pi = *c;
+    let b = p.bb;
+    let (sx, h, sz) = (
+        b.max[0] - b.min[0] + 1,
+        b.max[1] - b.min[1] + 1,
+        b.max[2] - b.min[2] + 1,
+    );
+    let (w, d) = if p.o == 1 || p.o == 3 {
+        (sz, sx)
+    } else {
+        (sx, sz)
+    };
+    let shell = !matches!(p.kind, ShKind::Filler { .. });
+    for y in 0..h {
+        for x in 0..w {
+            for z in 0..d {
+                let (bx, bz) = super::temple::to_box(p.o, x, z, d);
+                let wp = [b.min[0] + bx, b.min[1] + y, b.min[2] + bz];
+                if !clip.contains(wp) {
+                    continue;
+                }
+                let edge = x == 0 || x == w - 1 || y == 0 || y == h - 1 || z == 0 || z == d - 1;
+                let f = (shell && edge).then(|| r.next_float());
+                let Some(&pi0) = l.grid.get(&(x, y, z)) else {
+                    continue;
+                };
+                let mut pi = pi0;
+                if let Some((fi, vals)) = l.cond.get(&(x, y, z)) {
+                    let v = p.field(*fi);
+                    if let Some((_, c)) = vals.iter().find(|(a, _)| *a == v) {
+                        pi = *c;
+                    }
+                }
+                let s = match pi {
+                    0 => {
+                        // inner random bricks (rare): a position hash, not a placement draw
+                        let fh = f.unwrap_or_else(|| {
+                            let hsh = crate::random::pos_seed(wp[0], wp[1], wp[2]);
+                            ((hsh >> 16) & 0xffffff) as f32 / (1 << 24) as f32
+                        });
+                        brick(fh, &bricks)
+                    }
+                    1 => cave_air,
+                    _ => super::temple::box_state(p.o, pal[pi as usize]),
+                };
+                reg.set(wp[0], wp[1], wp[2], s);
             }
         }
-        let (bx, bz) = super::temple::to_box(p.o, x, z, l.d);
-        let w = [p.bb.min[0] + bx, p.bb.min[1] + y, p.bb.min[2] + bz];
-        if !clip.contains(w) || w[1] > p.bb.max[1] {
-            continue;
-        }
-        let s = match pi {
-            0 => {
-                let f = r.next_float();
-                bricks[if f < 0.486 {
-                    0
-                } else if f < 0.769 {
-                    1
-                } else if f < 0.954 {
-                    2
-                } else {
-                    3
-                }]
-            }
-            1 => cave_air,
-            _ => super::temple::box_state(p.o, pal[pi as usize]),
-        };
-        reg.set(w[0], w[1], w[2], s);
+    }
+    // Draws of the piece's later steps (measured: the offset at which the next piece's shell
+    // matches vanilla; constant per type, 2026-11-24): straight 4, prison 12, five crossing 109,
+    // chest corridor 0-4 (2 taken); turns, room crossings, stairs 0; library / portal room unknown.
+    let extra = match p.kind {
+        ShKind::Straight { .. } => 4,
+        ShKind::PrisonHall => 12,
+        ShKind::FiveCrossing { .. } => 109,
+        ShKind::ChestCorridor => 2,
+        _ => 0,
+    };
+    for _ in 0..extra {
+        r.next_float();
     }
 }

@@ -13,8 +13,8 @@
 #   jigsaw pieces 100 %, and block parity inside the piece boxes at least BLOCK_FLOOR per type (terrain
 #   adaptation, 2026-11-24: villages / outposts 98.5, ancient cities 95, trial chambers 99, igloos and
 #   swamp huts 97, desert pyramids 75 (98.4-99.9 unless vanilla sinks the box), jungle temples 85,
-#   mineshafts 86 (pieces exact, per-block randoms statistical), mesa mineshafts 10 (y not fitted), strongholds 58
-#   (pieces exact, bricks statistical), monuments 70 (measured building, rooms not fitted); a miss is
+#   mineshafts 86 (pieces exact, per-block randoms statistical), mesa mineshafts 10 (y not fitted), strongholds 74
+#   (pieces exact, shell brick draws fitted), monuments 70 (measured building, rooms not fitted); a miss is
 #   the mismatch class `blocks-<type>`). Known gaps: crates/check/known-divergences.txt lines `structures <type>`.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -73,8 +73,12 @@ for site in "${SITES[@]}"; do
   fi
   cases=$((cases+1))
   log=$OUT/structure-parity-$seed-$CX-$CZ.txt
-  # Blocks are measured where Basalt places pieces (jigsaw + template structures).
-  CENTER=$CX,$CZ BLOCK_TYPES=${BLOCK_TYPES:-village,pillager,trail,trial,ancient,shipwreck,ruined,ocean,igloo,swamp,desert,jungle,monument} MAX_CHUNKS=${MAX_CHUNKS:-150} \
+  # Blocks are measured where Basalt places pieces (jigsaw + template structures). The stronghold /
+  # monument squares measure only their own type (other structures there are cut by the square).
+  bt=${BLOCK_TYPES:-village,pillager,trail,trial,ancient,shipwreck,ruined,ocean,igloo,swamp,desert,jungle,monument}
+  [ "$multi" = shblocks ] && bt=none
+  [ "$multi" = monblocks ] && bt=monument
+  CENTER=$CX,$CZ BLOCK_TYPES=$bt MAX_CHUNKS=${MAX_CHUNKS:-150} \
     ./target/release/examples/structures compare "$dir/world/dimensions/minecraft/overworld/region" "$R" "$seed" > "$log" 2>&1
   # Mineshafts span many chunks: measured in their own pass (own chunk cap) on the large sites,
   # so they don't take the chunk budget of the other types.
@@ -112,7 +116,7 @@ for l in open(log):
         if t not in kn: new.append(t)
 FLOOR = {"village": 98.5, "pillager": 98.5, "ancient": 95.0, "trial": 99.0, "igloo": 97.0, "swamp": 97.0,
          "desert": 75.0, "jungle": 85.0, "mineshaft_mesa": 10.0, "mineshaft": 86.0,
-         "stronghold": 58.0, "monument": 70.0}
+         "stronghold": 74.0, "monument": 70.0}
 for l in open(log):
     m = re.match(r"BLOCKS (\S+)\s+([\d.]+)% of (\d+)", l)
     if not m or int(m.group(3)) < 200: continue

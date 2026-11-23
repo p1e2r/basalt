@@ -49,7 +49,7 @@ Read NOTES.md for verified packet formats.
   jungle temples 86-98 % (mossy draw order fitted), mineshafts 88.5-90.1 % (piece generator fitted: 65/65 vanilla
   mineshafts, 8274 pieces exact; per-block randoms statistical; mesa y not fitted), ruined portals 67-94 %, shipwrecks 74-90 %, cold ocean ruins ~89.5 %,
   strongholds (concentric rings 123/128 + 122/128 exact vs /locate, rest 1 chunk off; pieces fitted: 48/48 strongholds,
-  7750 pieces exact; measured layouts, bricks statistical: 61-63 %), ocean monuments (start 40/40, measured building
+  7750 pieces exact; measured layouts + fitted shell brick draws: 77-82 %), ocean monuments (start 40/40, measured building
   layout 92.5 % in-sample / 88.9 % elsewhere; rooms not fitted). Woodland mansions not generated. Parity: `tools/structure-parity.sh` (harness
   worldgen_structures; vanilla worlds via tools/structure-world.sh in vanilla/structures/), `examples/structures`.
 - crates/worldgen: **terrain + most decoration done** (M3b: exact 5x5 neighbour decoration,
@@ -104,8 +104,8 @@ Read NOTES.md for verified packet formats.
       strongholds (structure/stronghold.rs: rings, pieces exact, measured layouts; /locate stronghold in
       m3_locate_structure), ocean monuments (structure/monument.rs: start exact, measured layout); multi-site vanilla
       worlds: tools/structure-sites.sh;
-      todo: woodland mansions (start rule + pieces; NOTES.md "Woodland mansions"), monument rooms, stronghold brick draw
-      order, encapsulate/bury adaptation, desert sinking rule, mesa mineshaft y, mineshaft per-block random order,
+      todo: woodland mansions (start rule + pieces; NOTES.md "Woodland mansions"), monument rooms, stronghold inner
+      brick order + library/portal draws, encapsulate/bury adaptation, desert sinking rule, mesa mineshaft y, mineshaft per-block random order,
       ancient-city sculk, ocean-ruin clusters, portal processors, chest loot + template entities
 - [x] M4 survival gameplay — done, check-all M4 22/22 + Env 26/26 + Items 2/2 (2026-11-23) (crates/game rules; server game/{items,inv,health}.rs):
       hardness/tool dig times (server validates), loot-table drops as item entities + pickup/merge/

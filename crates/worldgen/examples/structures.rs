@@ -778,6 +778,26 @@ fn main() -> Result<()> {
                 );
             }
         }
+        "chunkrand" => {
+            // chunkrand SEED CX,CZ NAME N: the first N nextFloat of the placement random a structure's
+            // pieces get in chunk CX,CZ (decoration seed + the structure's index in its step)
+            use basalt_worldgen::random::{
+                set_decoration_seed, set_feature_seed, BitXoroshiro, Rng,
+            };
+            let seed: i64 = args[2].parse()?;
+            let g = basalt_worldgen::Generator::new(seed);
+            let s = g.structures().unwrap();
+            let v: Vec<i32> = args[3].split(',').map(|x| x.parse().unwrap()).collect();
+            let def = *s.by_name.get(args[4].as_str()).expect("structure");
+            let step = s.defs[def].step;
+            let idx = s.defs[..def].iter().filter(|d| d.step == step).count() as i32;
+            let mut r = BitXoroshiro::new(0);
+            let deco = set_decoration_seed(&mut r, seed, v[0] * 16, v[1] * 16);
+            set_feature_seed(&mut r, deco, idx, step as i32);
+            let n: usize = args[5].parse()?;
+            let f: Vec<String> = (0..n).map(|_| format!("{:.4}", r.next_float())).collect();
+            println!("{}", f.join(" "));
+        }
         "mfeat" => {
             // mfeat SEED CX,CZ...: start rotation draw + WG surface heights around a chunk (rows z
             // -16..32 step 8, columns x -16..32 step 8 from the chunk corner) + the biome there

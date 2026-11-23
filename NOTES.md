@@ -655,10 +655,16 @@ positions of seed 12345 (tools/structure-sites.sh 12345 strongholds 1 ..., `stru
 - No portal room: generated again with the start random re-seeded by setLargeFeatureSeed(world seed + attempt, cx, cz)
   (1 of 48). Then moved down like a normal mineshaft (top = height + 1 - 64 + nextInt(53 - that)).
 - Blocks: measured majority layouts per piece type in the piece frame (`structures pcells` on 3 full strongholds,
-  stronghold_layout.rs), cells that depend on one piece field (door, side doors, room type, tall, `O` 2/3) separately;
-  random stone bricks (plain 48.6 %, mossy 28.3 %, cracked 18.5 %, infested 4.6 %) drawn statistically, not in vanilla's
-  order. Block-exact inside the vanilla boxes 61-63 % (symbolic layout match 96-99 % per piece type; the bricks are the
-  rest). Not reproduced: chests' loot, the spawner block entity, end portal eyes, the bury adaptation.
+  stronghold_layout.rs), cells that depend on one piece field (door, side doors, room type, tall, `O` 2/3) separately.
+  Random stone bricks: each piece first fills its whole box in (y, x, z) piece-frame order, cells inside the chunk
+  only, one placement-random nextFloat per cell on the box surface (inner cells draw nothing): < 0.2 cracked, < 0.5
+  mossy, < 0.55 infested, else plain (`examples/structures chunkrand` = the chunk's structure random; the first piece
+  of 89 of 131 chunks is brick-exact, the others differ only where later steps overwrite the shell). Later draws per
+  piece, fitted as the offset where the next piece's shell matches: straight 4, prison 12, five crossing 109, chest
+  corridor 0-4 (2 used), turns / room crossings / stairs / start 0, fillers none; library and portal room unknown (0).
+  Block-exact inside the vanilla boxes 77-82 % (was 61-63 % with statistical bricks; symbolic layout match 96-99 % per
+  piece type). Not reproduced: inner random bricks' order, chests' loot, the spawner block entity, end portal eyes,
+  the bury adaptation.
 
 ### Ocean monuments (M3c, 2026-11-24) — crates/worldgen/src/structure/monument.rs
 - Placement = the structure_set (random_spread 32/5 triangular) + the biome check at the chunk middle: `/locate` 6/6
