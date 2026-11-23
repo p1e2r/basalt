@@ -1,0 +1,9 @@
+[package]
+name = "basalt-paths"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Per-OS locations of the user's Minecraft install (jar, assets, asset index) and home directory"
+
+[dependencies]
+serde_json.workspace = true

@@ -1,0 +1,3 @@
+[alias]
+# cross-platform task runner: `cargo xtask <extract-data|smoke|pr-ready|check-all|client-scenarios|window-screenshot|window-bounds>`
+xtask = "run --quiet --package xtask --"

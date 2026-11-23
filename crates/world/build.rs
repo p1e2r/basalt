@@ -10,7 +10,7 @@ fn main() {
     println!("cargo:rerun-if-changed={}", dir.display());
     println!("cargo:rerun-if-env-changed=BASALT_DATA");
     let mut names: Vec<String> = std::fs::read_dir(&dir)
-        .unwrap_or_else(|_| panic!("missing {} — run tools/extract-data.sh", dir.display()))
+        .unwrap_or_else(|_| panic!("missing {} — run `cargo xtask extract-data`", dir.display()))
         .filter_map(|e| e.ok())
         .filter_map(|e| e.file_name().to_str().and_then(|n| n.strip_suffix(".json")).map(str::to_string))
         .collect();

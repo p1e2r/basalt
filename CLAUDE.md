@@ -139,14 +139,38 @@ Read NOTES.md for verified packet formats.
   crafting clicks asserted against server state), perf benchmarks (FPS, mesh time, memory at render
   distance 8/16/32 with regression thresholds).
 
-## Local setup (macOS)
-1. Java 25 + Rust. `./tools/extract-data.sh` (downloads the official server jar, runs its data
-   generator into ./data). Required before any build.
-2. Test server: vanilla/srv/run.sh (online-mode=false, network-compression-threshold=-1,
+## Local setup (macOS, Windows, Linux)
+Everything runs through `cargo xtask <task>` (alias in .cargo/config.toml; xtask/ is a workspace crate).
+The old `tools/*.sh` scripts are thin wrappers around the same tasks, so existing commands still work on macOS.
+1. Java 25 + Rust (+ `curl`, which ships with macOS, Linux and Windows 10+). `cargo xtask extract-data`
+   (downloads the official server jar via Mojang's version manifest, runs its data generator into ./data).
+   Required before any build (crates/data and crates/world generate tables from ./data in build.rs).
+2. Minecraft folder detection lives in ONE place, `crates/paths` (basalt-paths): macOS
+   `~/Library/Application Support/minecraft`, Windows `%APPDATA%\.minecraft`, Linux `~/.minecraft`
+   (override: `BASALT_MINECRAFT_DIR`). Client jar: `--jar` / `BASALT_JAR`, else `vanilla/client.jar`, else
+   `<mc>/versions/26.2/26.2.jar`. Sounds/panorama/languages: `--assets/--asset-index` / `BASALT_ASSETS` /
+   `BASALT_ASSET_INDEX`, else `<mc>/assets` + the index named in `<mc>/versions/26.2/26.2.json`.
+3. Test server (macOS/Linux): vanilla/srv/run.sh (online-mode=false, network-compression-threshold=-1,
    level-seed=12345, server-port=25566). Console via `echo cmd > vanilla/srv/console.fifo`.
-   Client jar for textures: vanilla/client.jar (from Mojang's version manifest).
-3. Test client: the user's normal launcher with 26.2, joining localhost.
-   (NOTES.md's /home/claude paths refer to the old cloud machine.)
+   Windows has no FIFOs: the differential harnesses that drive the vanilla console (`--diff`, `--fuzz`,
+   `dig_others`) need macOS/Linux or WSL; use `--no-vanilla` on Windows. (check-all's parity world
+   generation uses a stdin pipe, so it is portable.)
+4. Test client: the user's normal launcher with 26.2, joining localhost. Real-client helpers
+   (tools/run-vanilla-client.py, tools/oracle-mod/launch.py) are optional Python and detect the OS.
+5. Tasks (ports in docs/headers of xtask/src/*.rs):
+   - `cargo xtask pr-ready [--client] [--all] [--no-vanilla] [--update-baselines] [--base REF]`
+   - `cargo xtask check-all [--quick] [--no-vanilla] [--real-client] [--ci] [--fuzz] [--fuzz-long]`
+   - `cargo xtask smoke [OUTDIR]` (env PORT), `cargo xtask client-scenarios [NAMES|all]` (env PORT, VANILLA, OUT)
+   - `cargo xtask window-screenshot out.png` / `window-bounds`: capture ONLY the Minecraft window
+     (macOS: swiftc-compiled tools/mc-window-*.swift; Windows: PowerShell + PrintWindow; Linux/X11: xdotool +
+     ImageMagick `import` or `xwd`; title prefix `Minecraft`, override `MC_WINDOW_TITLE`).
+6. CI: .github/workflows/build.yml builds release binaries (server, client, probe, check) on windows-latest
+   (x86_64-pc-windows-msvc), macos-14 (aarch64-apple-darwin) and ubuntu-latest, runs `cargo test --workspace`
+   and uploads the binaries; check.yml runs the harness on Linux. Both generate ./data with `cargo xtask extract-data`.
+   Linux needs only pkg-config + libx11/libxkbcommon dev headers (winit/wgpu dlopen at runtime) and
+   libasound2-dev for the opt-in audio feature (`--features basalt-client/audio`; macOS/Windows have audio always on).
+   wgpu backends are the defaults (Metal / DX12 / Vulkan). `basalt-server` stops via SIGINT on unix; on Windows the
+   check harness kills it (no graceful save).
 
 ## Plan
 1. Fix client build; get it joining vanilla on 25566 and rendering chunks.

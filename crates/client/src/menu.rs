@@ -37,8 +37,7 @@ impl Default for Config {
 impl Config {
     pub fn dir() -> std::path::PathBuf {
         if let Ok(d) = std::env::var("BASALT_CONFIG_DIR") { return d.into(); }
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-        std::path::Path::new(&home).join(".basalt")
+        basalt_paths::home_dir().join(".basalt")
     }
     pub fn path() -> std::path::PathBuf { Self::dir().join("options.json") }
     pub fn load() -> Config { std::fs::read(Self::path()).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default() }

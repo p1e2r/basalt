@@ -29,7 +29,7 @@ pub struct BasaltServer {
 }
 
 pub fn server_bin() -> PathBuf {
-    std::env::var("BASALT_SERVER").map(Into::into).unwrap_or_else(|_| "target/release/basalt-server".into())
+    std::env::var("BASALT_SERVER").map(Into::into).unwrap_or_else(|_| format!("target/release/basalt-server{}", std::env::consts::EXE_SUFFIX).into())
 }
 
 impl BasaltServer {
@@ -67,7 +67,11 @@ impl BasaltServer {
     /// Graceful stop (SIGINT → the server saves the world), then kill if it hangs.
     pub fn stop(&mut self) {
         let Some(mut c) = self.child.take() else { return };
+        // SIGINT lets the server save the world; Windows has no equivalent for a child process, so it is killed below
+        #[cfg(unix)]
         let _ = Command::new("kill").arg("-INT").arg(c.id().to_string()).status();
+        #[cfg(not(unix))]
+        let _ = c.kill();
         let t0 = Instant::now();
         while t0.elapsed() < Duration::from_secs(15) {
             if let Ok(Some(_)) = c.try_wait() { return; }

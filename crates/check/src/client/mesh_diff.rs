@@ -32,7 +32,7 @@ pub struct Opts {
 impl Default for Opts {
     fn default() -> Opts {
         Opts { seed: 1, n: 20000, stride: 1, batch: 4000, oracle_dir: "vanilla/oracle".into(), launch: true,
-            client: "target/release/basalt-client".into(), jar: "vanilla/client.jar".into(), out: "target/check".into(), show: 3 }
+            client: format!("target/release/basalt-client{}", std::env::consts::EXE_SUFFIX).into(), jar: basalt_paths::client_jar(), out: "target/check".into(), show: 3 }
     }
 }
 

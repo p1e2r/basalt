@@ -1,5 +1,5 @@
 //! Generates Rust tables from the reports produced by Mojang's data generator
-//! (run tools/extract-data.sh first). Nothing from Mojang is committed.
+//! (run `cargo xtask extract-data` first). Nothing from Mojang is committed.
 use serde_json::Value;
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -15,7 +15,7 @@ fn main() {
     println!("cargo:rerun-if-changed={}", root.display());
     let rd = |n: &str| -> Value {
         let p = root.join(n);
-        serde_json::from_str(&std::fs::read_to_string(&p).unwrap_or_else(|_| panic!("missing {} — run tools/extract-data.sh", p.display()))).unwrap()
+        serde_json::from_str(&std::fs::read_to_string(&p).unwrap_or_else(|_| panic!("missing {} — run `cargo xtask extract-data`", p.display()))).unwrap()
     };
     let mut o = String::new();
 

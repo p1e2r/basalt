@@ -1,5 +1,5 @@
-# Builds Basalt on Linux/macOS/Windows and runs the GPU-free check harness on Linux.
-# Mojang's server jar is downloaded at CI time by tools/extract-data.sh (its data generator
+# Runs the GPU-free check harness on Linux (the cross-OS release builds live in build.yml).
+# Mojang's server jar is downloaded at CI time by `cargo xtask extract-data` (its data generator
 # output feeds the build); nothing from Mojang is committed. The vanilla reference world for
 # worldgen parity is generated in CI by the same jar and cached per seed + version.
 name: check
@@ -13,42 +13,6 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-    name: build (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "25"
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Linux packages for winit/wgpu
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libx11-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxrandr-dev libxi-dev libxcursor-dev
-      - name: Cache generated game data
-        id: data
-        uses: actions/cache@v4
-        with:
-          path: |
-            data
-            vanilla/server.jar
-          key: mcdata-${{ env.MC_VERSION }}-${{ hashFiles('tools/extract-data.sh') }}
-      - name: Extract game data (downloads the official server jar)
-        if: steps.data.outputs.cache-hit != 'true'
-        env:
-          PYTHON: ${{ runner.os == 'Windows' && 'python' || 'python3' }}
-        run: ./tools/extract-data.sh
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build --workspace
-
   check:
     name: tests + scenarios + worldgen parity (ubuntu)
     runs-on: ubuntu-latest
@@ -69,18 +33,18 @@ jobs:
           path: |
             data
             vanilla/server.jar
-          key: mcdata-${{ env.MC_VERSION }}-${{ hashFiles('tools/extract-data.sh') }}
+          key: mcdata-${{ env.MC_VERSION }}-${{ hashFiles('xtask/src/extract_data.rs') }}
       - name: Extract game data (downloads the official server jar)
         if: steps.data.outputs.cache-hit != 'true'
-        run: ./tools/extract-data.sh
+        run: cargo xtask extract-data
       - name: Cache vanilla parity world (seed 12345)
         uses: actions/cache@v4
         with:
           path: vanilla/parity/12345
-          key: parity-12345-${{ env.MC_VERSION }}-${{ hashFiles('tools/check-all.sh') }}
+          key: parity-12345-${{ env.MC_VERSION }}-${{ hashFiles('xtask/src/check_all.rs') }}
       - uses: Swatinem/rust-cache@v2
-      - name: tools/check-all.sh --ci
-        run: ./tools/check-all.sh --ci
+      - name: cargo xtask check-all --ci
+        run: cargo xtask check-all --ci
       - name: Upload check results
         if: always()
         uses: actions/upload-artifact@v4
