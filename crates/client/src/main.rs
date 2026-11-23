@@ -19,6 +19,7 @@ mod particles;
 mod player;
 mod render;
 mod scenario;
+mod script;
 mod sound;
 mod suggest;
 mod ui;
@@ -52,13 +53,14 @@ pub struct Args {
     time: Option<i64>, fov: Option<f32>, render_distance: Option<u32>, gui_scale: Option<u32>, no_gui: bool, options: Option<String>,
     asset_grid: Option<String>, grid_items: bool, allowlist: String, bench: Option<String>, seconds: f32, bench_mode: String,
     mesh_dump: Option<String>, mesh_out: String,
+    script: Option<String>, script_log: Option<String>,
 }
 
 fn parse_args() -> Args {
     let mut a = Args { data: "data".into(), addr: "127.0.0.1:25566".into(), addr_given: false, name: "Basalt".into(), jar: std::env::var("BASALT_JAR").unwrap_or_else(|_| "vanilla/client.jar".into()),
         screenshot: None, wait: 8.0, size: (1280, 720), pos: None, look: None, cmds: Vec::new(), walk: 0.0, chat: Vec::new(), click: None, clicks: Vec::new(), hold: 1.0, later: Vec::new(), attack: 0, attack_every: 0.7,
         scenario: None, vanilla: None, assets: None, asset_index: None, auto_respawn: false,
-        time: None, fov: None, render_distance: None, gui_scale: None, no_gui: false, options: None, asset_grid: None, grid_items: false, allowlist: "tools/asset-allowlist.txt".into(), mesh_dump: None, mesh_out: "target/mesh-dump".into(),
+        time: None, fov: None, render_distance: None, gui_scale: None, no_gui: false, options: None, asset_grid: None, grid_items: false, allowlist: "tools/asset-allowlist.txt".into(), mesh_dump: None, mesh_out: "target/mesh-dump".into(), script: None, script_log: None,
         bench: None, seconds: 20.0, bench_mode: "rotate".into() };
     let mut it = std::env::args().skip(1);
     let triple = |s: String| -> Option<[f64; 3]> { let v: Vec<f64> = s.split(',').filter_map(|p| p.parse().ok()).collect(); (v.len() == 3).then(|| [v[0], v[1], v[2]]) };
@@ -86,6 +88,8 @@ fn parse_args() -> Args {
             "--walk" => a.walk = v().parse().unwrap_or(0.0),
             "--look" => { let s = v(); if let Some((y, p)) = s.split_once(',') { a.look = Some((y.parse().unwrap_or(0.0), p.parse().unwrap_or(0.0))); } }
             "--scenario" => a.scenario = Some(v()),
+            // scripted input (test hook, see script.rs): JSON-lines ops as in tools/oracle-mod/SCHEMA.md; serverbound packets go to --script-log
+            "--script" => a.script = Some(v()), "--script-log" => a.script_log = Some(v()),
             "--vanilla" => a.vanilla = Some(v()),
             "--auto-respawn" => a.auto_respawn = true,
             "--time" => a.time = v().parse().ok(),
@@ -258,7 +262,7 @@ pub struct Game {
     frames: (u32, Instant, f32),
 }
 
-pub(crate) fn send(out: &tokio::sync::mpsc::UnboundedSender<Vec<u8>>, w: Writer) { let _ = out.send(w.buf); }
+pub(crate) fn send(out: &tokio::sync::mpsc::UnboundedSender<Vec<u8>>, w: Writer) { script::log_packet(&w.buf); let _ = out.send(w.buf); }
 
 pub struct GameOpts { pub name: String, pub addr: Option<String>, pub auto_respawn: bool, pub sounds: sound::Sounds, pub cfg: menu::Config }
 
@@ -1416,6 +1420,7 @@ fn main() -> Result<()> {
     if let Some(req) = args.mesh_dump.clone() { return meshdump::run(&assets, &req, &args.mesh_out); }
     if let Some(out) = args.asset_grid.clone() { let ok = assetgrid::run(&args, assets, &out)?; std::process::exit(if ok { 0 } else { 1 }); }
     if let Some(out) = args.bench.clone() { return bench::run(&args, assets, &out); }
+    if let Some(file) = args.script.clone() { return script::run(&args, assets, &file); }
     if let Some(name) = args.scenario.clone() { let ok = scenario::run(&args, assets, &name)?; std::process::exit(if ok { 0 } else { 1 }); }
     if let Some(out) = args.screenshot.clone() { return run_screenshot(&args, assets, &out); }
     let el = EventLoop::new()?;

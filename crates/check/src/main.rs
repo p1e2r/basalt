@@ -22,6 +22,15 @@ fn main() {
         let a: Vec<String> = std::env::args().skip(2).collect();
         std::process::exit(basalt_check::client::mesh_diff::main(&a));
     }
+    // subcommands: client-input / client-clicks (scripted vanilla-client input via the oracle mod's control channel)
+    if std::env::args().nth(1).as_deref() == Some("client-input") {
+        let a: Vec<String> = std::env::args().skip(2).collect();
+        std::process::exit(basalt_check::client::input_diff::main(&a));
+    }
+    if std::env::args().nth(1).as_deref() == Some("client-clicks") {
+        let a: Vec<String> = std::env::args().skip(2).collect();
+        std::process::exit(basalt_check::client::click_oracle::main(&a));
+    }
     let mut basalt = false; let mut vanilla: Option<String> = None; let mut vdir = "vanilla/srv".to_string(); let mut diff = false;
     let mut filter: Vec<String> = Vec::new(); let mut jobs = 4usize; let mut out = "target/check".to_string(); let mut json: Option<String> = None;
     let mut it = std::env::args().skip(1);

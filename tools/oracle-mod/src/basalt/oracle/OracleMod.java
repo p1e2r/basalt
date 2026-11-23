@@ -30,6 +30,7 @@ public final class OracleMod implements ClientModInitializer {
 
     @Override public void onInitializeClient() {
         Path dir = Paths.get(System.getProperty("basalt.oracle.dir", "oracle"));
+        Control.start(dir);
         Thread t = new Thread(() -> run(dir), "basalt-oracle");
         t.setDaemon(true);
         t.start();
