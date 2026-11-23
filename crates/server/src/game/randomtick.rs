@@ -34,7 +34,26 @@ impl Game {
             return;
         }
         let mut picks: Vec<[i32; 3]> = Vec::new();
+        // like vanilla, only chunks within the simulation distance of a player get random ticks
+        let sim = (self.sh.cfg.view_distance as i32).min(10);
+        let centres: Vec<(i32, i32)> = self
+            .players
+            .values()
+            .filter(|p| !p.dead)
+            .map(|p| {
+                (
+                    (p.pos[0].floor() as i32) >> 4,
+                    (p.pos[2].floor() as i32) >> 4,
+                )
+            })
+            .collect();
         for (cx, cz) in self.world.loaded_chunks() {
+            if !centres
+                .iter()
+                .any(|(px, pz)| (cx - px).abs() <= sim && (cz - pz).abs() <= sim)
+            {
+                continue;
+            }
             let Some(c) = self.world.chunk(cx, cz) else {
                 continue;
             };

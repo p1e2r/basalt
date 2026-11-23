@@ -76,8 +76,20 @@ pub fn random_ticks(ctx: &mut Ctx) -> Result<()> {
     setblock(&bot, [s0[0], y, s0[1]], "grass_block")?;
     setblock(&bot, [s0[0], y + 1, s0[1]], "oak_sapling")?;
     bot.cmd_reply("gamerule random_tick_speed 1000")?;
-    // vanilla finishes in ~10 s; Basalt has needed up to ~25 s (rates still to compare)
-    let done = bot.wait_until(Duration::from_secs(40), |s| {
+    // when each outcome first happened (ticks), for comparing rates
+    let t0 = std::time::Instant::now();
+    let mut first: [Option<f32>; 6] = [None; 6];
+    while t0.elapsed() < Duration::from_secs(40) && first.iter().any(|f| f.is_none()) {
+        bot.wait_ticks(5);
+        let s = bot.st();
+        let now = t0.elapsed().as_secs_f32();
+        let flags = [s.world.state_string(f[0] - 1, y + 1, f[1] - 1).contains("age=7"), s.world.name(g[0] + 3, y, g[1]) == "grass_block", s.world.name(l[0], l[1], l[2]) == "air",
+            s.world.name(c[0], y + 3, c[1]) == "sugar_cane", s.world.name(c[0] + 4, y + 3, c[1]) == "cactus", s.world.name(s0[0], y + 1, s0[1]).ends_with("_log")];
+        for (i, fl) in flags.iter().enumerate() { if *fl && first[i].is_none() { first[i] = Some(now); } }
+    }
+    ctx.note(format!("first seen (s): wheat {:?} grass3 {:?} leaves {:?} cane {:?} cactus {:?} tree {:?}", first[0], first[1], first[2], first[3], first[4], first[5]));
+    // both servers finish in ~5-15 s at speed 1000 (outcomes are random; generous timeout)
+    let done = bot.wait_until(Duration::from_secs(1), |s| {
         let wheat = s.world.state_string(f[0] - 1, y + 1, f[1] - 1).contains("age=7");
         wheat && s.world.name(g[0] + 3, y, g[1]) == "grass_block" && s.world.name(l[0], l[1], l[2]) == "air"
             && s.world.name(c[0], y + 3, c[1]) == "sugar_cane" && s.world.name(c[0] + 4, y + 3, c[1]) == "cactus" && s.world.name(s0[0], y + 1, s0[1]).ends_with("_log")
