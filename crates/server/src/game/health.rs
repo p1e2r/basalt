@@ -4,36 +4,74 @@ use basalt_protocol::{ids::play::clientbound as cb, text, Writer};
 
 const MAX_HEALTH: f32 = 20.0;
 
+/// Who caused damage: `cause`/`direct` entity ids (damage_event sends id+1), the killer's name for
+/// death messages, and the direction for hurt_animation.
+#[derive(Default, Clone)]
+pub struct DamageSource { pub cause: Option<i32>, pub direct: Option<i32>, pub killer: Option<String>, pub hurt_yaw: Option<f32> }
+
 impl Game {
-    fn damage_type(&self, name: &str) -> i32 { self.sh.registries.id("minecraft:damage_type", &format!("minecraft:{name}")).unwrap_or(0) }
+    pub(super) fn damage_type(&self, name: &str) -> i32 { self.sh.registries.id("minecraft:damage_type", &format!("minecraft:{name}")).unwrap_or(0) }
 
     pub(super) fn send_health(&self, eid: i32) {
         if let Some(p) = self.players.get(&eid) { let mut w = Writer::with_id(cb::SET_HEALTH); w.f32(p.health).varint(p.food).f32(p.saturation); p.send(w); }
     }
 
     /// Apply damage of a vanilla damage type ("fall", "starve", "generic", …). Returns true if it killed.
-    pub(super) fn hurt(&mut self, eid: i32, amount: f32, kind: &str) -> bool { self.hurt_inner(eid, amount, kind, false) }
+    pub(super) fn hurt(&mut self, eid: i32, amount: f32, kind: &str) -> bool { self.hurt_inner(eid, amount, kind, false, DamageSource::default()) }
     /// Damage that ignores invulnerability frames (void, /kill).
-    pub(super) fn hurt_bypass(&mut self, eid: i32, amount: f32, kind: &str) -> bool { self.hurt_inner(eid, amount, kind, true) }
+    pub(super) fn hurt_bypass(&mut self, eid: i32, amount: f32, kind: &str) -> bool { self.hurt_inner(eid, amount, kind, true, DamageSource::default()) }
+    /// Damage dealt by an entity (`cause` = attacker, `direct` = projectile or the attacker itself).
+    pub(super) fn hurt_by(&mut self, eid: i32, amount: f32, kind: &str, src: DamageSource) -> bool { self.hurt_inner(eid, amount, kind, false, src) }
 
-    fn hurt_inner(&mut self, eid: i32, amount: f32, kind: &str, bypass: bool) -> bool {
+    /// Whether a damage type is in #minecraft:bypasses_armor (from the synced tag data).
+    pub(super) fn bypasses_armor(&self, kind: &str) -> bool {
+        let id = self.damage_type(kind);
+        self.sh.registries.tags.iter().find(|(r, _)| r == "minecraft:damage_type")
+            .and_then(|(_, tags)| tags.iter().find(|(t, _)| t == "minecraft:bypasses_armor" || t == "bypasses_armor")).map(|(_, ids)| ids.contains(&id)).unwrap_or(false)
+    }
+
+    /// Armor points and toughness worn in inventory slots 5..=8.
+    pub(super) fn armor_of(&self, eid: i32) -> (f32, f32) {
+        let Some(p) = self.players.get(&eid) else { return (0.0, 0.0) };
+        (5..9).filter(|&i| p.inv[i].count > 0).filter_map(|i| self.data.item(p.inv[i].item)).fold((0.0, 0.0), |a, it| (a.0 + it.armor, a.1 + it.toughness))
+    }
+
+    /// Armor durability: each worn piece loses max(1, floor(damage / 4)).
+    fn wear_armor(&mut self, eid: i32, damage: f32) {
+        let loss = ((damage / 4.0).floor() as i32).max(1);
+        let maxes: Vec<(usize, i32)> = { let Some(p) = self.players.get(&eid) else { return }; (5..9).filter(|&i| p.inv[i].count > 0).filter_map(|i| self.data.item(p.inv[i].item).filter(|it| it.max_damage > 0 && it.armor > 0.0).map(|it| (i, it.max_damage))).collect() };
+        if maxes.is_empty() { return; }
+        let p = self.players.get_mut(&eid).unwrap();
+        for (i, max) in maxes { p.inv[i].damage += loss; if p.inv[i].damage >= max { p.inv[i] = Stack::default(); } }
+        Self::send_window(p);
+    }
+
+    fn hurt_inner(&mut self, eid: i32, amount: f32, kind: &str, bypass: bool, src: DamageSource) -> bool {
         let dt = self.damage_type(kind);
-        let Some(p) = self.players.get_mut(&eid) else { return false };
+        let Some(p) = self.players.get(&eid) else { return false };
         if p.dead || amount <= 0.0 { return false; }
         if matches!(p.gamemode, 1 | 3) && kind != "out_of_world" { return false; }
         if p.hurt_cooldown > 0 && !bypass && kind != "starve" { return false; }
+        let mut amount = amount;
+        if !self.bypasses_armor(kind) {
+            let (armor, tough) = self.armor_of(eid);
+            if armor > 0.0 { self.wear_armor(eid, amount); amount = basalt_game::armor_reduced(amount, armor, tough); }
+        }
+        let p = self.players.get_mut(&eid).unwrap();
         p.hurt_cooldown = 10;
         p.health = (p.health - amount).max(0.0);
         log::debug!("{} took {amount} {kind} damage -> {}", p.name, p.health);
         p.exhaustion += 0.1;
         let died = p.health <= 0.0;
-        self.broadcast(None, || { let mut w = Writer::with_id(cb::DAMAGE_EVENT); w.varint(eid).varint(dt).varint(0).varint(0).bool(false); w });
+        let (c, d) = (src.cause.map(|e| e + 1).unwrap_or(0), src.direct.or(src.cause).map(|e| e + 1).unwrap_or(0));
+        self.broadcast(None, || { let mut w = Writer::with_id(cb::DAMAGE_EVENT); w.varint(eid).varint(dt).varint(c).varint(d).bool(false); w });
+        if let Some(yaw) = src.hurt_yaw { let mut w = Writer::with_id(cb::HURT_ANIMATION); w.varint(eid).f32(yaw); self.players[&eid].send(w); }
         self.send_health(eid);
-        if died { self.die(eid, kind); }
+        if died { self.die(eid, kind, src.killer.as_deref()); }
         died
     }
 
-    fn die(&mut self, eid: i32, kind: &str) {
+    fn die(&mut self, eid: i32, kind: &str, killer: Option<&str>) {
         let Some(p) = self.players.get_mut(&eid) else { return };
         p.dead = true;
         p.using = None;
@@ -42,6 +80,9 @@ impl Game {
             "fall" => format!("{name} hit the ground too hard"), "starve" => format!("{name} starved to death"), "out_of_world" => format!("{name} fell out of the world"),
             "drown" => format!("{name} drowned"), "in_wall" => format!("{name} suffocated in a wall"), "lava" => format!("{name} tried to swim in lava"),
             "in_fire" | "campfire" => format!("{name} went up in flames"), "on_fire" => format!("{name} burned to death"), "hot_floor" => format!("{name} discovered the floor was lava"),
+            "mob_attack" | "mob_attack_no_aggro" | "player_attack" => format!("{name} was slain by {}", killer.unwrap_or("a mob")),
+            "arrow" | "mob_projectile" => format!("{name} was shot by {}", killer.unwrap_or("an arrow")),
+            "explosion" | "player_explosion" => match killer { Some(k) => format!("{name} was blown up by {k}"), None => format!("{name} blew up") },
             "cactus" => format!("{name} was pricked to death"), "sweet_berry_bush" => format!("{name} was poked to death by a sweet berry bush"), "generic_kill" => format!("{name} was killed"), "freeze" => format!("{name} froze to death"),
             _ => format!("{name} died"),
         };
@@ -72,7 +113,7 @@ impl Game {
         w.varint(dim_type).str("minecraft:overworld").i64(seed_hash).u8(p.gamemode).i8(-1).bool(false).bool(false).bool(false).varint(0).varint(63).u8(0);
         p.send(w);
         // the client starts a fresh level: resend chunks around the new position
-        p.loaded.clear(); p.seen_items.clear(); p.center = (i32::MAX, i32::MAX); p.batch_outstanding = false;
+        p.loaded.clear(); p.seen_items.clear(); p.seen.clear(); p.center = (i32::MAX, i32::MAX); p.batch_outstanding = false;
         Self::send_abilities(p);
         Self::teleport(p);
         let mut w = Writer::with_id(cb::GAME_EVENT); w.u8(13).f32(0.0); p.send(w);

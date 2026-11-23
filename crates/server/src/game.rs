@@ -1,8 +1,16 @@
 //! Game thread: owns the world and all players; runs at 20 TPS.
+mod ai;
+mod arrow;
+mod combat;
 mod env;
+mod explosion;
 mod health;
 mod inv;
 mod items;
+mod mob;
+mod path;
+mod spawn;
+mod track;
 
 use crate::conn::Shared;
 use crate::gen::{GenPool, Generator};
@@ -82,6 +90,9 @@ struct Player {
     /// effect id -> (amplifier, ticks left; -1 = infinite)
     effects: HashMap<i32, (u8, i32)>,
     prev_tick_pos: [f64; 3],
+    /// Non-item entities (mobs, arrows) this player's client knows about.
+    seen: HashSet<i32>,
+    last_attack_tick: u64,
 }
 
 impl Player {
@@ -102,6 +113,10 @@ pub struct Game {
     dir: Option<std::path::PathBuf>,
     data: Arc<basalt_game::GameData>,
     items: HashMap<i32, items::ItemEntity>,
+    mobs: HashMap<i32, mob::Mob>,
+    arrows: HashMap<i32, arrow::Arrow>,
+    path_budget: u32,
+    no_spawning: bool,
     rng: rand::rngs::StdRng,
 }
 
@@ -144,8 +159,10 @@ impl Game {
         let world = World::new(dir.as_ref().map(|d| d.join("region")));
         let player_type = registry_id(reg::ENTITY_TYPE, "player").unwrap_or(0);
         let data = sh.data.clone();
-        let mut g = Game { sh, world, gen: GenPool::new(gen), players: HashMap::new(), tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir, data, items: HashMap::new(), rng: rand::rngs::StdRng::from_entropy() };
+        let mut g = Game { sh, world, gen: GenPool::new(gen), players: HashMap::new(), tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir, data, items: HashMap::new(), mobs: HashMap::new(), arrows: HashMap::new(), path_budget: 0, no_spawning: false, rng: rand::rngs::StdRng::from_entropy() };
+        g.no_spawning = g.sh.cfg.no_spawning;
         g.load_level();
+        g.load_mobs();
         g.spawn = g.find_spawn();
         log::info!("spawn at {:.1} {:.1} {:.1}", g.spawn[0], g.spawn[1], g.spawn[2]);
         g
@@ -163,6 +180,7 @@ impl Game {
         let _ = std::fs::create_dir_all(d.join("players"));
         let _ = std::fs::write(d.join("basalt.json"), serde_json::json!({ "day_time": self.day_time, "seed": self.sh.cfg.seed }).to_string());
         for p in self.players.values() { self.save_player(p); }
+        self.save_mobs();
     }
     fn save_player(&self, p: &Player) {
         let Some(d) = &self.dir else { return };
@@ -332,7 +350,7 @@ impl Game {
             dead: false, health: 20.0, food: 20, saturation: 5.0, exhaustion: 0.0, fall_start: None, hurt_cooldown: 0, regen_timer: 0,
             using: None, sprinting: false, jump_held: false, dig_start: None, cursor: Stack::default(), craft_result: Stack::default(),
             table_grid: [Stack::default(); 9], window: inv::Window::Inventory, next_window: 0, state_id: 0, drag: (0, Vec::new()), seen_items: HashSet::new(),
-            air: env::MAX_AIR, fire_ticks: 0, ticks_frozen: 0, effects: HashMap::new(), prev_tick_pos: [0.0; 3],
+            air: env::MAX_AIR, fire_ticks: 0, ticks_frozen: 0, effects: HashMap::new(), prev_tick_pos: [0.0; 3], seen: HashSet::new(), last_attack_tick: 0,
         };
         self.load_player(&mut p);
         let dims = self.sh.registries.entries("minecraft:dimension_type");
@@ -342,7 +360,7 @@ impl Game {
             .bool(false).bool(true).bool(false).varint(dim_type).str("minecraft:overworld").i64(self.hashed_seed())
             .u8(p.gamemode).i8(-1).bool(false).bool(false).bool(false).varint(0).varint(63).bool(false).u8(0);
         p.send(w);
-        let mut w = Writer::with_id(cb::CHANGE_DIFFICULTY); w.u8(1).bool(false); p.send(w);
+        let mut w = Writer::with_id(cb::CHANGE_DIFFICULTY); w.u8(combat::DIFFICULTY).bool(false); p.send(w);
         Self::send_abilities(&p);
         let mut w = Writer::with_id(cb::SET_HELD_SLOT); w.varint(p.held as i32); p.send(w);
         let mut w = Writer::with_id(cb::UPDATE_RECIPES); w.varint(0).varint(0); p.send(w);
@@ -460,7 +478,10 @@ impl Game {
             sb::CONTAINER_CLICK => { self.container_click(eid, &mut r)?; }
             sb::CONTAINER_CLOSE => { let _id = r.varint()?; self.close_window(eid); }
             sb::CLIENT_COMMAND => { if r.varint()? == 0 { self.respawn(eid); } }
-            sb::SET_CARRIED_ITEM => { let s = r.i16()?; if let Some(p) = self.players.get_mut(&eid) { if (0..9).contains(&s) { p.held = s as usize; } } }
+            sb::SET_CARRIED_ITEM => { let s = r.i16()?; if let Some(p) = self.players.get_mut(&eid) { if (0..9).contains(&s) { if p.held != s as usize { p.last_attack_tick = self.tick; } p.held = s as usize; } } }
+            // attack: varint entity id; interact: varint entity id, varint hand, LpVec3 offset, bool sneaking
+            sb::ATTACK => { let target = r.varint()?; self.player_attack(eid, target); }
+            sb::INTERACT => { let target = r.varint()?; let hand = r.varint().unwrap_or(0); self.player_interact(eid, target, hand); }
             sb::SWING => {
                 let hand = r.varint()?;
                 self.broadcast(Some(eid), || { let mut w = Writer::with_id(cb::ANIMATE); w.varint(eid).u8(if hand == 0 { 0 } else { 3 }); w });
@@ -567,6 +588,16 @@ impl Game {
         let Some(info) = self.data.item(s.item) else { return };
         if info.max_damage <= 0 { return; }
         let amount = if info.name.ends_with("_sword") { amount * 2 } else { amount };
+        self.wear_held_exact(eid, amount);
+    }
+
+    /// Add `amount` damage to the held item (no tool-type scaling); breaks it at max damage.
+    fn wear_held_exact(&mut self, eid: i32, amount: i32) {
+        let Some(p) = self.players.get(&eid) else { return };
+        let slot = 36 + p.held; let s = p.inv[slot];
+        if s.count <= 0 || p.gamemode == 1 { return; }
+        let Some(info) = self.data.item(s.item) else { return };
+        if info.max_damage <= 0 { return; }
         let p = self.players.get_mut(&eid).unwrap();
         p.inv[slot].damage += amount;
         if p.inv[slot].damage >= info.max_damage {
@@ -720,12 +751,44 @@ impl Game {
                     _ => reply(self, format!("Usage: /{} <x y z{}> <block[props]>", args[0], if n == 6 { " x y z" } else { "" })),
                 }
             }
+            "summon" => {
+                // /summon <type> [x y z] [baby] [nbt-ish flags: NoAI, baby, Color:N, Sheared, ignited]
+                let cur = self.players[&eid].pos; let yaw = self.players[&eid].yaw;
+                let kind = args.get(1).and_then(|k| mob::MobKind::from_name(k));
+                let coord = |s: &str, c: f64| -> Option<f64> { if let Some(r) = s.strip_prefix('~') { Some(c + if r.is_empty() { 0.0 } else { r.parse().ok()? }) } else { s.parse().ok() } };
+                let pos = if args.len() >= 5 { match (coord(args[2], cur[0]), coord(args[3], cur[1]), coord(args[4], cur[2])) { (Some(x), Some(y), Some(z)) => Some([x, y, z]), _ => None } } else { Some(cur) };
+                let extra = args.iter().skip(2).copied().collect::<Vec<_>>().join(" ").to_lowercase();
+                match (kind, pos) {
+                    (Some(k), Some(p)) => {
+                        let color = extra.split("color:").nth(1).and_then(|c| c.trim_matches(|c: char| !c.is_ascii_digit()).split(|c: char| !c.is_ascii_digit()).next().and_then(|n| n.parse::<u8>().ok()));
+                        let id = self.spawn_mob(k, p, yaw + 180.0, |m| {
+                            m.persistent = true;
+                            m.baby = k.can_be_baby() && (extra.contains("baby") || extra.contains("age:-"));
+                            m.no_ai = extra.contains("noai");
+                            m.sheared = extra.contains("sheared");
+                            m.ai.ignited = extra.contains("ignited");
+                            if let Some(c) = color { m.sheep_color = c & 15; }
+                        });
+                        reply(self, format!("Summoned new {} (eid {id})", k.display()));
+                    }
+                    (None, _) => reply(self, format!("Unknown mob {}; known: zombie skeleton creeper spider cow pig sheep chicken", args.get(1).copied().unwrap_or(""))),
+                    _ => reply(self, "Usage: /summon <type> [x y z]".into()),
+                }
+            }
+            "kill" if args.get(1).map(|a| a.starts_with("@e")).unwrap_or(false) => {
+                let filter = args[1].split("type=").nth(1).map(|t| t.trim_end_matches(']').trim_start_matches("minecraft:").to_string());
+                let ids: Vec<i32> = self.mobs.values().filter(|m| m.alive() && filter.as_deref().map(|f| f == m.kind.name()).unwrap_or(true)).map(|m| m.eid).collect();
+                let arrows: Vec<i32> = if filter.is_none() || filter.as_deref() == Some("arrow") { self.arrows.keys().copied().collect() } else { Vec::new() };
+                for a in &arrows { self.arrows.remove(a); self.untrack(*a); }
+                for id in &ids { self.damage_mob(*id, 1.0e6, "generic_kill", None, None, None); }
+                reply(self, format!("Killed {} entities", ids.len() + arrows.len()));
+            }
             "kill" => { let h = self.players[&eid].health; let gm = self.players[&eid].gamemode; if gm == 1 || gm == 3 { reply(self, "Can't kill a creative/spectator player".into()); } else { self.hurt_bypass(eid, h.max(1.0) + 1000.0, "generic_kill"); } }
             "say" => { let m = args[1..].join(" "); self.system_chat(text::plain(&format!("[{name}] {m}"))); }
             "list" => { let names: Vec<_> = self.players.values().map(|p| p.name.clone()).collect(); reply(self, format!("{} online: {}", names.len(), names.join(", "))); }
             "spawn" => { let s = self.spawn; let p = self.players.get_mut(&eid).unwrap(); p.pos = s; Self::teleport(p); self.stream_chunks(eid); }
             "save" | "save-all" => { self.save_level(); reply(self, "Saved the world".into()); }
-            "help" | "" => reply(self, "Commands: /gamemode /tp /give /time /say /list /spawn /save /effect /enchant /setblock /fill /kill".into()),
+            "help" | "" => reply(self, "Commands: /gamemode /tp /give /time /say /list /spawn /save /effect /enchant /setblock /fill /kill [@e[type=..]] /summon".into()),
             other => reply(self, format!("Unknown command: {other}")),
         }
     }
@@ -735,8 +798,13 @@ impl Game {
     fn tick(&mut self) {
         self.tick += 1;
         self.day_time += 1;
-        for c in self.gen.finished() { self.add_generated(c); }
+        for c in self.gen.finished() { let (cx, cz) = (c.x, c.z); let fresh = self.world.chunk(cx, cz).is_none(); self.add_generated(c); if fresh { self.populate_animals(cx, cz); } }
         self.tick_items();
+        self.tick_mobs();
+        self.tick_arrows();
+        self.tick_spawning();
+        self.broadcast_mob_moves();
+        if self.tick % 10 == 5 { self.sync_viewers(); }
         self.tick_survival();
         self.tick_environment();
         let ids: Vec<i32> = self.players.keys().copied().collect();
@@ -855,7 +923,7 @@ fn block_for_item(item: &str) -> Option<u32> {
 
 /// Minimal brigadier tree: each command is a literal with an optional greedy string argument.
 fn commands_packet() -> Writer {
-    let cmds = ["gamemode", "gm", "tp", "teleport", "give", "time", "say", "list", "spawn", "save", "save-all", "help", "effect", "enchant", "setblock", "fill", "kill"];
+    let cmds = ["gamemode", "gm", "tp", "teleport", "give", "time", "say", "list", "spawn", "save", "save-all", "help", "effect", "enchant", "setblock", "fill", "kill", "summon"];
     let greedy = registry_id(reg::COMMAND_ARGUMENT_TYPE, "brigadier:string").unwrap_or(5);
     let n = 1 + cmds.len() * 2;
     let mut w = Writer::with_id(cb::COMMANDS); w.varint(n as i32);

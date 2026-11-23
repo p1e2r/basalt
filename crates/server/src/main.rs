@@ -1,7 +1,7 @@
 //! Basalt server: a clean-room Minecraft Java 26.2 server.
 //!
 //! Usage: basalt-server [--port 25565] [--world DIR | --memory] [--seed N] [--view N]
-//!                      [--gamemode survival|creative] [--compression N] [--data ./data] [--flat]
+//!                      [--gamemode survival|creative] [--compression N] [--data ./data] [--flat] [--no-spawning]
 mod conn;
 mod game;
 mod gen;
@@ -23,11 +23,13 @@ pub struct Config {
     pub compression: i32,
     pub data_dir: PathBuf,
     pub flat: bool,
+    /// Disable natural mob spawning (summoned mobs still work).
+    pub no_spawning: bool,
 }
 
 fn parse_args() -> Config {
     let mut c = Config { port: 25565, world_dir: Some("world".into()), seed: 12345, view_distance: 10, max_players: 20,
-        motd: "A Basalt server".into(), gamemode: 0, compression: 256, data_dir: "data".into(), flat: false };
+        motd: "A Basalt server".into(), gamemode: 0, compression: 256, data_dir: "data".into(), flat: false, no_spawning: false };
     let mut it = std::env::args().skip(1);
     while let Some(k) = it.next() {
         let mut v = || it.next().unwrap_or_default();
@@ -42,6 +44,7 @@ fn parse_args() -> Config {
             "--compression" => c.compression = v().parse().unwrap_or(256),
             "--data" => c.data_dir = v().into(),
             "--flat" => c.flat = true,
+            "--no-spawning" => c.no_spawning = true,
             other => eprintln!("unknown argument {other}"),
         }
     }
