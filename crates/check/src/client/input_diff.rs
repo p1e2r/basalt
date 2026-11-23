@@ -429,7 +429,24 @@ pub fn start_server(out: &Path, tag: &str) -> Result<BasaltServer> {
 
 /// Run the script on the vanilla client against a fresh Basalt server; returns the packet log path.
 pub fn run_vanilla(o: &Opts, ops: &[Value], work: &Path, tag: &str) -> Result<PathBuf> {
-    let srv = start_server(&o.out, &format!("{tag}-vanilla"))?;
+    run_vanilla_at(o, ops, work, tag, None)
+}
+
+/// As `run_vanilla`, against `addr` instead of a fresh Basalt server when given.
+pub fn run_vanilla_at(
+    o: &Opts,
+    ops: &[Value],
+    work: &Path,
+    tag: &str,
+    addr: Option<&str>,
+) -> Result<PathBuf> {
+    let srv = match addr {
+        Some(_) => None,
+        None => Some(start_server(&o.out, &format!("{tag}-vanilla"))?),
+    };
+    let target = addr
+        .map(String::from)
+        .unwrap_or_else(|| format!("127.0.0.1:{}", srv.as_ref().unwrap().port));
     let _oracle = Oracle::connect_port(&o.oracle_dir, o.launch, o.ctl_port)?;
     let mut ctl = Ctl::connect(o.ctl_port, Duration::from_secs(20))?;
     let log = std::fs::canonicalize(work)
@@ -440,7 +457,7 @@ pub fn run_vanilla(o: &Opts, ops: &[Value], work: &Path, tag: &str) -> Result<Pa
         Duration::from_secs(10),
     )?;
     ctl.call(
-        json!({"op": "connect", "addr": format!("127.0.0.1:{}", srv.port)}),
+        json!({"op": "connect", "addr": target}),
         Duration::from_secs(10),
     )?;
     let res = ctl.run(ops, Duration::from_secs(60))?;
@@ -473,7 +490,24 @@ pub fn run_vanilla(o: &Opts, ops: &[Value], work: &Path, tag: &str) -> Result<Pa
 
 /// Run the script on basalt-client (`--script`) against a fresh Basalt server.
 pub fn run_basalt(o: &Opts, ops: &[Value], work: &Path, tag: &str) -> Result<PathBuf> {
-    let srv = start_server(&o.out, &format!("{tag}-basalt"))?;
+    run_basalt_at(o, ops, work, tag, None)
+}
+
+/// As `run_basalt`, against `addr` instead of a fresh Basalt server when given.
+pub fn run_basalt_at(
+    o: &Opts,
+    ops: &[Value],
+    work: &Path,
+    tag: &str,
+    addr: Option<&str>,
+) -> Result<PathBuf> {
+    let srv = match addr {
+        Some(_) => None,
+        None => Some(start_server(&o.out, &format!("{tag}-basalt"))?),
+    };
+    let target = addr
+        .map(String::from)
+        .unwrap_or_else(|| format!("127.0.0.1:{}", srv.as_ref().unwrap().port));
     let script = work.join(format!("{tag}.script.jsonl"));
     std::fs::write(
         &script,
@@ -492,7 +526,7 @@ pub fn run_basalt(o: &Opts, ops: &[Value], work: &Path, tag: &str) -> Result<Pat
         .arg("--name")
         .arg("BasaltBot")
         .arg("--addr")
-        .arg(format!("127.0.0.1:{}", srv.port))
+        .arg(&target)
         .arg("--script")
         .arg(&script)
         .arg("--script-log")
@@ -606,6 +640,28 @@ pub fn run(o: &Opts) -> Result<usize> {
     Ok(mism)
 }
 
+/// `client-dig [--vanilla ADDR | --no-vanilla] [client-input options]`
+pub fn dig_main(args: &[String]) -> i32 {
+    let mut vanilla = Some("127.0.0.1:25566".to_string());
+    let mut rest = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--vanilla" => vanilla = it.next().cloned(),
+            "--no-vanilla" => vanilla = None,
+            _ => rest.push(a.clone()),
+        }
+    }
+    match parse_args(&rest).and_then(|o| run_dig(&o, vanilla.as_deref())) {
+        Ok(0) => 0,
+        Ok(_) => 1,
+        Err(e) => {
+            eprintln!("client-dig: {e:#}");
+            2
+        }
+    }
+}
+
 pub fn main(args: &[String]) -> i32 {
     match parse_args(args).and_then(|o| run(&o)) {
         Ok(0) => 0,
@@ -615,6 +671,187 @@ pub fn main(args: &[String]) -> i32 {
             2
         }
     }
+}
+
+// ------------------------------------------------------------------------------ empty-hand digging
+
+/// Survival with an empty hand: stone (150 ticks, no drop) then the dirt under it (15 ticks);
+/// creative: instant break. Built at (1000, 197..199, 1000), high enough to be air on both servers.
+pub fn dig_script() -> Vec<Value> {
+    let w = |t: u32| json!({"op": "wait", "ticks": t});
+    vec![
+        op(json!({"op": "wait_join"})),
+        op(json!({"op": "wait", "ticks": 100})),
+        op(json!({"op": "command", "text": "gamemode survival"})),
+        op(json!({"op": "command", "text": "clear @s"})),
+        op(json!({"op": "command", "text": "fill 997 196 997 1003 203 1003 air"})),
+        op(json!({"op": "command", "text": "fill 997 195 997 1003 195 1003 stone"})),
+        op(json!({"op": "command", "text": "fill 1000 196 1000 1000 196 1000 stone"})),
+        op(json!({"op": "command", "text": "setblock 1000 197 1000 stone"})),
+        op(json!({"op": "command", "text": "setblock 1000 198 1000 dirt"})),
+        op(json!({"op": "command", "text": "setblock 1000 199 1000 stone"})),
+        op(json!({"op": "command", "text": "tp @s 1000.5 200 1000.5"})),
+        op(json!({"op": "wait", "ticks": 40})),
+        op(json!({"op": "hotbar", "slot": 8})),
+        op(json!({"op": "look", "yaw": 0, "pitch": 90})),
+        op(json!({"op": "wait", "ticks": 5})),
+        op(json!({"op": "mark", "label": "begin"})),
+        json!({"op": "attack", "action": "press"}),
+        w(175),
+        json!({"op": "attack", "action": "release"}),
+        w(15),
+        json!({"op": "attack", "action": "press"}),
+        w(35),
+        json!({"op": "attack", "action": "release"}),
+        w(15),
+        json!({"op": "command", "text": "gamemode creative"}),
+        w(10),
+        json!({"op": "attack", "action": "tap"}),
+        w(10),
+        json!({"op": "mark", "label": "end"}),
+        json!({"op": "flush"}),
+    ]
+}
+
+/// (start tick, finish tick or None) of each dig: player_action status 0 .. status 2 (abort 1 ends one too).
+pub fn dig_spans(pk: &[Pkt]) -> Vec<(i64, Option<i64>)> {
+    let mut v: Vec<(i64, Option<i64>)> = Vec::new();
+    for p in pk.iter().filter(|p| p.name == "player_action") {
+        let st = p.body.first().copied().unwrap_or(255);
+        match st {
+            0 => v.push((p.tick, None)),
+            2 => {
+                if let Some(last) = v.last_mut() {
+                    if last.1.is_none() {
+                        last.1 = Some(p.tick);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    v
+}
+
+/// Empty-hand digging on the real client vs basalt-client, on a fresh Basalt server and on the
+/// vanilla server (`vanilla`, ops given through its console fifo). Returns new divergences.
+pub fn run_dig(o: &Opts, vanilla: Option<&str>) -> Result<usize> {
+    use_port_range();
+    let work = o.out.join("client-dig");
+    std::fs::create_dir_all(&work)?;
+    let ops = dig_script();
+    let mut problems = 0;
+    let known = std::fs::read_to_string("crates/check/known-divergences.txt").unwrap_or_default();
+    let mut report = |class: String, msg: String| {
+        let is_known = known
+            .lines()
+            .any(|l| l.trim() == format!("client_dig {class}"));
+        println!(
+            "  {}DIVERGENCE {msg}   [{class}]",
+            if is_known { "known " } else { "" }
+        );
+        if !is_known {
+            problems += 1;
+        }
+    };
+    let targets: Vec<(&str, Option<&str>)> = std::iter::once(("basalt", None))
+        .chain(vanilla.map(|v| ("vanilla", Some(v))))
+        .collect();
+    for (server, addr) in targets {
+        // vanilla: op the clients once they are online (op by name needs a known profile), for 30 s
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        if addr.is_some() {
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                for _ in 0..60 {
+                    if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
+                    for n in ["Oracle", "BasaltBot"] {
+                        let _ = std::fs::OpenOptions::new()
+                            .write(true)
+                            .open("vanilla/srv/console.fifo")
+                            .and_then(|mut f| {
+                                std::io::Write::write_all(&mut f, format!("op {n}\n").as_bytes())
+                            });
+                    }
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+            });
+        }
+        let tag = format!("dig-{server}");
+        let vlog = run_vanilla_at(o, &ops, &work, &tag, addr)?;
+        let blog = run_basalt_at(o, &ops, &work, &tag, addr)?;
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let (v, b) = (
+            read_log(&vlog, "begin", "end")?,
+            read_log(&blog, "begin", "end")?,
+        );
+        let (dv, db) = (dig_spans(&v), dig_spans(&b));
+        let dur =
+            |d: &[(i64, Option<i64>)]| d.iter().map(|(s, e)| e.map(|e| e - s)).collect::<Vec<_>>();
+        let (tv, tb) = (dur(&dv), dur(&db));
+        let swings = |pk: &[Pkt]| pk.iter().filter(|p| p.name == "swing").count();
+        println!(
+            "{server} server: digs vanilla {:?} basalt {:?}; swings vanilla {} basalt {}",
+            tv,
+            tb,
+            swings(&v),
+            swings(&b)
+        );
+        if tv.len() != tb.len() {
+            report(
+                format!("{server}/count"),
+                format!("dig count: vanilla {} basalt {}", tv.len(), tb.len()),
+            );
+        }
+        for (i, (a, c)) in tv.iter().zip(tb.iter()).enumerate() {
+            let ok = match (a, c) {
+                (Some(a), Some(c)) => (a - c).abs() <= 1,
+                (None, None) => true,
+                _ => false,
+            };
+            if !ok {
+                report(
+                    format!("{server}/dig{i}"),
+                    format!("dig {i}: vanilla {a:?} basalt {c:?} ticks"),
+                );
+            }
+        }
+        if (swings(&v) as i64 - swings(&b) as i64).abs() > 3 {
+            report(
+                format!("{server}/swings"),
+                format!(
+                    "swing packets: vanilla {} basalt {}",
+                    swings(&v),
+                    swings(&b)
+                ),
+            );
+        }
+        let (sv, sb) = (sequence(&v), sequence(&b));
+        let strip = |s: &[String]| {
+            s.iter()
+                .filter(|e| {
+                    !e.starts_with("swing ")
+                        && !e.starts_with("move_player")
+                        && !e.starts_with("client_tick")
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        if strip(&sv) != strip(&sb) {
+            report(
+                format!("{server}/sequence"),
+                format!(
+                    "packet sequence:\n    vanilla {:?}\n    basalt  {:?}",
+                    strip(&sv),
+                    strip(&sb)
+                ),
+            );
+        }
+    }
+    println!("RESULT client_dig new={problems}");
+    Ok(problems)
 }
 
 #[cfg(test)]

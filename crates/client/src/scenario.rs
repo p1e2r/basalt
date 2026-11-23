@@ -290,6 +290,7 @@ fn dig(c: &Ctx) -> Result<Outcome> {
         look_at(&mut g, [b[0] as f64 + 0.5, b[1] as f64 + 0.5, b[2] as f64]);
         step(&mut g)?;
         g.last_dig = None;
+        let old_items: std::collections::HashSet<i32> = g.entities.keys().copied().collect();
         g.mouse_button(0, true);
         let mut crack_px = 0; let mut stages = Vec::new(); let mut swung = false;
         let t0 = Instant::now();
@@ -312,8 +313,32 @@ fn dig(c: &Ctx) -> Result<Outcome> {
         // the server must not put the block back
         wait(&mut g, 1.0)?;
         if g.world.get(b[0], b[1], b[2]) != 0 { bail!("server rejected the break with {tool:?}"); }
-        details.push(format!("{}: {ticks}t (vanilla {expect}), stages {:?}, crack {crack_px}px", tool.unwrap_or("hand"), stages.len()));
+        // by hand stone drops nothing (vanilla: needs a pickaxe); with the pickaxe it drops cobblestone
+        let cobble = item_id("cobblestone");
+        let dropped = wait_until(&mut g, 1.5, |g| g.entities.iter().any(|(id, e)| !old_items.contains(id) && e.item.as_ref().map(|i| i.item == cobble).unwrap_or(false)))?;
+        if tool.is_none() && dropped { bail!("stone broken by hand dropped cobblestone"); }
+        if tool.is_some() && !dropped { bail!("stone broken with a pickaxe dropped nothing"); }
+        details.push(format!("{}: {ticks}t (vanilla {expect}), stages {:?}, crack {crack_px}px, drop {dropped}", tool.unwrap_or("hand"), stages.len()));
     }
+    // creative, empty hand: instant break, no drop
+    cmd(&mut g, "clear @s");
+    cmd(&mut g, "gamemode creative");
+    if !wait_until(&mut g, 3.0, |g| g.player.gamemode == 1 && g.hotbar.iter().all(|s| s.count == 0))? { bail!("creative / clear did not apply"); }
+    let b = [400, -60, 2];
+    cmd(&mut g, &format!("setblock {} {} {} stone", b[0], b[1], b[2]));
+    if !wait_until(&mut g, 3.0, |g| basalt_data::BlockState(g.world.get(b[0], b[1], b[2]) as u32).name() == "stone")? { bail!("setblock failed"); }
+    wait(&mut g, 0.3)?;
+    look_at(&mut g, [b[0] as f64 + 0.5, b[1] as f64 + 0.5, b[2] as f64]);
+    step(&mut g)?;
+    wait(&mut g, 0.4)?;   // past any dig delay left from the last break
+    let old_items: std::collections::HashSet<i32> = g.entities.keys().copied().collect();
+    g.mouse_button(0, true); ticks(&mut g, 2)?; g.mouse_button(0, false);
+    if !wait_until(&mut g, 1.0, |g| g.world.get(b[0], b[1], b[2]) == 0)? { bail!("creative empty-hand click did not break stone at once"); }
+    wait(&mut g, 1.0)?;
+    if g.world.get(b[0], b[1], b[2]) != 0 { bail!("server put the creative-broken block back"); }
+    let cobble = item_id("cobblestone");
+    if g.entities.iter().any(|(id, e)| !old_items.contains(id) && e.item.as_ref().map(|i| i.item == cobble || i.item == item_id("stone")).unwrap_or(false)) { bail!("creative break dropped an item"); }
+    details.push("creative hand: instant, no drop".into());
     Ok(Outcome::Pass(details.join("; ")))
 }
 

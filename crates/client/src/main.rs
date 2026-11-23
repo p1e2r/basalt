@@ -758,7 +758,7 @@ impl Game {
     fn tick_dig(&mut self) {
         if self.dig_delay > 0 { self.dig_delay -= 1; }
         if !self.mouse[0] || self.chat_input.is_some() || self.screen.is_some() {
-            if let Some(d) = self.dig.take() { self.player_action(1, d.block, d.face); }
+            if let Some(d) = self.dig.take() { self.player_action(1, d.block, 0); }   // vanilla aborts with face DOWN (oracle client-dig)
             return;
         }
         let hit = self.target();
@@ -779,9 +779,10 @@ impl Game {
             }
             return;
         }
-        if let Some(d) = self.dig.take() { self.player_action(1, d.block, d.face); }
+        if let Some(d) = self.dig.take() { self.player_action(1, d.block, 0); }   // vanilla aborts with face DOWN (oracle client-dig)
         let Some(h) = hit else { return };
-        if self.dig_delay > 0 { return; }
+        // between blocks (5-tick delay) the vanilla client keeps swinging every tick (oracle client-dig)
+        if self.dig_delay > 0 { let mut w = Writer::with_id(sb::SWING); w.varint(0); send(&self.out, w); if self.fp_swing < 0 || self.fp_swing >= 3 { self.fp_swing = 0; } return; }
         self.player_action(0, h.block, h.face);
         self.swing_arm();
         if self.player.gamemode == 1 {

@@ -241,6 +241,18 @@ pub fn try_main() -> Option<i32> {
             let detail = if res.is_empty() { format!("client-mesh produced no RESULT line: {}", txt.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("")) } else { res.trim_start_matches("RESULT ").to_string() };
             if pass && a.opts.replay.is_none() { cache.store_pass(&key_of(e, &a), &detail); }
             rows.push(RunRow { id: e.id.clone(), kind: "script", result: if pass { "pass" } else { "FAIL" }, secs: t.elapsed().as_secs_f64(), detail });
+        } else if e.id == "client_input" || e.id == "client_dig" {
+            // real-client parity through the oracle control channel: needs the oracle mod + a display
+            let exe = std::env::current_exe().unwrap_or_else(|_| format!("target/release/basalt-check{}", std::env::consts::EXE_SUFFIX).into());
+            let sub = e.id.replace('_', "-");
+            eprintln!("== {sub} (real vanilla client via the oracle)");
+            let o = Command::new(exe).arg(&sub).output();
+            let txt = o.map(|o| String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr)).unwrap_or_default();
+            let res = txt.lines().rev().find(|l| l.starts_with(&format!("RESULT {}", e.id))).unwrap_or("").to_string();
+            let pass = !res.is_empty() && res.split_whitespace().any(|p| p == "new=0");
+            let detail = if res.is_empty() { format!("{sub} produced no RESULT line: {}", txt.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("")) } else { res.trim_start_matches("RESULT ").to_string() };
+            if pass && a.opts.replay.is_none() { cache.store_pass(&key_of(e, &a), &detail); }
+            rows.push(RunRow { id: e.id.clone(), kind: "script", result: if pass { "pass" } else { "FAIL" }, secs: t.elapsed().as_secs_f64(), detail });
         } else {
             rows.push(RunRow { id: e.id.clone(), kind: "script", result: "SKIP", secs: 0.0, detail: "no runner registered for this script harness here".into() });
         }

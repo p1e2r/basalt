@@ -367,3 +367,10 @@ Measured 2026-11-23 by driving the real 26.2 client through tools/oracle-mod's c
 - Container clicks go out as `container_click(window, state_id, slot i16, button i8, mode varint, changed slots [slot, hashed stack], hashed carried)`; hashed stack = present bool, item varint, count varint, added components (type varint + int hash), removed component types. Drags are mode 5 packets: start (-999, button `type<<2`), one per slot (`type<<2|1`), end (-999, `type<<2|2`).
 - Client parity gaps found by client-input (sprint `player_command`, shift-click prediction, a swing packet per dig tick) are fixed: 0 divergences (2026-11-23).
 - Harness notes: an unfocused window never grabs the mouse, and attack/dig (`continueAttack`) needs the grab flag, so the mod sets it while in a world. The 25700-25799 port range is shared with other agents: `free_port` can race, `client-input` retries the server start.
+
+## Client digging and sprinting vs the real 26.2 client (oracle client-dig / client-input, 2026-11-23)
+- Empty hand, survival: stone 150 ticks (start → finish player_action), dirt 15; creative: start only (instant). Same on Basalt and vanilla servers.
+- While attack is held on blocks the client sends a swing every tick, including the 5-tick delay between blocks.
+- Abort (player_action 1) is sent with face 0 (DOWN), not the mined face.
+- Sprint: double-tap forward within 7 ticks or the sprint key starts it; it outlives the key; sneaking does NOT end it (the client keeps the sprint until forward is released). player_input's 0x40 bit is the sprint key state, not the sprint state.
+- Known gap (client_dig vanilla/count, vanilla/sequence): falling onto the next block right after a break, basalt-client starts that dig 5 ticks after the break and aborts it a tick later; the real client waits until it has landed.
