@@ -116,7 +116,7 @@ impl Run {
     fn exec(&mut self, op: &Value) -> Result<()> {
         let name = op["op"].as_str().ok_or_else(|| anyhow!("op missing"))?;
         match name {
-            "connect" | "grab" | "disconnect" | "log" | "flush" | "release_all" => {}
+            "connect" | "grab" | "disconnect" | "log" | "flush" | "release_all" | "config" => {}
             "wait_join" => {
                 if !self.wait_until(30.0, |g| g.spawned && g.loaded_sent && g.screen.is_none())? {
                     bail!("did not join");
@@ -221,6 +221,17 @@ impl Run {
             )),
             "chat" => self.g.send_chat(op["text"].as_str().unwrap_or("")),
             "mark" => mark(op["label"].as_str().unwrap_or("")),
+            // visual-parity harness: `{"op":"gui","hidden":true}` (F1) and `{"op":"screenshot","file":"x.png"}`
+            "gui" => self.g.hide_gui = op["hidden"].as_bool().unwrap_or(false),
+            "screenshot" => {
+                let file = op["file"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("screenshot needs file"))?;
+                // let the meshing workers and chunk stream settle before the frame is taken
+                self.wait_until(20.0, |g| g.dirty.is_empty() && g.in_flight.is_empty())?;
+                self.wait_ticks(op["settle"].as_u64().unwrap_or(10))?;
+                self.g.render(1.0, Some(file))?;
+            }
             "query" => println!(
                 "QUERY pos={:?} yaw={} pitch={} held={}",
                 self.g.player.pos, self.g.player.yaw, self.g.player.pitch, self.g.held
@@ -243,20 +254,39 @@ pub fn run(args: &Args, assets: Arc<Assets>, file: &str) -> Result<()> {
         .map(serde_json::from_str)
         .collect::<std::result::Result<_, _>>()?;
     let name = args.name.clone();
-    let cfg = crate::menu::Config {
+    // optional first-line `{"op":"config","size":[w,h],"render_distance":N,"gui_scale":N,"title":true}`
+    // (visual parity: same frame size / render distance / GUI scale as the vanilla window; `title` =
+    // stay on the title screen instead of joining)
+    let conf = ops
+        .iter()
+        .find(|o| o["op"] == "config")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let size = match (conf["size"][0].as_u64(), conf["size"][1].as_u64()) {
+        (Some(w), Some(h)) => (w as u32, h as u32),
+        _ => (854, 480),
+    };
+    let mut cfg = crate::menu::Config {
         name: name.clone(),
-        render_distance: 4,
+        render_distance: conf["render_distance"].as_u64().unwrap_or(4) as u32,
         ..Default::default()
     };
+    if let Some(gs) = conf["gui_scale"].as_u64() {
+        cfg.gui_scale = gs as _;
+    }
     let sounds = crate::load_sounds(args, false);
     let g = Game::new(
         None,
-        (854, 480),
+        size,
         assets,
         crate::load_rules(args),
         GameOpts {
             name,
-            addr: Some(args.addr.clone()),
+            addr: if conf["title"].as_bool().unwrap_or(false) {
+                None
+            } else {
+                Some(args.addr.clone())
+            },
             auto_respawn: false,
             sounds,
             cfg,

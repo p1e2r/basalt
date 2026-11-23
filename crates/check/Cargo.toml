@@ -17,6 +17,7 @@ serde_json.workspace = true
 log.workspace = true
 env_logger.workspace = true
 md-5.workspace = true
+png = "0.17"
 basalt-protocol = { path = "../protocol" }
 basalt-nbt = { path = "../nbt" }
 basalt-data = { path = "../data" }

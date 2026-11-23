@@ -1,0 +1,50 @@
+{
+  "cave_room": {
+    "max_tile_hist": 1.0,
+    "mean_hist": 0.986,
+    "mean_ssim": 0.516,
+    "min_tile_ssim": 0.395
+  },
+  "flat_night": {
+    "max_tile_hist": 1.0,
+    "mean_hist": 0.963,
+    "mean_ssim": 0.169,
+    "min_tile_ssim": 0.012
+  },
+  "flat_noon": {
+    "max_tile_hist": 0.796,
+    "mean_hist": 0.383,
+    "mean_ssim": 0.888,
+    "min_tile_ssim": 0.732
+  },
+  "flat_sunset": {
+    "max_tile_hist": 1.0,
+    "mean_hist": 1.0,
+    "mean_ssim": 0.554,
+    "min_tile_ssim": 0.327
+  },
+  "inventory": {
+    "max_tile_hist": 0.6,
+    "mean_hist": 0.146,
+    "mean_ssim": 0.869,
+    "min_tile_ssim": 0.59
+  },
+  "terrain_spawn": {
+    "max_tile_hist": 1.0,
+    "mean_hist": 0.59,
+    "mean_ssim": 0.742,
+    "min_tile_ssim": 0.426
+  },
+  "title": {
+    "max_tile_hist": 0.449,
+    "mean_hist": 0.148,
+    "mean_ssim": 0.782,
+    "min_tile_ssim": 0.348
+  },
+  "underwater": {
+    "max_tile_hist": 0.953,
+    "mean_hist": 0.613,
+    "mean_ssim": 0.766,
+    "min_tile_ssim": 0.265
+  }
+}

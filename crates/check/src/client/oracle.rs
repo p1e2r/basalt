@@ -11,6 +11,45 @@ use std::time::{Duration, Instant};
 /// Default TCP port of the oracle mod's scripted-input control channel (SCHEMA.md "Control channel").
 pub const DEFAULT_CTL_PORT: u16 = 25789;
 
+/// The control port the harnesses use: `$ORACLE_CTL_PORT` if set (several oracle clients may run
+/// side by side on one machine), else [`DEFAULT_CTL_PORT`].
+pub fn ctl_port() -> u16 {
+    std::env::var("ORACLE_CTL_PORT").ok().and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_CTL_PORT)
+}
+
+/// Why the real vanilla client cannot be used here (None = it can): not on CI, a launcher install
+/// with the game version, a Java runtime and a built oracle mod (or the means to build it).
+pub fn unavailable(oracle_dir: &Path) -> Option<String> {
+    if std::env::var_os("CI").is_some() && std::env::var_os("BASALT_REAL_CLIENT").is_none() { return Some("CI environment (no display / game install)".into()); }
+    let mc = std::env::var_os("MC_DIR").map(PathBuf::from).unwrap_or_else(|| {
+        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from).unwrap_or_default();
+        if cfg!(target_os = "macos") { home.join("Library/Application Support/minecraft") }
+        else if cfg!(windows) { std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join(".minecraft")).unwrap_or(home.join(".minecraft")) }
+        else { home.join(".minecraft") }
+    });
+    let ver = std::env::var("MC_VERSION").unwrap_or_else(|_| "26.2".into());
+    if !mc.join("versions").join(&ver).join(format!("{ver}.json")).exists() { return Some(format!("vanilla {ver} client not installed in {}", mc.display())); }
+    if Command::new(std::env::var("JAVA").unwrap_or_else(|_| "java".into())).arg("-version").output().is_err() { return Some("no java".into()); }
+    if !oracle_dir.join("basalt-oracle.jar").exists() && !Path::new("tools/oracle-mod/build.sh").exists() { return Some(format!("{} missing and no tools/oracle-mod/build.sh", oracle_dir.join("basalt-oracle.jar").display())); }
+    None
+}
+
+/// Make sure `dir` holds a built oracle mod (+ the pinned Fabric jars): reuse `vanilla/oracle`'s Fabric jars
+/// and run tools/oracle-mod/build.sh with ORACLE_DIR=dir when the jar is missing.
+pub fn ensure_built(dir: &Path) -> Result<()> {
+    if dir.join("basalt-oracle.jar").exists() { return Ok(()); }
+    std::fs::create_dir_all(dir)?;
+    let shared = Path::new("vanilla/oracle/fabric");
+    if shared.is_dir() && !dir.join("fabric").exists() {
+        std::fs::create_dir_all(dir.join("fabric"))?;
+        for e in std::fs::read_dir(shared)? { let e = e?; std::fs::copy(e.path(), dir.join("fabric").join(e.file_name()))?; }
+    }
+    let abs = std::fs::canonicalize(dir)?;
+    let st = Command::new("bash").arg("tools/oracle-mod/build.sh").env("ORACLE_DIR", abs).status().context("running tools/oracle-mod/build.sh")?;
+    if !st.success() || !dir.join("basalt-oracle.jar").exists() { bail!("oracle mod build failed (tools/oracle-mod/build.sh)"); }
+    Ok(())
+}
+
 pub struct Oracle { pub dir: PathBuf, pub ctl_port: u16, child: Option<Child> }
 
 impl Oracle {
@@ -40,6 +79,9 @@ impl Oracle {
         o.ping(Duration::from_secs(30))?;
         Ok(o)
     }
+
+    /// Process id of the client this handle launched (None when it connected to a running one).
+    pub fn pid(&self) -> Option<u32> { self.child.as_ref().map(|c| c.id()) }
 
     pub fn ping(&self, timeout: Duration) -> Result<()> {
         let id = format!("ping-{}-{}", std::process::id(), Instant::now().elapsed().as_nanos());

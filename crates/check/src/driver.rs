@@ -28,6 +28,7 @@ struct Args {
     no_cache: bool,
     no_vanilla: bool,
     update_known: bool,
+    update_baseline: bool,
     filter: Vec<String>,
     opts: Opts,
     vanilla: Option<String>,
@@ -54,6 +55,7 @@ fn parse(argv: &[String]) -> Result<Args, String> {
             "--no-cache" => a.no_cache = true,
             "--no-vanilla" => a.no_vanilla = true,
             "--update-known" => a.update_known = true,
+            "--update-baseline" => a.update_baseline = true,
             "--long" => a.opts.long = true,
             "--cases" => a.opts.cases = val(&mut i)?.parse().map_err(|_| "bad --cases")?,
             "--seed" => a.opts.seed = val(&mut i)?.parse().map_err(|_| "bad --seed")?,
@@ -210,8 +212,43 @@ pub fn try_main() -> Option<i32> {
         }
     }
 
+    // ---- client group: pick a free oracle control port when the default is taken by another oracle client
+    if todo.iter().any(|e| e.id.starts_with("client_")) && std::env::var_os("ORACLE_CTL_PORT").is_none() && std::net::TcpListener::bind(("127.0.0.1", crate::client::oracle::DEFAULT_CTL_PORT)).is_err() {
+        if let Some(p) = (25760..25780).find(|p| std::net::TcpListener::bind(("127.0.0.1", *p)).is_ok()) { std::env::set_var("ORACLE_CTL_PORT", p.to_string()); }
+    }
+    // ---- client UI scenarios: one basalt-client process for every selected scenario, one row each
+    let ui: Vec<&&Entry> = todo.iter().filter(|e| e.id.starts_with("client_ui_")).collect();
+    if !ui.is_empty() {
+        let t = Instant::now();
+        let names: Vec<String> = ui.iter().map(|e| e.id.trim_start_matches("client_ui_").to_string()).collect();
+        let exe = std::env::current_exe().unwrap_or_else(|_| format!("target/release/basalt-check{}", std::env::consts::EXE_SUFFIX).into());
+        eprintln!("== client UI scenarios ({}) against a fresh Basalt server", names.len());
+        let mut c = Command::new(exe);
+        c.arg("client-ui").arg("--names").arg(names.join(",")).arg("--out").arg(&out);
+        if a.no_vanilla { c.arg("--no-vanilla"); }
+        let o = c.output();
+        let txt = o.map(|o| String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr)).unwrap_or_default();
+        let secs = t.elapsed().as_secs_f64();
+        let skipped_all = txt.lines().find(|l| l.starts_with("RESULT client_ui") && l.contains("skipped=1") && l.contains("reason="));
+        for e in &ui {
+            let n = e.id.trim_start_matches("client_ui_");
+            let line = txt.lines().find(|l| l.starts_with("SCENARIO") && l.contains(&format!("M7/{n} ")));
+            let (result, detail): (&'static str, String) = match (line, skipped_all) {
+                (_, Some(l)) => ("SKIP", l.split("reason=").nth(1).unwrap_or("").replace('_', " ")),
+                (Some(l), _) => {
+                    let mut it = l.splitn(4, ' ');
+                    let (_, _, verdict, rest) = (it.next(), it.next(), it.next().unwrap_or(""), it.next().unwrap_or(""));
+                    (match verdict { "PASS" => "pass", "SKIP" => "SKIP", _ => "FAIL" }, rest.to_string())
+                }
+                (None, None) => ("FAIL", format!("no result line ({})", txt.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or(""))),
+            };
+            if result == "pass" { cache.store_pass(&key_of(e, &a), &detail); }
+            rows.push(RunRow { id: e.id.clone(), kind: "script", result, secs: secs / ui.len() as f64, detail });
+        }
+    }
+
     // ---- scripts
-    for e in todo.iter().filter(|e| e.kind == HKind::Script) {
+    for e in todo.iter().filter(|e| e.kind == HKind::Script && !e.id.starts_with("client_ui_")) {
         let t = Instant::now();
         if e.id == "fuzz_worldgen" {
             let (seeds, path) = worldgen_cases(&a);
@@ -231,6 +268,10 @@ pub fn try_main() -> Option<i32> {
             if pass && a.opts.replay.is_none() { cache.store_pass(&key_of(e, &a), &detail); }
             rows.push(RunRow { id: e.id.clone(), kind: "script", result, secs: t.elapsed().as_secs_f64(), detail });
         } else if e.id == "client_mesh" {
+            if let Some(why) = crate::client::oracle::unavailable(std::path::Path::new("vanilla/oracle")) {
+                rows.push(RunRow { id: e.id.clone(), kind: "script", result: "SKIP", secs: 0.0, detail: why });
+                continue;
+            }
             let exe = std::env::current_exe().unwrap_or_else(|_| format!("target/release/basalt-check{}", std::env::consts::EXE_SUFFIX).into());
             eprintln!("== client-mesh (oracle block-meshing parity)");
             let o = Command::new(exe).arg("client-mesh").arg("--out").arg(&out).output();
@@ -241,18 +282,30 @@ pub fn try_main() -> Option<i32> {
             let detail = if res.is_empty() { format!("client-mesh produced no RESULT line: {}", txt.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("")) } else { res.trim_start_matches("RESULT ").to_string() };
             if pass && a.opts.replay.is_none() { cache.store_pass(&key_of(e, &a), &detail); }
             rows.push(RunRow { id: e.id.clone(), kind: "script", result: if pass { "pass" } else { "FAIL" }, secs: t.elapsed().as_secs_f64(), detail });
-        } else if e.id == "client_input" || e.id == "client_dig" {
-            // real-client parity through the oracle control channel: needs the oracle mod + a display
+        } else if matches!(e.id.as_str(), "client_input" | "client_dig" | "client_clicks" | "client_visual" | "client_assets" | "client_perf") {
+            // real-client parity (oracle control channel + a display) or basalt-client-only checks (GPU); each prints a RESULT line
             let exe = std::env::current_exe().unwrap_or_else(|_| format!("target/release/basalt-check{}", std::env::consts::EXE_SUFFIX).into());
             let sub = e.id.replace('_', "-");
-            eprintln!("== {sub} (real vanilla client via the oracle)");
-            let o = Command::new(exe).arg(&sub).output();
+            let needs_oracle = matches!(e.id.as_str(), "client_input" | "client_dig" | "client_clicks" | "client_visual");
+            if needs_oracle { if let Some(why) = crate::client::oracle::unavailable(std::path::Path::new("vanilla/oracle")) {
+                rows.push(RunRow { id: e.id.clone(), kind: "script", result: "SKIP", secs: 0.0, detail: why });
+                continue;
+            } }
+            eprintln!("== {sub}{}", if needs_oracle { " (real vanilla client via the oracle)" } else { "" });
+            let mut c = Command::new(exe);
+            c.arg(&sub).arg("--out").arg(&out);
+            if a.update_baseline && matches!(e.id.as_str(), "client_visual" | "client_perf") { c.arg("--update-baseline"); }
+            if e.id == "client_assets" && a.no_vanilla { c.arg("--no-vanilla"); }
+            let o = c.output();
             let txt = o.map(|o| String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr)).unwrap_or_default();
+            for l in txt.lines().filter(|l| l.starts_with("SCENE ") || l.starts_with("PERF ") || l.starts_with("SKIP ") || l.contains("missing ")) { println!("{l}"); }
             let res = txt.lines().rev().find(|l| l.starts_with(&format!("RESULT {}", e.id))).unwrap_or("").to_string();
-            let pass = !res.is_empty() && res.split_whitespace().any(|p| p == "new=0");
-            let detail = if res.is_empty() { format!("{sub} produced no RESULT line: {}", txt.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("")) } else { res.trim_start_matches("RESULT ").to_string() };
+            let has = |kv: &str| res.split_whitespace().any(|p| p == kv);
+            let skipped = has("skipped=1");
+            let pass = !res.is_empty() && !skipped && (has("new=0") || has("failed=0") || has("prediction_overridden_by_server=0"));
+            let detail = if res.is_empty() { format!("{sub} produced no RESULT line: {}", txt.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("")) } else if skipped { res.split("reason=").nth(1).unwrap_or("").replace('_', " ") } else { res.trim_start_matches("RESULT ").to_string() };
             if pass && a.opts.replay.is_none() { cache.store_pass(&key_of(e, &a), &detail); }
-            rows.push(RunRow { id: e.id.clone(), kind: "script", result: if pass { "pass" } else { "FAIL" }, secs: t.elapsed().as_secs_f64(), detail });
+            rows.push(RunRow { id: e.id.clone(), kind: "script", result: if skipped { "SKIP" } else if pass { "pass" } else { "FAIL" }, secs: t.elapsed().as_secs_f64(), detail });
         } else {
             rows.push(RunRow { id: e.id.clone(), kind: "script", result: "SKIP", secs: 0.0, detail: "no runner registered for this script harness here".into() });
         }

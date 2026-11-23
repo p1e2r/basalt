@@ -72,7 +72,7 @@ impl R {
     }
 }
 
-const ORDER: [&str; 12] = [
+const ORDER: [&str; 13] = [
     "Build",
     "Tests",
     "M1",
@@ -85,6 +85,7 @@ const ORDER: [&str; 12] = [
     "Diff",
     "Fuzz",
     "Real client",
+    "Client",
 ];
 
 fn order_of(g: &str) -> usize {
@@ -197,6 +198,7 @@ fn parity_verdict(result_line: &str) -> (bool, String) {
 pub fn run(args: &[String]) -> Result<i32> {
     let (mut quick, mut vanilla, mut real, mut fuzz, mut fuzz_long) =
         (false, true, false, false, false);
+    let (mut client, mut update_baseline) = (false, false);
     for a in args {
         match a.as_str() {
             "--fuzz" => fuzz = true,
@@ -207,13 +209,15 @@ pub fn run(args: &[String]) -> Result<i32> {
             "--quick" => quick = true,
             "--no-vanilla" => vanilla = false,
             "--real-client" => real = true,
+            "--client" => client = true,
+            "--update-baseline" => update_baseline = true,
             "--ci" => {
                 quick = true;
                 vanilla = false;
                 real = false
             }
             "-h" | "--help" => {
-                println!("usage: cargo xtask check-all [--quick] [--no-vanilla] [--real-client] [--ci] [--fuzz] [--fuzz-long]\nenv: VANILLA_ADDR (127.0.0.1:25566), VANILLA_DIR (vanilla/srv), PARITY_SEEDS (\"12345 42 1\"), CHECK_JOBS (4), JAVA (java)");
+                println!("usage: cargo xtask check-all [--quick] [--no-vanilla] [--real-client] [--client [--update-baseline]] [--ci] [--fuzz] [--fuzz-long]\n  --client: the client parity group (visual vs the real client, assets, input, UI scenarios, perf); skipped rows when no GPU / real client\nenv: VANILLA_ADDR (127.0.0.1:25566), VANILLA_DIR (vanilla/srv), PARITY_SEEDS (\"12345 42 1\"), CHECK_JOBS (4), JAVA (java)");
                 return Ok(0);
             }
             other => bail!("unknown option {other}"),
@@ -468,6 +472,11 @@ pub fn run(args: &[String]) -> Result<i32> {
         rows.push(real_client(&out, &server_bin)?);
     }
 
+    // ---------------------------------------------------------------- 6. client parity group
+    if client {
+        rows.extend(client_group(&out, &check_bin, vanilla, update_baseline)?);
+    }
+
     // ---------------------------------------------------------------- report
     match std::fs::read(&sjson)
         .ok()
@@ -551,6 +560,52 @@ pub fn run(args: &[String]) -> Result<i32> {
         serde_json::to_string_pretty(&results)?,
     )?;
     Ok((fails > 0) as i32)
+}
+
+/// The client harness group (`basalt-check --group client`): visual parity vs the real client, asset
+/// coverage, input parity, UI scenarios, benchmarks. One row per harness; rows that need a GPU or the
+/// real client are `skip` where unavailable.
+fn client_group(out: &Path, check: &Path, vanilla: bool, update_baseline: bool) -> Result<Vec<R>> {
+    println!("== client group (visual / assets / input / UI / perf)");
+    let log = out.join("client-group.log");
+    let mut c = Command::new(check);
+    c.args(["--group", "client", "--no-cache", "--out"])
+        .arg(out);
+    if !vanilla {
+        c.arg("--no-vanilla");
+    }
+    if update_baseline {
+        c.arg("--update-baseline");
+    }
+    let _ = std::fs::remove_file(out.join("affected-results.json"));
+    util::run_logged(&mut c, &log)?;
+    let rows: Vec<Value> = std::fs::read(out.join("affected-results.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    if rows.is_empty() {
+        return Ok(vec![R::new(
+            "Client",
+            "client group",
+            "both",
+            false,
+            0.0,
+            &format!("no results (see {})", log.display()),
+        )]);
+    }
+    Ok(rows
+        .iter()
+        .map(|r| {
+            let id = r["id"].as_str().unwrap_or("?");
+            let d = r["detail"].as_str().unwrap_or("");
+            let secs = r["secs"].as_f64().unwrap_or(0.0);
+            match r["result"].as_str().unwrap_or("") {
+                "SKIP" => R::skip("Client", id, "both", d),
+                "pass" | "cached" => R::new("Client", id, "both", true, secs, d),
+                _ => R::new("Client", id, "both", false, secs, d),
+            }
+        })
+        .collect())
 }
 
 /// Launch the official client (via tools/run-vanilla-client.py, needs Python + an installed launcher
