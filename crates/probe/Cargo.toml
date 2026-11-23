@@ -1,0 +1,13 @@
+[package]
+name = "basalt-probe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Protocol probe: joins a server and dumps packets (for interop testing)"
+
+[dependencies]
+anyhow.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+basalt-protocol = { path = "../protocol" }
+basalt-nbt = { path = "../nbt" }

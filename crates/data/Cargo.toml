@@ -1,0 +1,11 @@
+[package]
+name = "basalt-data"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[dependencies]
+
+[build-dependencies]
+serde_json.workspace = true
