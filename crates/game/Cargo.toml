@@ -1,0 +1,12 @@
+[package]
+name = "basalt-game"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Gameplay rules from the data-generator output: items, mining, loot tables, recipes"
+
+[dependencies]
+anyhow.workspace = true
+serde_json.workspace = true
+rand.workspace = true
+basalt-data = { path = "../data" }
