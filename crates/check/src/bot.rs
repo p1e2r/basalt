@@ -59,6 +59,10 @@ pub struct Explosion { pub at: Instant, pub pos: [f64; 3], pub radius: f32, pub 
 pub struct PacketLog { pub at: Instant, pub id: i32, pub eid: i32 }
 
 pub struct State {
+    /// game_event weather: (event id, value) log (1 begin rain, 2 end rain, 7 rain level, 8 thunder level) + latest levels
+    pub weather_events: Vec<(u8, f32)>,
+    pub rain: f32,
+    pub thunder: f32,
     pub name: String,
     pub eid: i32,
     pub gamemode: u8,
@@ -196,6 +200,7 @@ impl Bot {
     pub fn connect_with(addr: &str, name: &str, opts: Options) -> Result<Bot> {
         let (otx, mut orx) = unbounded_channel::<Vec<u8>>();
         let st = Arc::new(Mutex::new(State {
+            weather_events: Vec::new(), rain: 0.0, thunder: 0.0,
             name: name.to_string(), eid: -1, gamemode: 0, may_fly: false, body: Body::default(), input: Input::default(), goal: None, frozen: false,
             spawned: false, loaded_sent: false, dead: false, death_msg: None, health: 20.0, food: 20, saturation: 5.0, air: 300, ticks_frozen: 0, flags: 0,
             effects: HashMap::new(), inv: vec![Stack::default(); 46], cursor: Stack::default(), held: 0, state_id: 0, screen: None, container: Vec::new(),
@@ -553,7 +558,7 @@ fn handle(s: &mut State, id: i32, data: &[u8]) -> Result<()> {
         }
         cb::PLAYER_COMBAT_KILL => { let e = r.varint()?; let m = proto::text_of(&r.nbt()?); if e == s.eid { s.dead = true; s.death_msg = Some(m); } }
         cb::SET_HEALTH => { s.health = r.f32()?; s.food = r.varint()?; s.saturation = r.f32()?; let h = s.health; s.health_log.push((Instant::now(), h)); }
-        cb::GAME_EVENT => { let e = r.u8()?; let v = r.f32()?; if e == 3 { s.gamemode = v as u8; } }
+        cb::GAME_EVENT => { let e = r.u8()?; let v = r.f32()?; match e { 3 => s.gamemode = v as u8, 1 | 2 | 7 | 8 => { s.weather_events.push((e, v)); if e == 7 { s.rain = v; } if e == 8 { s.thunder = v; } } _ => {} } }
         cb::PLAYER_ABILITIES => { let f = r.u8()?; s.body.flying = f & 2 != 0; s.may_fly = f & 4 != 0; }
         cb::SET_HELD_SLOT => { s.held = r.varint()?.clamp(0, 8) as u8; }
         cb::CONTAINER_SET_CONTENT => {

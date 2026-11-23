@@ -104,6 +104,10 @@ impl Player {
     fn sees_chunk(&self, c: (i32, i32)) -> bool { self.loaded.contains(&c) }
 }
 
+/// Rain / thunder: vanilla-style timers (clear / rain / thunder, in ticks) and 0..1 levels that move 0.01 per tick.
+#[derive(Default)]
+pub struct Weather { raining: bool, thundering: bool, clear_time: i32, rain_time: i32, thunder_time: i32, pub rain: f32, pub thunder: f32, sent_raining: bool }
+
 pub struct Game {
     sh: Arc<Shared>,
     world: World,
@@ -117,6 +121,7 @@ pub struct Game {
     data: Arc<basalt_game::GameData>,
     /// `commands` packet body, built from reports/commands.json (None → the small built-in tree)
     commands_body: Option<Vec<u8>>,
+    weather: Weather,
     items: HashMap<i32, items::ItemEntity>,
     mobs: HashMap<i32, mob::Mob>,
     arrows: HashMap<i32, arrow::Arrow>,
@@ -148,6 +153,13 @@ fn with_prop(state: u32, key: &str, val: &str) -> u32 {
 
 const FACE: [[i32; 3]; 6] = [[0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1], [-1, 0, 0], [1, 0, 0]];
 
+/// Vanilla's `time` argument: a number with an optional unit — `t` ticks (default), `s` seconds, `d` days (24000).
+fn parse_time_arg(s: &str) -> Option<i32> {
+    let (num, mul) = match s.chars().last()? { 't' => (&s[..s.len() - 1], 1.0), 's' => (&s[..s.len() - 1], 20.0), 'd' => (&s[..s.len() - 1], 24000.0), _ => (s, 1.0) };
+    let v: f32 = num.parse().ok()?;
+    (v >= 0.0).then(|| (v * mul).round() as i32)
+}
+
 fn horizontal_facing(yaw: f32) -> &'static str {
     match (((yaw.rem_euclid(360.0) + 45.0) / 90.0) as i32) & 3 { 0 => "south", 1 => "west", 2 => "north", _ => "east" }
 }
@@ -164,7 +176,7 @@ impl Game {
         let world = World::new(dir.as_ref().map(|d| d.join("region")));
         let player_type = registry_id(reg::ENTITY_TYPE, "player").unwrap_or(0);
         let data = sh.data.clone();
-        let mut g = Game { sh, world, gen: GenPool::new(gen), players: HashMap::new(), tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir, data, commands_body: None, items: HashMap::new(), mobs: HashMap::new(), arrows: HashMap::new(), path_budget: 0, no_spawning: false, rng: rand::rngs::StdRng::from_entropy() };
+        let mut g = Game { sh, world, gen: GenPool::new(gen), players: HashMap::new(), tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir, data, commands_body: None, weather: Weather::default(), items: HashMap::new(), mobs: HashMap::new(), arrows: HashMap::new(), path_budget: 0, no_spawning: false, rng: rand::rngs::StdRng::from_entropy() };
         g.no_spawning = g.sh.cfg.no_spawning;
         g.commands_body = crate::commands::build_packet(&g.sh.cfg.data_dir, crate::commands::IMPLEMENTED);
         if g.commands_body.is_none() { log::warn!("no reports/commands.json: using the built-in command tree"); }
@@ -336,6 +348,43 @@ impl Game {
     }
     fn hashed_seed(&self) -> i64 { self.sh.cfg.seed.wrapping_mul(0x9E3779B97F4A7C15u64 as i64) }
 
+    /// Natural weather cycle + level interpolation; broadcasts begin/end rain and level changes.
+    fn tick_weather(&mut self) {
+        let w = &mut self.weather;
+        let rng = &mut self.rng;
+        if w.clear_time > 0 {
+            w.clear_time -= 1;
+            w.thunder_time = if w.thundering { 0 } else { 1 }; w.rain_time = if w.raining { 0 } else { 1 };
+            w.thundering = false; w.raining = false;
+        } else {
+            if w.thunder_time > 0 { w.thunder_time -= 1; if w.thunder_time == 0 { w.thundering = !w.thundering; } }
+            else if w.thundering { w.thunder_time = rand::Rng::gen_range(rng, 3600..15600); } else { w.thunder_time = rand::Rng::gen_range(rng, 12000..180000); }
+            if w.rain_time > 0 { w.rain_time -= 1; if w.rain_time == 0 { w.raining = !w.raining; } }
+            else if w.raining { w.rain_time = rand::Rng::gen_range(rng, 12000..24000); } else { w.rain_time = rand::Rng::gen_range(rng, 12000..180000); }
+        }
+        let (old_rain, old_thunder) = (w.rain, w.thunder);
+        w.thunder = (w.thunder + if w.thundering { 0.01 } else { -0.01 }).clamp(0.0, 1.0);
+        w.rain = (w.rain + if w.raining { 0.01 } else { -0.01 }).clamp(0.0, 1.0);
+        let (rain, thunder, raining, sent) = (w.rain, w.thunder, w.raining, w.sent_raining);
+        let ev = |id: u8, v: f32| { let mut p = Writer::with_id(cb::GAME_EVENT); p.u8(id).f32(v); p };
+        if raining != sent { self.weather.sent_raining = raining; self.broadcast(None, || ev(if raining { 1 } else { 2 }, 0.0)); }
+        if rain != old_rain { self.broadcast(None, || ev(7, rain)); }
+        if thunder != old_thunder { self.broadcast(None, || ev(8, thunder)); }
+    }
+
+    /// `/weather clear|rain|thunder [time]` (vanilla's default durations when omitted; plain numbers are ticks).
+    fn set_weather(&mut self, kind: &str, duration_ticks: Option<i32>) {
+        let r = &mut self.rng;
+        let (rain_d, thunder_d, clear_d) = (rand::Rng::gen_range(r, 12000..24000), rand::Rng::gen_range(r, 3600..15600), rand::Rng::gen_range(r, 12000..180000));
+        let w = &mut self.weather;
+        let ticks = duration_ticks;
+        match kind {
+            "clear" => { w.clear_time = ticks.unwrap_or(clear_d); w.rain_time = 0; w.thunder_time = 0; w.raining = false; w.thundering = false; }
+            "rain" => { w.clear_time = 0; w.rain_time = ticks.unwrap_or(rain_d); w.thunder_time = ticks.unwrap_or(rain_d); w.raining = true; w.thundering = false; }
+            _ => { w.clear_time = 0; w.rain_time = ticks.unwrap_or(thunder_d); w.thunder_time = ticks.unwrap_or(thunder_d); w.raining = true; w.thundering = true; }
+        }
+    }
+
     fn set_time_packet(&self) -> Writer {
         let mut w = Writer::with_id(cb::SET_TIME); w.i64(self.tick as i64).varint(2);
         for clock in 0..2 { w.varint(clock).varlong(self.day_time).f32(0.0).f32(1.0); }
@@ -383,6 +432,9 @@ impl Game {
         let mut w = Writer::with_id(cb::SET_DEFAULT_SPAWN_POSITION);
         w.str("minecraft:overworld").position(self.spawn[0].floor() as i32, self.spawn[1] as i32, self.spawn[2].floor() as i32).f32(0.0).f32(0.0); p.send(w);
         let mut w = Writer::with_id(cb::GAME_EVENT); w.u8(13).f32(0.0); p.send(w);
+        if self.weather.rain > 0.0 {
+            for (id, v) in [(1u8, 0.0f32), (7, self.weather.rain), (8, self.weather.thunder)] { let mut w = Writer::with_id(cb::GAME_EVENT); w.u8(id).f32(v); p.send(w); }
+        }
         let mut w = Writer::with_id(cb::TICKING_STATE); w.f32(20.0).bool(false); p.send(w);
         let mut w = Writer::with_id(cb::TICKING_STEP); w.varint(0); p.send(w);
         Self::send_window(&mut p);
@@ -813,12 +865,18 @@ impl Game {
                 reply(self, format!("Killed {} entities", ids.len() + arrows.len()));
             }
             "kill" => { let h = self.players[&eid].health; let gm = self.players[&eid].gamemode; if gm == 1 || gm == 3 { reply(self, "Can't kill a creative/spectator player".into()); } else { self.hurt_bypass(eid, h.max(1.0) + 1000.0, "generic_kill"); } }
+            "weather" => {
+                match args.get(1).copied() {
+                    Some(k @ ("clear" | "rain" | "thunder")) => { self.set_weather(k, args.get(2).and_then(|d| parse_time_arg(d))); reply(self, format!("Set the weather to {k}")); }
+                    _ => reply(self, "Usage: /weather <clear|rain|thunder> [duration, e.g. 600s]".into()),
+                }
+            }
             "say" => { let m = args[1..].join(" "); self.system_chat(text::plain(&format!("[{name}] {m}"))); }
             "list" => { let names: Vec<_> = self.players.values().map(|p| p.name.clone()).collect(); reply(self, format!("{} online: {}", names.len(), names.join(", "))); }
             "spawn" => { let s = self.spawn; let p = self.players.get_mut(&eid).unwrap(); p.pos = s; Self::teleport(p); self.stream_chunks(eid); }
             "save" | "save-all" => { self.save_level(); reply(self, "Saved the world".into()); }
             c if c.starts_with("basalt:") && self.sh.cfg.debug => self.debug_command(eid, &args),
-            "help" | "" => reply(self, "Commands: /gamemode /tp /give /time /say /list /spawn /save /effect /enchant /setblock /fill /kill [@e[type=..]] /summon /mobs".into()),
+            "help" | "" => reply(self, "Commands: /gamemode /tp /give /time /say /list /spawn /save /effect /enchant /setblock /fill /kill [@e[type=..]] /summon /mobs /weather".into()),
             other => reply(self, format!("Unknown command: {other}")),
         }
     }
@@ -837,6 +895,7 @@ impl Game {
         if self.tick % 10 == 5 { self.sync_viewers(); }
         self.tick_survival();
         self.tick_environment();
+        self.tick_weather();
         let ids: Vec<i32> = self.players.keys().copied().collect();
         for &eid in &ids { self.stream_chunks(eid); }
         // movement broadcast

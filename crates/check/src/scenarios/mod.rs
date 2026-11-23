@@ -7,6 +7,7 @@ pub mod m1;
 pub mod m3;
 pub mod m4;
 pub mod m5;
+pub mod m6;
 pub mod util;
 
 macro_rules! spec {
@@ -16,6 +17,7 @@ macro_rules! spec {
 }
 
 pub static ALL: &[Spec] = &[
+    spec!("M6", "m6_weather", m6::weather, Flat, Both, true, "/weather rain|thunder|clear: begin/end events and 0.01/tick level changes"),
     spec!("M1", "m1_join_spawn", m1::join_spawn, Flat, Both, false, "login/configuration/play, spawn position, health"),
     spec!("M1", "m1_status_ping", m1::status_ping, Flat, Both, false, "server list ping: version 26.2/776 + pong"),
     spec!("M1", "m1_chunk_streaming", m1::chunk_streaming, Flat, Both, true, "chunks around the player arrive; more stream in after moving"),
