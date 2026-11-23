@@ -4,7 +4,11 @@ use crate::assets::Assets;
 use crate::mesh::{MeshData, Vertex};
 use std::collections::HashMap;
 
-pub struct UiAtlas { pub w: u32, pub h: u32, pub rgba: Vec<u8>, pub rects: HashMap<String, [u32; 4]>, pub glyph_w: [u8; 256] }
+pub struct UiAtlas { pub w: u32, pub h: u32, pub rgba: Vec<u8>, pub rects: HashMap<String, [u32; 4]>, pub glyph_w: [u8; 256], glyphs: HashMap<char, Glyph> }
+
+/// A bitmap glyph in the atlas: uv rect, drawn size and vertical offset (GUI px at scale 1), advance.
+#[derive(Clone, Copy)]
+struct Glyph { uv: [f32; 4], w: f32, h: f32, yoff: f32, adv: f32 }
 
 /// GUI texture folders / files packed into the UI atlas.
 fn wanted(name: &str, img: &crate::assets::Image) -> bool {
@@ -52,7 +56,46 @@ impl UiAtlas {
             // short aliases for HUD sprites ("hotbar", "heart/full", ...)
             if let Some(s) = n.strip_prefix("sprites/hud/") { let r = rects[n.as_str()]; rects.insert(s.to_string(), r); }
         }
-        UiAtlas { w, h, rgba, rects, glyph_w }
+        // font pages (vanilla's providers in order; the first page with a character wins)
+        let mut glyphs: HashMap<char, Glyph> = HashMap::new();
+        for (pi, page) in a.font_pages.iter().enumerate() {
+            let img = &page.img;
+            // continue the shelf after the GUI textures
+            if x + img.w + 2 > w { x = 0; y += row + 2; row = 0; }
+            if y + img.h > h { log::warn!("ui atlas full at font page {pi}"); break; }
+            let (fx, py0, rows) = (x, y, page.chars.len() as u32);
+            blit(&mut rects, &format!("fontpage{pi}"), img, fx, py0, &mut rgba);
+            x += img.w + 2; row = row.max(img.h);
+            let cols = page.chars.iter().map(|r| r.len()).max().unwrap_or(16) as u32;
+            let (cw, ch) = (img.w / cols.max(1), img.h / rows.max(1));
+            let k = page.height as f32 / ch as f32;
+            for (ry, row) in page.chars.iter().enumerate() {
+                for (rx, c) in row.iter().enumerate() {
+                    if *c == '\0' || *c == ' ' || glyphs.contains_key(c) { continue; }
+                    let (cx, cy) = (rx as u32 * cw, ry as u32 * ch);
+                    let mut maxx = 0;
+                    for yy in 0..ch { for xx in 0..cw { if img.rgba[(((cy + yy) * img.w + cx + xx) * 4 + 3) as usize] > 0 { maxx = maxx.max(xx + 1); } } }
+                    if maxx == 0 { continue; }
+                    let (ax, ay) = (fx + cx, py0 + cy);
+                    glyphs.insert(*c, Glyph {
+                        uv: [ax as f32 / w as f32, ay as f32 / h as f32, (ax + cw) as f32 / w as f32, (ay + ch) as f32 / h as f32],
+                        w: cw as f32 * k, h: ch as f32 * k, yoff: (7 - page.ascent) as f32, adv: (maxx as f32 * k + 0.5).floor() + 1.0,
+                    });
+                }
+            }
+        }
+        UiAtlas { w, h, rgba, rects, glyph_w, glyphs }
+    }
+
+    /// True when a bitmap font page has this character.
+    pub fn has_glyph(&self, c: char) -> bool { self.glyphs.contains_key(&c) }
+
+    /// Advance of one character (GUI px at scale 1): bitmap glyphs, space = 4, unknown = '?'.
+    fn advance(&self, c: char) -> f32 {
+        if c == ' ' { return 4.0; }
+        if let Some(g) = self.glyphs.get(&c) { return g.adv; }
+        if self.glyphs.is_empty() { return self.glyph_w[(c as u32).min(255) as usize] as f32; }
+        self.glyphs.get(&'?').map(|g| g.adv).unwrap_or(6.0)
     }
 
     pub fn quad(&self, m: &mut MeshData, x: f32, y: f32, w: f32, h: f32, uv: [f32; 4], color: [u8; 4]) {
@@ -104,23 +147,28 @@ impl UiAtlas {
         }
         m.idx.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3]);
     }
-    pub fn text_width(&self, s: &str, scale: f32) -> f32 { s.chars().map(|c| self.glyph_w[(c as u32).min(255) as usize] as f32 * scale).sum() }
+    pub fn text_width(&self, s: &str, scale: f32) -> f32 { s.chars().map(|c| self.advance(c) * scale).sum() }
     /// Text with drop shadow.
     pub fn text(&self, m: &mut MeshData, s: &str, x: f32, y: f32, scale: f32, color: [u8; 4]) { self.text_ex(m, s, x, y, scale, color, true) }
     pub fn text_ex(&self, m: &mut MeshData, s: &str, x: f32, y: f32, scale: f32, color: [u8; 4], shadow: bool) {
-        let Some(f) = self.rects.get("font") else { return };
-        let cell = f[2] as f32 / 16.0;
         let passes: &[(f32, [u8; 4])] = if shadow { &[(1.0, [color[0] / 4, color[1] / 4, color[2] / 4, color[3]]), (0.0, color)] } else { &[(0.0, color)] };
         for &(pass, col) in passes {
             let mut cx = x + pass * scale;
             for ch in s.chars() {
-                let c = if (ch as u32) < 256 { ch as u32 } else { '?' as u32 };
-                if c != 32 {
-                    let (gx, gy) = ((c % 16) as f32 * cell, (c / 16) as f32 * cell);
-                    let uv = [(f[0] as f32 + gx) / self.w as f32, (f[1] as f32 + gy) / self.h as f32, (f[0] as f32 + gx + cell) / self.w as f32, (f[1] as f32 + gy + cell) / self.h as f32];
-                    self.quad(m, cx, y + pass * scale, 8.0 * scale, 8.0 * scale, uv, col);
+                if ch != ' ' {
+                    let g = self.glyphs.get(&ch).or_else(|| self.glyphs.get(&'?'));
+                    if let Some(g) = g {
+                        self.quad(m, cx, y + (g.yoff + pass) * scale, g.w * scale, g.h * scale, g.uv, col);
+                    } else if let Some(f) = self.rects.get("font") {
+                        // no font pages (old jars): the ascii page by Latin-1 code
+                        let cell = f[2] as f32 / 16.0;
+                        let c = if (ch as u32) < 256 { ch as u32 } else { '?' as u32 };
+                        let (gx, gy) = ((c % 16) as f32 * cell, (c / 16) as f32 * cell);
+                        let uv = [(f[0] as f32 + gx) / self.w as f32, (f[1] as f32 + gy) / self.h as f32, (f[0] as f32 + gx + cell) / self.w as f32, (f[1] as f32 + gy + cell) / self.h as f32];
+                        self.quad(m, cx, y + pass * scale, 8.0 * scale, 8.0 * scale, uv, col);
+                    }
                 }
-                cx += self.glyph_w[c as usize] as f32 * scale;
+                cx += self.advance(ch) * scale;
             }
         }
     }

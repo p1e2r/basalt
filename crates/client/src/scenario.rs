@@ -937,6 +937,8 @@ fn break_particles(c: &Ctx) -> Result<Outcome> {
 fn options_pages(c: &Ctx) -> Result<Outcome> {
     let mut g = c.game_at("opts", None)?;
     wait(&mut g, 0.2)?;
+    // non-ASCII text uses the jar's accented / nonlatin font pages
+    for ch in ['ñ', 'é', 'Ж', 'λ'] { if !g.ui.has_glyph(ch) { bail!("no glyph for {ch:?} (font pages not loaded)"); } }
     let img = capture(&mut g)?; save(&g, &img, "title_full");
     press_widget(&mut g, "options")?;
     if !matches!(g.screen, Some(Screen::Options { .. })) { bail!("Options did not open from the title"); }

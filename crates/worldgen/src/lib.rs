@@ -397,6 +397,9 @@ impl Generator {
     }
 
     /// Feature types present in the data that are not implemented yet (type → count).
+    /// Global placed-feature order per decoration step (debugging aid).
+    pub fn feature_steps(&self) -> &Vec<Vec<String>> { &self.features.steps }
+
     pub fn unsupported_features(&self) -> &std::collections::BTreeMap<String, usize> { &self.features.unsupported }
 
     /// Cut the internal 24-section buffer down to the dimension's own sections.
