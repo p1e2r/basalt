@@ -277,7 +277,7 @@ impl Gen<'_> {
         }
     }
 
-    fn from_weights(&mut self, p: [i32; 3], o: u8, depth: i32) -> Option<ShPiece> {
+    fn pick_weighted(&mut self, p: [i32; 3], o: u8, depth: i32) -> Option<ShPiece> {
         if !self
             .weights
             .iter()
@@ -343,7 +343,7 @@ impl Gen<'_> {
         if depth > 50 || (p[0] - self.sx).abs() > 112 || (p[2] - self.sz).abs() > 112 {
             return;
         }
-        if let Some(pc) = self.from_weights(p, o, depth + 1) {
+        if let Some(pc) = self.pick_weighted(p, o, depth + 1) {
             self.pieces.push(pc);
             self.pending.push(self.pieces.len() - 1);
         }
