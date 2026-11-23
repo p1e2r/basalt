@@ -47,7 +47,10 @@ Read NOTES.md for verified packet formats.
   villages 98.95-99.75 % (was 90-97.5), outposts 99.7 % (was 90.5), ancient cities 96.6 % (was 13.5; rest is sculk),
   igloos 95.7-100 %, swamp huts 97.7-100 %, desert pyramids 98.4-99.9 % (3/9 vanilla boxes sit 1-2 lower: 72-82 %),
   jungle temples 86-98 % (mossy draw order fitted), mineshafts 88.5-90.1 % (piece generator fitted: 65/65 vanilla
-  mineshafts, 8274 pieces exact; per-block randoms statistical; mesa y not fitted), ruined portals 67-94 %, shipwrecks 74-90 %, cold ocean ruins ~89.5 %. Parity: `tools/structure-parity.sh` (harness
+  mineshafts, 8274 pieces exact; per-block randoms statistical; mesa y not fitted), ruined portals 67-94 %, shipwrecks 74-90 %, cold ocean ruins ~89.5 %,
+  strongholds (concentric rings 123/128 + 122/128 exact vs /locate, rest 1 chunk off; pieces fitted: 48/48 strongholds,
+  7750 pieces exact; measured layouts, bricks statistical: 61-63 %), ocean monuments (start 40/40, measured building
+  layout 92.5 % in-sample / 88.9 % elsewhere; rooms not fitted). Woodland mansions not generated. Parity: `tools/structure-parity.sh` (harness
   worldgen_structures; vanilla worlds via tools/structure-world.sh in vanilla/structures/), `examples/structures`.
 - crates/worldgen: **terrain + most decoration done** (M3b: exact 5x5 neighbour decoration,
   trees/huge mushrooms/vegetation, lakes, springs, geodes, monster rooms; seed 12345 r3: biomes
@@ -97,10 +100,13 @@ Read NOTES.md for verified packet formats.
 - [~] M3c structures (overworld) — placement + jigsaw + template structures done, see crates/worldgen status;
       done 2026-11-24: terrain adaptation (beard_thin/beard_box), igloos, swamp huts (south orientation unverified),
       desert pyramids + jungle temples (measured layouts, structure/temple.rs), mineshafts (structure/mineshaft.rs,
-      pieces exact incl. mesa; NOTES.md "Mineshafts"); multi-site vanilla worlds: tools/structure-sites.sh;
-      todo: encapsulate/bury adaptation, procedural pieces (stronghold/monument/mansion), desert sinking rule, mesa
-      mineshaft y, mineshaft per-block random order,
-      ancient-city sculk, ocean-ruin clusters, portal processors, chest loot + template entities, stronghold rings
+      pieces exact incl. mesa; NOTES.md "Mineshafts"; biome check at the moved room fixed the 4 extra seed-12345 starts);
+      strongholds (structure/stronghold.rs: rings, pieces exact, measured layouts; /locate stronghold in
+      m3_locate_structure), ocean monuments (structure/monument.rs: start exact, measured layout); multi-site vanilla
+      worlds: tools/structure-sites.sh;
+      todo: woodland mansions (start rule + pieces; NOTES.md "Woodland mansions"), monument rooms, stronghold brick draw
+      order, encapsulate/bury adaptation, desert sinking rule, mesa mineshaft y, mineshaft per-block random order,
+      ancient-city sculk, ocean-ruin clusters, portal processors, chest loot + template entities
 - [x] M4 survival gameplay — done, check-all M4 22/22 + Env 26/26 + Items 2/2 (2026-11-23) (crates/game rules; server game/{items,inv,health}.rs):
       hardness/tool dig times (server validates), loot-table drops as item entities + pickup/merge/
       despawn, Q-drop, all container_click modes, 2x2 + crafting table crafting, armor slots,

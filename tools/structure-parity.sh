@@ -13,7 +13,8 @@
 #   jigsaw pieces 100 %, and block parity inside the piece boxes at least BLOCK_FLOOR per type (terrain
 #   adaptation, 2026-11-24: villages / outposts 98.5, ancient cities 95, trial chambers 99, igloos and
 #   swamp huts 97, desert pyramids 75 (98.4-99.9 unless vanilla sinks the box), jungle temples 85,
-#   mineshafts 86 (pieces exact, per-block randoms statistical), mesa mineshafts 10 (y not fitted); a miss is
+#   mineshafts 86 (pieces exact, per-block randoms statistical), mesa mineshafts 10 (y not fitted), strongholds 58
+#   (pieces exact, bricks statistical), monuments 70 (measured building, rooms not fitted); a miss is
 #   the mismatch class `blocks-<type>`). Known gaps: crates/check/known-divergences.txt lines `structures <type>`.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -32,7 +33,8 @@ mkdir -p "$OUT"
 # a swamp hut (42), 4x4 chunks. Sites with a fifth field share one vanilla world with several small
 # force-loaded squares (tools/structure-sites.sh SEED NAME R CX,CZ..., cached in
 # vanilla/structures/<seed>_<name>): desert pyramids (incl. orientations 0/2 and one of the 3/9 boxes
-# vanilla sinks 1-2 blocks) and jungle temples (incl. orientation 1); one mesa mineshaft (12345).
+# vanilla sinks 1-2 blocks) and jungle temples (incl. orientation 1); one mesa mineshaft (12345); three whole
+# strongholds (shblocks, 16x16 chunks each) and four monuments (monblocks, 6x6 chunks each).
 TEMPLES_12345="-223,-312 -237,-312 -319,-303 -94,3 -105,12 -113,-20 -110,-55 -113,72 -146,66"
 TEMPLES_42="-85,-109 197,149 -126,-232 -115,246 -140,-234 244,148 -84,181 9,-209 82,228"
 TEMPLES_1="5,112 -150,19 -153,49"
