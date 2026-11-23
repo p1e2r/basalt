@@ -88,7 +88,8 @@ jvm = expand(vj["arguments"]["jvm"])
 jvm += ["-XX:+UnlockDiagnosticVMOptions", "-XX:-UseBASE64Intrinsics", "-DFabricMcEmu= net.minecraft.client.main.Main ",
         f"-Dfabric.addMods={mod}", f"-Dbasalt.oracle.dir={oracle}",
         f"-Dbasalt.oracle.ctl.port={os.environ.get('ORACLE_CTL_PORT', '25789')}"]
-game = expand(vj["arguments"]["game"]) + ["--width", "640", "--height", "360"]
+win = os.environ.get("ORACLE_WIN", "640x360").split("x")  # window size in points (the visual parity harness sets it)
+game = expand(vj["arguments"]["game"]) + ["--width", win[0], "--height", win[1]]
 java = os.environ.get("JAVA", "java")
 cmd = [java, "-Xmx3G"] + jvm + ["net.fabricmc.loader.impl.launch.knot.KnotClient"] + game
 print("launching oracle client", ver, "game dir", game_dir, file=sys.stderr)

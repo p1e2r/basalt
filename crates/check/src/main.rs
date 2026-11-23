@@ -35,6 +35,18 @@ fn main() {
         let a: Vec<String> = std::env::args().skip(2).collect();
         std::process::exit(basalt_check::client::input_diff::dig_main(&a));
     }
+    // client harness group: visual parity vs the real client, asset coverage, UI scenarios, benchmarks
+    for (sub, f) in [
+        ("client-visual", basalt_check::client::visual::main as fn(&[String]) -> i32),
+        ("client-assets", basalt_check::client::coverage::assets_main),
+        ("client-ui", basalt_check::client::coverage::ui_main),
+        ("client-perf", basalt_check::client::perf::main),
+    ] {
+        if std::env::args().nth(1).as_deref() == Some(sub) {
+            let a: Vec<String> = std::env::args().skip(2).collect();
+            std::process::exit(f(&a));
+        }
+    }
     if std::env::args().nth(1).as_deref() == Some("client-clicks") {
         let a: Vec<String> = std::env::args().skip(2).collect();
         std::process::exit(basalt_check::client::click_oracle::main(&a));

@@ -88,6 +88,15 @@ pub fn all() -> Vec<Entry> {
     }
     // entity-model + first-person animation parity vs the real client's own bone/hand dumps (client/anim_diff.rs)
     v.push(Entry { id: "client_anim".into(), kind: HKind::Script, group: "client".into(), paths: crate::client::ANIM_AFFECTED.iter().map(|s| s.to_string()).collect(), desc: "model part poses (player/mob bone dumps) and first-person hand transforms of basalt-client vs the vanilla client oracle".into() });
+    // client group (visual parity vs the real client, asset coverage, UI scenarios, benchmarks)
+    let mut vis: Vec<String> = crate::client::RENDER_AFFECTED.iter().map(|s| s.to_string()).collect();
+    vis.extend(["crates/check/src/client/{visual,imgcmp,oracle,mod}.rs", "crates/server/**", "crates/worldgen/**", "tools/oracle-mod/**", "tools/mc-window-*.swift", "xtask/src/window.rs", "tools/baselines/client-visual.json", "crates/check/Cargo.toml"].map(String::from));
+    v.push(Entry { id: "client_visual".into(), kind: HKind::Script, group: "client".into(), paths: vis, desc: "visual parity: real vanilla client window vs basalt-client frame (per-tile SSIM + histogram) for 8 scenes".into() });
+    v.push(Entry { id: "client_assets".into(), kind: HKind::Script, group: "client".into(), paths: crate::client::coverage::affected().into_iter().map(String::from).collect(), desc: "asset coverage: every block state and item renders (basalt-client --asset-grid)".into() });
+    v.push(Entry { id: "client_perf".into(), kind: HKind::Script, group: "client".into(), paths: crate::client::perf::affected().into_iter().map(String::from).collect(), desc: "benchmarks at render distance 8/16/32 vs tools/baselines/client-perf.json (fail on >20% regression)".into() });
+    for name in crate::client::coverage::UI_SCENARIOS {
+        v.push(Entry { id: format!("client_ui_{name}"), kind: HKind::Script, group: "client".into(), paths: crate::client::coverage::affected().into_iter().map(String::from).collect(), desc: format!("basalt-client --scenario {name} against a fresh Basalt server") });
+    }
     for (id, group, paths, desc) in EXTRA { v.push(Entry { id: (*id).into(), kind: HKind::Script, group: (*group).into(), paths: paths.iter().map(|s| s.to_string()).collect(), desc: (*desc).into() }); }
     v
 }

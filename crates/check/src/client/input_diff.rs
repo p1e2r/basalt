@@ -13,7 +13,7 @@
 //! usage: basalt-check client-input [--oracle-dir vanilla/oracle] [--ctl-port 25789] [--no-launch]
 //!          [--client target/release/basalt-client] [--jar vanilla/client.jar] [--out target/check]
 //!          [--keep-going] [--show-log]
-use super::oracle::{Ctl, Oracle, DEFAULT_CTL_PORT};
+use super::oracle::{Ctl, Oracle};
 use crate::server::BasaltServer;
 use anyhow::{bail, Context, Result};
 use basalt_protocol::{ids, Reader};
@@ -36,7 +36,7 @@ impl Default for Opts {
     fn default() -> Opts {
         Opts {
             oracle_dir: "vanilla/oracle".into(),
-            ctl_port: DEFAULT_CTL_PORT,
+            ctl_port: super::oracle::ctl_port(),
             launch: true,
             client: format!(
                 "target/release/basalt-client{}",

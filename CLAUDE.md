@@ -138,6 +138,17 @@ Read NOTES.md for verified packet formats.
   `--cases N --seed S`, `--long`, `--replay FILE`; cases are recorded in target/check/cases/) diff Basalt
   against vanilla per case. Known gaps live in crates/check/known-divergences.txt (`<harness> <class>`);
   only NEW mismatch classes fail. Fix a divergence, then delete its line. `tools/check-all.sh --fuzz` runs them.
+- **Client harness group (built 2026-11-23, `basalt-check --group client`, run by `tools/check-all.sh --client`
+  and `cargo xtask pr-ready --client`; rows SKIP, never fail, without GPU / real client / display / CI):**
+  `client_visual` (8 scenes: flat noon/sunset/night, underwater, cave room, seed-12345 terrain, inventory, title;
+  real vanilla window captured with `cargo xtask window-screenshot` (MC_WINDOW_PID picks our client) vs
+  basalt-client `--script` ops `config`/`gui`/`screenshot` at the same size; per-tile SSIM + histogram; limits in
+  tools/baselines/client-visual.json; images in target/check/client-visual/<scene>/), `client_assets`
+  (`--asset-grid` blocks+items), `client_ui_<scenario>` (one row per `basalt-client --scenario`), `client_input`,
+  `client_dig`, `client_clicks`, `client_mesh` (oracle), `client_perf` (rd 8/16/32, tools/baselines/client-perf.json,
+  fail on >20 % regression). `--update-baseline` re-records visual limits / perf numbers (they describe current
+  parity, not perfection: tighten them as the client improves). Several oracle clients may run side by side:
+  `ORACLE_CTL_PORT` (the driver picks a free one if 25789 is taken), visual uses vanilla/oracle-visual and `ORACLE_WIN`.
 - Client work (M7, M14) is done only when `tools/check-all.sh --client` passes: visual parity vs the
   vanilla client (same seed/pos/rotation/time, per-region SSIM/histogram, diff images on failure),
   asset coverage (every block state + item renders, no missing model/texture), input parity

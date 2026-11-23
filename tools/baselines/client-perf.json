@@ -1,0 +1,24 @@
+{
+  "_note": "numbers recorded by `basalt-check client-perf --update-baseline` on one machine; fail at >20% regression",
+  "rd16": {
+    "fps_avg": 351.5,
+    "frame_p99_ms": 7.83,
+    "gpu_mb": 82.5,
+    "mesh_ms_avg": 0.126,
+    "rss_mb": 118.0
+  },
+  "rd32": {
+    "fps_avg": 278.2,
+    "frame_p99_ms": 8.92,
+    "gpu_mb": 300.6,
+    "mesh_ms_avg": 0.115,
+    "rss_mb": 521.0
+  },
+  "rd8": {
+    "fps_avg": 471.1,
+    "frame_p99_ms": 6.64,
+    "gpu_mb": 24.5,
+    "mesh_ms_avg": 0.108,
+    "rss_mb": 216.0
+  }
+}

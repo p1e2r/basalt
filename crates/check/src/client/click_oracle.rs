@@ -21,7 +21,7 @@
 //! usage: basalt-check client-clicks [--seed S] [--n N] [--oracle-dir vanilla/oracle] [--ctl-port 25789]
 //!          [--no-launch] [--out target/check] [--show K]
 use super::input_diff::{read_log, use_port_range, Pkt};
-use super::oracle::{Ctl, Oracle, DEFAULT_CTL_PORT};
+use super::oracle::{Ctl, Oracle};
 use crate::fuzz::{clicks, Rng};
 use anyhow::{bail, Context, Result};
 use basalt_protocol::Reader;
@@ -45,7 +45,7 @@ pub fn parse_args(args: &[String]) -> Result<Opts> {
         seed: 1,
         n: 30,
         oracle_dir: "vanilla/oracle".into(),
-        ctl_port: DEFAULT_CTL_PORT,
+        ctl_port: super::oracle::ctl_port(),
         launch: true,
         out: "target/check".into(),
         show: 4,

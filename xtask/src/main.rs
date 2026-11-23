@@ -15,7 +15,7 @@ tasks:
   smoke [OUTDIR]               basalt-server + two basalt-clients end to end (env PORT, default 25580)
   client-scenarios [NAMES|all] basalt-client --scenario against a fresh in-memory server (env PORT=25790, VANILLA, OUT)
   pr-ready [--client] [--all] [--no-vanilla] [--update-baselines] [--base REF]
-  check-all [--quick] [--no-vanilla] [--real-client] [--ci] [--fuzz] [--fuzz-long]
+  check-all [--quick] [--no-vanilla] [--real-client] [--client [--update-baseline]] [--ci] [--fuzz] [--fuzz-long]
   window-screenshot [OUT.png]  capture only the Minecraft window (macOS/Windows/Linux)
   window-bounds                print the Minecraft window bounds: x y w h";
 

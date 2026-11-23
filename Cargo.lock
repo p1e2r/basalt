@@ -198,6 +198,7 @@ dependencies = [
  "env_logger",
  "log",
  "md-5",
+ "png",
  "serde_json",
  "tokio",
  "uuid",
