@@ -7,7 +7,7 @@ pub mod light;
 pub mod paletted;
 pub mod props;
 
-pub use chunk::{Chunk, HeightmapKind, Heightmaps, LightArray, Section};
+pub use chunk::{Chunk, HeightmapKind, Heightmaps, Layout, LightArray, Section};
 pub use paletted::{Kind, PalettedContainer};
 
 use anyhow::Result;
@@ -33,13 +33,20 @@ pub struct World {
     pub chunks: HashMap<(i32, i32), Chunk>,
     /// Directory holding `r.X.Z.mca` files (e.g. `world/region`); `None` = in-memory only.
     pub dir: Option<PathBuf>,
+    /// Dimension layout every chunk of this world gets.
+    pub layout: Layout,
     regions: HashMap<(i32, i32), anvil::RegionFile>,
 }
 
 impl World {
     /// `dir` is the region directory itself (the one containing `r.X.Z.mca`).
     pub fn new(dir: Option<PathBuf>) -> World {
-        World { chunks: HashMap::new(), dir, regions: HashMap::new() }
+        Self::new_in(dir, Layout::OVERWORLD)
+    }
+
+    /// A world of a dimension with the given layout (e.g. [`Layout::NETHER`]).
+    pub fn new_in(dir: Option<PathBuf>, layout: Layout) -> World {
+        World { chunks: HashMap::new(), dir, layout, regions: HashMap::new() }
     }
 
     pub fn chunk(&self, cx: i32, cz: i32) -> Option<&Chunk> { self.chunks.get(&(cx, cz)) }
@@ -49,7 +56,7 @@ impl World {
     pub fn loaded_chunks(&self) -> Vec<(i32, i32)> { self.chunks.keys().copied().collect() }
 
     /// Insert (or replace) a chunk. Does not compute light; call `light_chunk` afterwards.
-    pub fn insert(&mut self, c: Chunk) { self.chunks.insert((c.x, c.z), c); }
+    pub fn insert(&mut self, mut c: Chunk) { if c.layout != self.layout { c.set_layout(self.layout); } self.chunks.insert((c.x, c.z), c); }
 
     fn region(&mut self, cx: i32, cz: i32, create: bool) -> Result<Option<&mut anvil::RegionFile>> {
         let Some(dir) = &self.dir else { return Ok(None) };
@@ -71,7 +78,7 @@ impl World {
         if self.chunks.contains_key(&(cx, cz)) { return Ok(true); }
         let Some(r) = self.region(cx, cz, false)? else { return Ok(false) };
         let Some(bytes) = r.read((cx & 31) as usize, (cz & 31) as usize)? else { return Ok(false) };
-        let (c, status) = anvil::chunk_from_bytes(&bytes)?;
+        let (c, status) = anvil::chunk_from_bytes_in(&bytes, self.layout)?;
         if status.trim_start_matches("minecraft:") != "full" { return Ok(false); }
         if (c.x, c.z) != (cx, cz) { anyhow::bail!("chunk at {cx},{cz} claims to be {},{}", c.x, c.z); }
         self.chunks.insert((cx, cz), c);
@@ -112,7 +119,7 @@ impl World {
     /// Set a block and update lighting incrementally (sky + block light, across chunk
     /// borders). Returns the chunk coords whose light changed. No-op if unloaded.
     pub fn set_block(&mut self, x: i32, y: i32, z: i32, state: u32) -> Vec<(i32, i32)> {
-        if !Chunk::in_range(y) { return Vec::new(); }
+        if !self.layout.contains_y(y) { return Vec::new(); }
         let (cx, cz) = (x >> 4, z >> 4);
         let Some(c) = self.chunks.get_mut(&(cx, cz)) else { return Vec::new() };
         let old = c.set_block((x & 15) as usize, y, (z & 15) as usize, state);

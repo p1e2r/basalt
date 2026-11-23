@@ -6,6 +6,7 @@ mod cmd;
 mod combat;
 mod container;
 mod debug;
+pub(crate) mod dim;
 mod env;
 mod explosion;
 mod falling;
@@ -15,6 +16,7 @@ mod items;
 mod mob;
 mod path;
 mod place;
+mod portal;
 mod randomtick;
 mod spawn;
 mod track;
@@ -113,6 +115,10 @@ struct Player {
     /// Non-item entities (mobs, arrows) this player's client knows about.
     seen: HashSet<i32>,
     last_attack_tick: u64,
+    /// nether portal: ticks inside, cooldown after a dimension change, last portal block touched
+    portal_ticks: i32,
+    portal_cooldown: i32,
+    portal_entry: Option<[i32; 3]>,
 }
 
 impl Player {
@@ -155,6 +161,16 @@ pub struct Game {
     path_budget: u32,
     no_spawning: bool,
     rng: rand::rngs::StdRng,
+    /// Index (dim::DIMS) of the dimension whose state is in the fields above.
+    cur: usize,
+    /// The other dimensions (`parked[cur]` is None).
+    parked: Vec<Option<dim::DimState>>,
+    /// Dimension set by `execute in <dim> run ...` while the inner command runs.
+    cmd_dim: Option<usize>,
+    /// nether portal blocks of the current dimension (vanilla keeps them as POIs)
+    portals: HashSet<[i32; 3]>,
+    /// set while portal blocks are placed / removed in bulk (no frame re-checks)
+    portal_quiet: bool,
 }
 
 fn angle(deg: f32) -> u8 { ((deg / 360.0 * 256.0).round() as i32 & 0xFF) as u8 }
@@ -187,17 +203,19 @@ fn horizontal_facing(yaw: f32) -> &'static str {
 
 
 impl Game {
-    pub fn new(sh: Arc<Shared>, gen: Arc<dyn Generator>) -> Game {
+    /// `gens`: one generator per dimension (index as in `dim::DIMS`).
+    pub fn new(sh: Arc<Shared>, gens: Vec<Arc<dyn Generator>>) -> Game {
         let dir = sh.cfg.world_dir.clone();
-        let world = World::new(dir.as_ref().map(|d| d.join("region")));
+        let mut states: Vec<Option<dim::DimState>> = gens.into_iter().enumerate().map(|(d, g)| Some(dim::DimState::new(d, dir.as_deref(), g))).collect();
+        let s = states[dim::OVERWORLD].take().expect("overworld generator");
         let player_type = registry_id(reg::ENTITY_TYPE, "player").unwrap_or(0);
         let data = sh.data.clone();
-        let mut g = Game { sh, world, gen: GenPool::new(gen), players: HashMap::new(), tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir, data, commands_body: None, weather: Weather::default(), items: HashMap::new(), mobs: HashMap::new(), arrows: HashMap::new(), fallers: HashMap::new(), gravity_checks: Vec::new(), random_tick_speed: 3, difficulty: 1, orbs: HashMap::new(), bes: HashMap::new(), path_budget: 0, no_spawning: false, rng: rand::rngs::StdRng::from_entropy() };
+        let mut g = Game { sh, world: s.world, gen: s.gen, players: s.players, tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir, data, commands_body: None, weather: Weather::default(), items: s.items, mobs: s.mobs, arrows: s.arrows, fallers: s.fallers, gravity_checks: s.gravity_checks, random_tick_speed: 3, difficulty: 1, orbs: s.orbs, bes: s.bes, path_budget: 0, no_spawning: false, rng: rand::rngs::StdRng::from_entropy(), cur: dim::OVERWORLD, parked: states, cmd_dim: None, portals: s.portals, portal_quiet: false };
         g.no_spawning = g.sh.cfg.no_spawning;
         g.commands_body = crate::commands::build_packet(&g.sh.cfg.data_dir, crate::commands::IMPLEMENTED);
         if g.commands_body.is_none() { log::warn!("no reports/commands.json: using the built-in command tree"); }
         g.load_level();
-        g.load_mobs();
+        for d in (0..g.parked.len()).rev() { g.enter(d); g.load_mobs(); g.load_portals(); }
         g.spawn = g.find_spawn();
         log::info!("spawn at {:.1} {:.1} {:.1}", g.spawn[0], g.spawn[1], g.spawn[2]);
         g
@@ -210,21 +228,34 @@ impl Game {
         }
     }
     fn save_level(&mut self) {
-        if let Err(e) = self.world.save_all() { log::error!("saving world: {e:#}"); }
+        let back = self.cur;
+        for d in 0..self.parked.len() {
+            self.enter(d);
+            if let Err(e) = self.world.save_all() { log::error!("saving {}: {e:#}", dim::DIMS[d].id); }
+            self.save_mobs();
+            self.save_portals();
+        }
+        self.enter(back);
         let Some(d) = &self.dir else { return };
         let _ = std::fs::create_dir_all(d.join("players"));
         let _ = std::fs::write(d.join("basalt.json"), serde_json::json!({ "day_time": self.day_time, "seed": self.sh.cfg.seed, "difficulty": self.difficulty }).to_string());
-        for p in self.players.values() { self.save_player(p); }
-        self.save_mobs();
+        for p in self.all_players() { self.save_player(p); }
     }
     fn save_player(&self, p: &Player) {
         let Some(d) = &self.dir else { return };
         let inv: Vec<_> = p.inv.iter().enumerate().filter(|(_, s)| s.count > 0).map(|(i, s)| serde_json::json!([i, s.item, s.count, s.damage, s.ench.iter().filter(|e| e.1 > 0).map(|e| [e.0 as u32, e.1 as u32]).collect::<Vec<_>>()])).collect();
         let j = serde_json::json!({ "pos": p.pos, "yaw": p.yaw, "pitch": p.pitch, "gamemode": p.gamemode, "held": p.held, "inv": inv, "flying": p.flying,
             "xp": p.xp, "xp_level": p.xp_level, "xp_progress": p.xp_progress, "health": p.health, "food": p.food, "saturation": p.saturation, "dead": p.dead, "air": p.air, "fire": p.fire_ticks,
-            "effects": p.effects.iter().map(|(id, (a, t))| [*id as i64, *a as i64, *t as i64]).collect::<Vec<_>>() });
+            "effects": p.effects.iter().map(|(id, (a, t))| [*id as i64, *a as i64, *t as i64]).collect::<Vec<_>>(),
+            "dimension": dim::DIMS[self.dim_of(p.eid).unwrap_or(self.cur)].id });
         let _ = std::fs::create_dir_all(d.join("players"));
         let _ = std::fs::write(d.join("players").join(format!("{}.json", p.uuid)), j.to_string());
+    }
+    /// Dimension a player was saved in (overworld if unknown).
+    fn saved_dim(&self, uuid: Uuid) -> usize {
+        let Some(d) = &self.dir else { return dim::OVERWORLD };
+        let Ok(s) = std::fs::read_to_string(d.join("players").join(format!("{uuid}.json"))) else { return dim::OVERWORLD };
+        serde_json::from_str::<serde_json::Value>(&s).ok().and_then(|v| v["dimension"].as_str().and_then(dim::dim_index)).unwrap_or(dim::OVERWORLD)
     }
     fn load_player(&self, p: &mut Player) {
         let Some(d) = &self.dir else { return };
@@ -322,14 +353,15 @@ impl Game {
     }
     fn system_chat(&self, msg: basalt_nbt::Tag) {
         log::info!("[chat] {}", text::to_plain(&msg));
-        self.broadcast(None, || { let mut w = Writer::with_id(cb::SYSTEM_CHAT); w.nbt(&msg).bool(false); w });
+        self.broadcast_all(None, || { let mut w = Writer::with_id(cb::SYSTEM_CHAT); w.nbt(&msg).bool(false); w });
     }
     fn tell(&self, eid: i32, msg: basalt_nbt::Tag) {
-        if let Some(p) = self.players.get(&eid) { let mut w = Writer::with_id(cb::SYSTEM_CHAT); w.nbt(&msg).bool(false); p.send(w); }
+        if let Some(p) = self.all_players().find(|p| p.eid == eid) { let mut w = Writer::with_id(cb::SYSTEM_CHAT); w.nbt(&msg).bool(false); p.send(w); }
     }
 
     /// Change a block, notify viewers and resend light for affected chunks.
     fn set_block(&mut self, x: i32, y: i32, z: i32, state: u32) {
+        let old = self.world.get_block(x, y, z);
         let changed = self.world.set_block(x, y, z, state);
         self.be_block_changed([x, y, z], state);
         self.schedule_gravity([x, y, z]);
@@ -338,6 +370,10 @@ impl Game {
             let Some(c) = self.world.chunk(cx, cz) else { continue };
             let mut body = Vec::new(); c.write_light(&mut body);
             self.broadcast_chunk((cx, cz), None, || { let mut w = Writer::with_id(cb::LIGHT_UPDATE); w.varint(cx).varint(cz).bytes(&body); w });
+        }
+        if old != state && self.world.get_block(x, y, z) == state {
+            if BlockState(old).name() == "nether_portal" || BlockState(state).name() == "nether_portal" { self.portal_registry([x, y, z], state); }
+            self.portal_block_changed([x, y, z], old, state);
         }
     }
 
@@ -418,7 +454,9 @@ impl Game {
     // ------------------------------------------------------------ join / leave
 
     fn join(&mut self, eid: i32, uuid: Uuid, name: String, out: UnboundedSender<Vec<u8>>, view: u8) {
-        if let Some(old) = self.players.values().find(|p| p.uuid == uuid).map(|p| p.eid) {
+        let old = self.all_players().find(|p| p.uuid == uuid).map(|p| p.eid);
+        if let Some(old) = old {
+            self.enter_player(old);
             if let Some(p) = self.players.get(&old) { let mut w = Writer::with_id(cb::DISCONNECT); w.nbt(&text::plain("You logged in from another location")); p.send(w); let _ = p.out.send(Vec::new()); }
             self.leave(old);
         }
@@ -430,15 +468,18 @@ impl Game {
             dead: false, health: 20.0, food: 20, saturation: 5.0, exhaustion: 0.0, fall_start: None, hurt_cooldown: 0, regen_timer: 0,
             using: None, sprinting: false, jump_held: false, dig_start: None, delayed_dig: None, cursor: Stack::default(), craft_result: Stack::default(),
             table_grid: [Stack::default(); 9], window: inv::Window::Inventory, next_window: 0, state_id: 0, drag: (0, Vec::new()), seen_items: HashSet::new(), cont_items: Vec::new(), data_sent: [-1; 4], xp_level: 0, xp_progress: 0.0, xp: 0,
-            air: env::MAX_AIR, fire_ticks: 0, ticks_frozen: 0, fire_exposure: 0, effects: HashMap::new(), prev_tick_pos: [0.0; 3], seen: HashSet::new(), last_attack_tick: 0,
+            air: env::MAX_AIR, fire_ticks: 0, ticks_frozen: 0, fire_exposure: 0, effects: HashMap::new(), prev_tick_pos: [0.0; 3], seen: HashSet::new(), last_attack_tick: 0, portal_ticks: 0, portal_cooldown: 0, portal_entry: None,
         };
         self.load_player(&mut p);
-        let dims = self.sh.registries.entries("minecraft:dimension_type");
-        let dim_type = dims.iter().position(|d| d == "minecraft:overworld").unwrap_or(0) as i32;
+        let d = self.saved_dim(p.uuid);
+        self.enter(d);
+        if d != dim::OVERWORLD && p.pos == self.spawn { p.pos = [0.5, 64.0, 0.5]; }
         let mut w = Writer::with_id(cb::LOGIN);
-        w.i32(eid).bool(false).varint(1).str("minecraft:overworld").varint(self.sh.cfg.max_players as i32).varint(p.view).varint(p.view)
-            .bool(false).bool(true).bool(false).varint(dim_type).str("minecraft:overworld").i64(self.hashed_seed())
-            .u8(p.gamemode).i8(-1).bool(false).bool(self.sh.cfg.flat).bool(false).varint(0).varint(63).bool(false).u8(0);
+        w.i32(eid).bool(false).varint(dim::DIMS.len() as i32);
+        for di in &dim::DIMS { w.str(di.id); }
+        w.varint(self.sh.cfg.max_players as i32).varint(p.view).varint(p.view).bool(false).bool(true).bool(false);
+        self.spawn_info(&mut w, p.gamemode);
+        w.bool(false).u8(0);
         p.send(w);
         let mut w = Writer::with_id(cb::CHANGE_DIFFICULTY); w.u8(self.difficulty).bool(false); p.send(w);
         Self::send_abilities(&p);
@@ -448,7 +489,7 @@ impl Game {
         Self::teleport(&mut p);
         let mut w = Writer::with_id(cb::SERVER_DATA); w.nbt(&text::plain(&self.sh.cfg.motd)).bool(false); p.send(w);
         // tab list: everyone to the newcomer, newcomer to everyone
-        for o in self.players.values() { p.send(Self::info_add(o)); }
+        for o in self.all_players() { p.send(Self::info_add(o)); }
         p.send(Self::info_add(&p));
         let mut w = Writer::with_id(cb::INITIALIZE_BORDER);
         w.f64(0.0).f64(0.0).f64(59999968.0).f64(59999968.0).varlong(0).varint(29999984).varint(5).varint(300); p.send(w);
@@ -456,7 +497,7 @@ impl Game {
         let mut w = Writer::with_id(cb::SET_DEFAULT_SPAWN_POSITION);
         w.str("minecraft:overworld").position(self.spawn[0].floor() as i32, self.spawn[1] as i32, self.spawn[2].floor() as i32).f32(0.0).f32(0.0); p.send(w);
         let mut w = Writer::with_id(cb::GAME_EVENT); w.u8(13).f32(0.0); p.send(w);
-        if self.weather.rain > 0.0 {
+        if self.cur == dim::OVERWORLD && self.weather.rain > 0.0 {
             for (id, v) in [(1u8, 0.0f32), (7, self.weather.rain), (8, self.weather.thunder)] { let mut w = Writer::with_id(cb::GAME_EVENT); w.u8(id).f32(v); p.send(w); }
         }
         let mut w = Writer::with_id(cb::TICKING_STATE); w.f32(20.0).bool(false); p.send(w);
@@ -464,7 +505,7 @@ impl Game {
         Self::send_window(&mut p);
         let mut w = Writer::with_id(cb::SET_HEALTH); w.f32(p.health).varint(p.food).f32(p.saturation); p.send(w);
         Self::send_xp(&p);
-        self.broadcast(None, || Self::info_add(&p));
+        self.broadcast_all(None, || Self::info_add(&p));
         let add = self.add_entity(&p);
         for o in self.players.values() { o.send(Writer { buf: add.buf.clone() }); p.send(self.add_entity(o)); }
         log::info!("{name} joined (eid {eid}) at {:.1} {:.1} {:.1}", p.pos[0], p.pos[1], p.pos[2]);
@@ -476,12 +517,13 @@ impl Game {
     }
 
     fn leave(&mut self, eid: i32) {
+        if !self.enter_player(eid) { return; }
         if self.players.get(&eid).map(|p| !p.dead).unwrap_or(false) { self.close_window(eid); }
         let Some(p) = self.players.remove(&eid) else { return };
         self.save_player(&p);
         log::info!("{} left", p.name);
         self.broadcast(None, || { let mut w = Writer::with_id(cb::REMOVE_ENTITIES); w.varint(1).varint(eid); w });
-        self.broadcast(None, || { let mut w = Writer::with_id(cb::PLAYER_INFO_REMOVE); w.varint(1).uuid(p.uuid); w });
+        self.broadcast_all(None, || { let mut w = Writer::with_id(cb::PLAYER_INFO_REMOVE); w.varint(1).uuid(p.uuid); w });
         self.system_chat(text::colored(&format!("{} left the game", p.name), "yellow"));
     }
 
@@ -774,6 +816,7 @@ impl Game {
         let slot = 36 + p.held; let st = p.inv[slot];
         if st.count <= 0 { return; }
         let Some(item_name) = reg::ITEM.get(st.item as usize) else { return };
+        if *item_name == "flint_and_steel" { self.use_flint_and_steel(eid, b, face); return; }
         let Some(state) = block_default(item_name).or_else(|| block_for_item(item_name)) else { return };
         let (yaw, pitch, sneaking) = (p.yaw, p.pitch, p.sneaking);
         let clicked = BlockState(self.world.get_block(b[0], b[1], b[2]));
@@ -782,7 +825,7 @@ impl Game {
         let merging = clicked.get("type").is_some() && clicked.block().kind.ends_with("slab") && self.placement(state, b, &click).is_some_and(|v| BlockState(v[0].1).get("type") == Some("double"));
         let t = if replacing || merging { b } else { [b[0] + FACE[face][0], b[1] + FACE[face][1], b[2] + FACE[face][2]] };
         if !merging && !self.replaceable_for(BlockState(self.world.get_block(t[0], t[1], t[2]))) { return; }
-        if t[1] < basalt_world::MIN_Y || t[1] >= basalt_world::MIN_Y + basalt_world::HEIGHT { return; }
+        if !self.world.layout.contains_y(t[1]) { return; }
         let Some(mut blocks) = self.placement(state, t, &click) else { return };
         // don't place a colliding block inside a player
         if basalt_world::props::props(blocks[0].1).blocks_motion() {
@@ -804,6 +847,32 @@ impl Game {
     fn tick(&mut self) {
         self.tick += 1;
         self.day_time += 1;
+        for d in 0..self.parked.len() {
+            if !self.dim_active(d) { continue; }
+            self.enter(d);
+            self.tick_dim();
+        }
+        self.enter(dim::OVERWORLD);
+        // keepalive (every dimension)
+        let mut kick = Vec::new();
+        for d in 0..self.parked.len() {
+            self.enter(d);
+            for p in self.players.values_mut() {
+                if let Some((_, t)) = p.keepalive { if t.elapsed() > Duration::from_secs(30) { kick.push(p.eid); continue; } }
+                if p.keepalive.is_none() && p.last_keepalive.elapsed() > Duration::from_secs(15) {
+                    let v = self.tick as i64; p.keepalive = Some((v, Instant::now())); p.last_keepalive = Instant::now();
+                    let mut w = Writer::with_id(cb::KEEP_ALIVE); w.i64(v); p.send(w);
+                }
+            }
+        }
+        for eid in kick { if self.enter_player(eid) { if let Some(p) = self.players.get(&eid) { let mut w = Writer::with_id(cb::DISCONNECT); w.nbt(&text::plain("Timed out")); p.send(w); let _ = p.out.send(Vec::new()); } } self.leave(eid); }
+        self.enter(dim::OVERWORLD);
+        if self.tick % 20 == 0 { let w = self.set_time_packet(); self.broadcast_all(None, || Writer { buf: w.buf.clone() }); }
+        if self.tick % (20 * 60) == 0 { self.save_level(); }
+    }
+
+    /// One tick of the current dimension.
+    fn tick_dim(&mut self) {
         for c in self.gen.finished() { let (cx, cz) = (c.x, c.z); let fresh = self.world.chunk(cx, cz).is_none(); self.add_generated(c); if fresh { self.populate_animals(cx, cz); } }
         self.tick_items();
         self.tick_mobs();
@@ -818,7 +887,8 @@ impl Game {
         self.tick_delayed_dig();
         self.tick_environment();
         self.tick_containers();
-        self.tick_weather();
+        if self.cur == dim::OVERWORLD { self.tick_weather(); }
+        self.tick_portals();
         let ids: Vec<i32> = self.players.keys().copied().collect();
         for &eid in &ids { self.stream_chunks(eid); }
         // movement broadcast
@@ -832,22 +902,12 @@ impl Game {
         for (eid, w, yaw) in moves {
             for o in self.players.values() { if o.eid != eid { o.send(Writer { buf: w.buf.clone() }); let mut h = Writer::with_id(cb::ROTATE_HEAD); h.varint(eid).u8(angle(yaw)); o.send(h); } }
         }
-        // keepalive
-        let mut kick = Vec::new();
-        for p in self.players.values_mut() {
-            if let Some((_, t)) = p.keepalive { if t.elapsed() > Duration::from_secs(30) { kick.push(p.eid); continue; } }
-            if p.keepalive.is_none() && p.last_keepalive.elapsed() > Duration::from_secs(15) {
-                let v = self.tick as i64; p.keepalive = Some((v, Instant::now())); p.last_keepalive = Instant::now();
-                let mut w = Writer::with_id(cb::KEEP_ALIVE); w.i64(v); p.send(w);
-            }
-        }
-        for eid in kick { if let Some(p) = self.players.get(&eid) { let mut w = Writer::with_id(cb::DISCONNECT); w.nbt(&text::plain("Timed out")); p.send(w); let _ = p.out.send(Vec::new()); } self.leave(eid); }
-        if self.tick % 20 == 0 { let w = self.set_time_packet(); self.broadcast(None, || Writer { buf: w.buf.clone() }); }
-        if self.tick % (20 * 60) == 0 { self.save_level(); }
         // unload chunks nobody can see
-        if self.tick % 100 == 0 {
+        // (in-memory worlds keep everything: an unloaded chunk would be regenerated from scratch)
+        if self.tick % 100 == 0 && self.world.dir.is_some() {
             let seen: HashSet<(i32, i32)> = self.players.values().flat_map(|p| p.loaded.iter().copied()).collect();
-            for c in self.world.loaded_chunks() { if !seen.contains(&c) && (c.0.abs() > 2 || c.1.abs() > 2) { let _ = self.world.unload(c.0, c.1); self.be_drop_chunk(c.0, c.1); } }
+            let keep_spawn = self.cur == dim::OVERWORLD;
+            for c in self.world.loaded_chunks() { if !seen.contains(&c) && (!keep_spawn || c.0.abs() > 2 || c.1.abs() > 2) { let _ = self.world.unload(c.0, c.1); self.be_drop_chunk(c.0, c.1); } }
         }
     }
 
@@ -862,6 +922,7 @@ impl Game {
                 match rx.recv_timeout(deadline - now) {
                     Ok(ToGame::Join { eid, uuid, name, out, view }) => self.join(eid, uuid, name, out, view),
                     Ok(ToGame::Packet { eid, id, data }) => {
+                        self.enter_player(eid);
                         if let Err(e) = self.packet(eid, id, &data) {
                             log::warn!("bad packet {} from {eid}: {e:#}", sb::name(id));
                             if let Some(p) = self.players.get(&eid) { let mut w = Writer::with_id(cb::DISCONNECT); w.nbt(&text::plain(&format!("Bad packet: {e}"))); p.send(w); let _ = p.out.send(Vec::new()); }
@@ -877,7 +938,7 @@ impl Game {
             self.tick();
         }
         log::info!("saving world");
-        for p in self.players.values() { let mut w = Writer::with_id(cb::DISCONNECT); w.nbt(&text::plain("Server closed")); p.send(w); }
+        for p in self.all_players() { let mut w = Writer::with_id(cb::DISCONNECT); w.nbt(&text::plain("Server closed")); p.send(w); }
         self.save_level();
     }
 }

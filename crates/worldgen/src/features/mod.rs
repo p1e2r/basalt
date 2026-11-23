@@ -6,6 +6,7 @@
 
 pub mod kinds;
 pub mod misc;
+pub mod nether;
 pub mod provider;
 pub mod tree;
 
@@ -23,10 +24,17 @@ use std::sync::{Arc, Mutex};
 
 pub type R = BitXoroshiro;
 
+thread_local! {
+    /// Generation range (min_y, height) of the noise settings being loaded: placement anchors resolve
+    /// against it (the Nether generates 0..128 inside a 0..256 dimension).
+    pub static GEN_RANGE: std::cell::Cell<(i32, i32)> = const { std::cell::Cell::new((crate::MIN_Y, crate::HEIGHT)) };
+}
+
 pub fn anchor(v: &Value) -> Result<i32> {
+    let (min_y, height) = GEN_RANGE.with(|r| r.get());
     if let Some(a) = v.get("absolute").and_then(|x| x.as_i64()) { return Ok(a as i32); }
-    if let Some(a) = v.get("above_bottom").and_then(|x| x.as_i64()) { return Ok(crate::MIN_Y + a as i32); }
-    if let Some(a) = v.get("below_top").and_then(|x| x.as_i64()) { return Ok(crate::MIN_Y + crate::HEIGHT - 1 - a as i32); }
+    if let Some(a) = v.get("above_bottom").and_then(|x| x.as_i64()) { return Ok(min_y + a as i32); }
+    if let Some(a) = v.get("below_top").and_then(|x| x.as_i64()) { return Ok(min_y + height - 1 - a as i32); }
     bail!("bad anchor {v}")
 }
 
@@ -217,6 +225,7 @@ pub enum Modifier {
     NoiseThresholdCount { level: f64, below: i32, above: i32 },
     NoiseBasedCount { ratio: i32, factor: f64, offset: f64 },
     Fixed(Vec<(i32, i32, i32)>),
+    CountOnEveryLayer(IntProvider),
 }
 
 pub struct Placed {
@@ -253,6 +262,7 @@ const SUPPORT_TAGS: &[&str] = &[
     "supports_sugar_cane", "supports_sugar_cane_adjacently", "supports_cactus", "supports_lily_pad", "cannot_support_seagrass", "cannot_support_kelp",
     "cannot_support_snow_layer", "support_override_snow_layer", "supports_crops", "supports_bamboo", "supports_small_dripleaf",
     "supports_big_dripleaf", "logs", "leaves", "substrate_overworld", "replaceable_by_mushrooms", "features_cannot_replace", "lava_pool_stone_cannot_replace", "geode_invalid_blocks", "replaceable_by_trees", "cannot_replace_below_tree_trunk",
+    "supports_crimson_fungus", "supports_warped_fungus", "supports_crimson_roots", "supports_warped_roots", "supports_nether_sprouts",
 ];
 
 impl Features {
@@ -322,7 +332,7 @@ impl Features {
             let mut bs = Vec::new();
             let mut has = HashSet::new();
             for (j, st) in l.iter().enumerate() {
-                let v: Vec<u32> = st.iter().filter_map(|f| index[j].get(f.as_str()).copied()).collect();
+                let v: Vec<u32> = match index.get(j) { Some(ix) => st.iter().filter_map(|f| ix.get(f.as_str()).copied()).collect(), None => Vec::new() };
                 for i in &v { has.insert((j as u32, *i)); }
                 bs.push(v);
             }
@@ -431,6 +441,7 @@ impl Features {
                 ratio: m["noise_to_count_ratio"].as_i64().unwrap_or(0) as i32, factor: m["noise_factor"].as_f64().unwrap_or(1.0),
                 offset: m.get("noise_offset").and_then(|x| x.as_f64()).unwrap_or(0.0),
             },
+            "count_on_every_layer" => Modifier::CountOnEveryLayer(IntProvider::parse(&m["count"])?),
             "fixed_placement" => Modifier::Fixed(m["positions"].as_array().map(|a| a.iter().filter_map(|p| {
                 let p = p.as_array()?;
                 Some((p[0].as_i64()? as i32, p[1].as_i64()? as i32, p[2].as_i64()? as i32))
@@ -542,6 +553,12 @@ impl Features {
                 for _ in 0..n.max(0) { any |= next(self, reg, r, x, y, z); }
                 any
             }
+            Modifier::CountOnEveryLayer(c) => {
+                let ps = nether::every_layer(reg, r, c, x, z);
+                let mut any = false;
+                for p in ps { any |= next(self, reg, r, p.0, p.1, p.2); }
+                any
+            }
             Modifier::Fixed(ps) => {
                 let mut any = false;
                 for p in ps { any |= next(self, reg, r, p.0, p.1, p.2); }
@@ -559,6 +576,14 @@ impl Features {
         let t = |n: &str| self.tag(n)[below as usize];
         let upper_half = st.get("half") == Some("upper");
         if upper_half { return BlockState(below as u32).name() == name; }
+        match name {
+            "crimson_fungus" => return t("supports_crimson_fungus"),
+            "warped_fungus" => return t("supports_warped_fungus"),
+            "crimson_roots" => return t("supports_crimson_roots"),
+            "warped_roots" => return t("supports_warped_roots"),
+            "nether_sprouts" => return t("supports_nether_sprouts"),
+            _ => {}
+        }
         match kind {
             "sapling" | "flower" | "tall_flower" | "bush" | "tall_grass" | "double_plant" | "firefly_bush" | "sweet_berry_bush"
             | "flower_bed" | "leaf_litter" | "eyeblossom" => {

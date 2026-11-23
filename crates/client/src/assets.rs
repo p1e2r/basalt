@@ -138,7 +138,8 @@ pub struct Atlas { pub w: u32, pub h: u32, pub rgba: Vec<u8>, pub rects: HashMap
 pub struct Biome { pub name: String, pub grass: u32, pub foliage: u32, pub dry_foliage: u32, pub water: u32, pub sky: u32, pub fog: u32 }
 
 #[derive(Clone, Debug)]
-pub struct DimensionType { pub name: String, pub min_y: i32, pub height: i32, pub has_skylight: bool }
+/// `ambient_light`, fog distances: from the dimension type JSON (nether: 0.1, fog 10..96).
+pub struct DimensionType { pub name: String, pub min_y: i32, pub height: i32, pub has_skylight: bool, pub ambient_light: f32, pub fog: Option<(f32, f32)> }
 
 pub struct Jar { pub files: HashMap<String, Vec<u8>> }
 
@@ -716,7 +717,9 @@ impl Assets {
             }
             if let Some(n) = p.strip_prefix("data/minecraft/dimension_type/").and_then(|n| n.strip_suffix(".json")) {
                 if let Ok(v) = serde_json::from_slice::<Value>(d) {
-                    dimension_types.insert(format!("minecraft:{n}"), DimensionType { name: n.to_string(), min_y: v["min_y"].as_i64().unwrap_or(-64) as i32, height: v["height"].as_i64().unwrap_or(384) as i32, has_skylight: v["has_skylight"].as_bool().unwrap_or(true) });
+                    dimension_types.insert(format!("minecraft:{n}"), DimensionType { name: n.to_string(), min_y: v["min_y"].as_i64().unwrap_or(-64) as i32, height: v["height"].as_i64().unwrap_or(384) as i32, has_skylight: v["has_skylight"].as_bool().unwrap_or(true),
+                        ambient_light: v["ambient_light"].as_f64().unwrap_or(0.0) as f32,
+                        fog: v["attributes"]["minecraft:visual/fog_start_distance"].as_f64().zip(v["attributes"]["minecraft:visual/fog_end_distance"].as_f64()).map(|(a, b)| (a as f32, b as f32)) });
                 }
             }
         }

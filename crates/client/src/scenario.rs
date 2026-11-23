@@ -14,7 +14,7 @@ use winit::keyboard::KeyCode;
 const W: u32 = 854;
 const H: u32 = 480;
 
-pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer", "falling_block", "sprint", "xp_bar", "titles"];
+pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer", "falling_block", "sprint", "xp_bar", "titles", "nether"];
 
 enum Outcome { Pass(String), Skip(String) }
 
@@ -40,7 +40,7 @@ pub fn run(args: &Args, assets: Arc<Assets>, name: &str) -> Result<bool> {
         let t = Instant::now();
         let r = match s {
             "edge_chunks" => edge_chunks(&ctx), "inventory" => inventory(&ctx), "crafting_table" => crafting_table(&ctx), "death" => death(&ctx),
-            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "falling_block" => falling_block(&ctx), "sprint" => sprint(&ctx), "xp_bar" => xp_bar(&ctx), "titles" => titles(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx),
+            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "falling_block" => falling_block(&ctx), "sprint" => sprint(&ctx), "xp_bar" => xp_bar(&ctx), "titles" => titles(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx), "nether" => nether(&ctx),
             other => Err(anyhow!("unknown scenario {other} (known: {})", ALL.join(", "))),
         };
         let secs = t.elapsed().as_secs_f32();
@@ -1160,6 +1160,41 @@ fn sprint(c: &Ctx) -> Result<Outcome> {
     hold_key(&mut g, KeyCode::Space, true); ticks(&mut g, 1)?; hold_key(&mut g, KeyCode::Space, false); ticks(&mut g, 1)?;
     if g.player.flying == before { bail!("double-tap jump did not toggle flying"); }
     Ok(Outcome::Pass("double-tap, slow double-tap, key hold/outlive/toggle, food 6, wall, sneak keeps sprint, double-tap fly".into()))
+}
+
+/// Respawn into the Nether (`execute in minecraft:the_nether run tp`): the world is rebuilt with the
+/// nether layout (y 0..256), entities of the old dimension are gone, there is no blue sky (the
+/// background is the biome's fog colour), and back in the overworld the sky is blue again.
+fn nether(c: &Ctx) -> Result<Outcome> {
+    let mut g = c.game("nth")?;
+    join(&mut g)?;
+    cmd(&mut g, "gamemode creative");
+    cmd(&mut g, "summon minecraft:pig ~2 ~ ~");
+    wait(&mut g, 1.0)?;
+    let ents_before = g.entities.len();
+    cmd(&mut g, "execute in minecraft:the_nether run tp @s 8.5 100 8.5");
+    if !wait_until(&mut g, 10.0, |g| g.world.min_y == 0 && g.world.nsections() == 16)? { bail!("no nether layout (min_y {}, sections {})", g.world.min_y, g.world.nsections()); }
+    if !wait_until(&mut g, 30.0, settled)? { bail!("nether chunks never settled ({} loaded)", g.world.chunks.len()); }
+    let dim = g.dim.as_ref().map(|d| d.name.clone()).unwrap_or_default();
+    if dim != "the_nether" { bail!("dimension type {dim}"); }
+    // the overworld pig is gone (entities are cleared on respawn)
+    if ents_before > 0 && g.entities.len() >= ents_before { bail!("{} entities kept from the overworld", g.entities.len()); }
+    // look up: no sky, the frame top is the fog colour (reddish, never blue)
+    tp(&mut g, [8.5, 100.0, 8.5], 0.0, -10.0)?;
+    wait(&mut g, 1.0)?;
+    let img = capture(&mut g)?; save(&g, &img, "nether");
+    let top = px(&img, W as i32 / 2, 4);
+    if top[2] > top[0] { bail!("nether top pixel {top:?} is blue"); }
+    cmd(&mut g, "execute in minecraft:overworld run tp @s 0.5 -50 0.5");
+    if !wait_until(&mut g, 10.0, |g| g.world.min_y == -64)? { bail!("no overworld layout after going back"); }
+    if !wait_until(&mut g, 30.0, settled)? { bail!("overworld chunks never settled"); }
+    cmd(&mut g, "time set noon");
+    tp(&mut g, [0.5, -50.0, 0.5], 0.0, -30.0)?;
+    wait(&mut g, 1.0)?;
+    let img2 = capture(&mut g)?; save(&g, &img2, "nether_back");
+    let sky = px(&img2, W as i32 / 2, 4);
+    if sky[2] <= sky[0] { bail!("overworld sky {sky:?} not blue after returning"); }
+    Ok(Outcome::Pass(format!("nether top {top:?}, overworld sky {sky:?}, entities {ents_before} -> cleared")))
 }
 
 /// set_experience drives the XP bar and the green level number above the hotbar.

@@ -46,6 +46,7 @@ fn scenario_paths(id: &str) -> Vec<&'static str> {
         ("m4_", &["crates/check/src/scenarios/m4.rs", "crates/game/**", "crates/server/src/game.rs", "crates/server/src/game/{inv,items,health,combat,env,explosion}.rs"]),
         ("m5_", &["crates/check/src/scenarios/m5.rs", "crates/game/**", "crates/server/src/game/{mob,ai,path,arrow,combat,explosion,spawn,health,track,items}.rs"]),
         ("m6_", &["crates/check/src/scenarios/m6.rs"]),
+        ("m8_", &["crates/check/src/scenarios/m8.rs", "crates/worldgen/**", "crates/server/src/game/{dim,portal,cmd,place}.rs"]),
         ("env_", &["crates/check/src/scenarios/env.rs", "crates/game/**", "crates/server/src/game/{env,health}.rs"]),
         ("items_", &["crates/check/src/scenarios/m4.rs", "crates/game/**", "crates/server/src/game/{items,track}.rs"]),
     ];
@@ -75,6 +76,7 @@ pub fn all() -> Vec<Entry> {
         v.push(Entry { id: format!("fuzz_{}", h.id), kind: HKind::Fuzz, group: "Fuzz".into(), paths: fuzz_paths(h.id).into_iter().map(String::from).collect(), desc: h.desc.into() });
     }
     v.push(Entry { id: "fuzz_worldgen".into(), kind: HKind::Script, group: "Fuzz".into(), paths: ["crates/worldgen/**", "crates/data/**", "crates/nbt/**", "tools/parity.sh", "crates/check/src/driver.rs"].map(String::from).to_vec(), desc: "worldgen parity vs vanilla over N seeds x several sites (tools/parity.sh)".into() });
+    v.push(Entry { id: "worldgen_nether".into(), kind: HKind::Script, group: "M8".into(), paths: ["crates/worldgen/**", "crates/data/**", "crates/nbt/**", "tools/parity.sh", "crates/check/src/driver.rs"].map(String::from).to_vec(), desc: "nether worldgen parity vs vanilla (seeds 12345, 42 x 5 sites; tools/parity.sh --nether)".into() });
     // the client oracle's block-meshing parity (crates/check/src/client): `basalt-check client-mesh`
     let mut client_paths: Vec<String> = crate::client::MESH_AFFECTED.iter().map(|s| s.to_string()).collect();
     client_paths.extend(["crates/check/src/client/**", "tools/oracle-mod/**", "crates/check/Cargo.toml", "crates/data/**", "crates/world/**", "Cargo.lock"].map(String::from));

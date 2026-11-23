@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Worldgen parity of Basalt vs real vanilla worlds: N seeds x several sites per seed.
 #
-# usage: tools/parity.sh [--out DIR] [--radius-scale 1] SEED...
+# usage: tools/parity.sh [--out DIR] [--nether] SEED...
 #   Vanilla reference worlds are generated headless with the official server jar (vanilla/server.jar)
 #   and cached in vanilla/parity/<seed> (marker done-26.2; shared with tools/check-all.sh), so only the
 #   first run of a seed is slow. Each seed is compared at the sites below (centre chunk + radius, all
@@ -14,9 +14,12 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 OUT=target/check
+# --nether: compare the_nether instead (worlds cached in vanilla/parity-nether/<seed>, nether chunks force-loaded)
+DIM=overworld
 while [ $# -gt 0 ]; do
   case "$1" in
     --out) OUT=$2; shift 2 ;;
+    --nether) DIM=nether; shift ;;
     *) break ;;
   esac
 done
@@ -29,6 +32,9 @@ mkdir -p "$OUT"
 echo "note: building the worldgen compare example"
 cargo build --release -p basalt-worldgen --example compare -q 2>&1 | tail -5
 [ -x target/release/examples/compare ] || { echo "RESULT fuzz=worldgen cases=0 mismatches=0 new=0 info=0 errors=1 skipped=1 secs=0"; exit 1; }
+
+pdir() { if [ $DIM = nether ]; then echo vanilla/parity-nether/$1; else echo vanilla/parity/$1; fi; }
+dimdir() { if [ $DIM = nether ]; then echo the_nether; else echo overworld; fi; }
 
 free_port() { python3 - "${PARITY_PORT_BASE:-25700}" <<'EOF'
 import socket, sys
@@ -44,7 +50,7 @@ EOF
 
 # Generate a vanilla world for $1 (same procedure and marker as tools/check-all.sh).
 gen_vanilla_world() {
-  local seed=$1 dir=vanilla/parity/$1
+  local seed=$1 dir=$(pdir $1)
   [ -f "$dir/done-26.2" ] && return 0
   [ -f vanilla/server.jar ] || { echo "vanilla/server.jar missing (run tools/extract-data.sh)"; return 1; }
   rm -rf "$dir"; mkdir -p "$dir"
@@ -70,8 +76,8 @@ EOF
   exec 7> "$dir/console.fifo"
   local t=0
   until grep -q "Done (" "$dir/server.log" 2>/dev/null; do sleep 1; t=$((t+1)); [ $t -gt 300 ] && { echo "vanilla server for seed $seed didn't start"; kill $pid; exec 7>&-; return 1; }; done
-  echo "forceload add -80 -80 79 79" >&7
-  local region=$dir/world/dimensions/minecraft/overworld/region ok=0
+  if [ $DIM = nether ]; then echo "execute in minecraft:the_nether run forceload add -80 -80 79 79" >&7; else echo "forceload add -80 -80 79 79" >&7; fi
+  local region=$dir/world/dimensions/minecraft/$(dimdir)/region ok=0
   for _ in $(seq 1 40); do
     sleep 5
     echo "save-all flush" >&7; sleep 2
@@ -91,7 +97,7 @@ for seed in "${SEEDS[@]}"; do
     echo "note: seed $seed: vanilla world generation failed: $(tail -1 "$OUT/parity-gen-$seed.log")"
     errors=$((errors+1)); continue
   fi
-  region=vanilla/parity/$seed/world/dimensions/minecraft/overworld/region
+  region=$(pdir $seed)/world/dimensions/minecraft/$(dimdir)/region
   for site in "${SITES[@]}"; do
     set -- $site
     cases=$((cases+1))

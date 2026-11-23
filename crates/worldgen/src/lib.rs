@@ -25,7 +25,7 @@ use aquifer::{Aquifer, AquiferNodes, Fluid};
 use anyhow::{anyhow, Context, Result};
 use basalt_data::BlockState;
 use density::{Eval, Graph, GraphBuilder, Mode, Node, NodeId};
-use random::{PosFactory, Rng, Xoroshiro};
+use random::{PosFactory, Rng};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -34,17 +34,41 @@ pub const MIN_Y: i32 = -64;
 pub const HEIGHT: i32 = 384;
 pub const SECTIONS: usize = 24;
 
+/// A dimension Basalt can generate.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum Dimension {
+    Overworld,
+    Nether,
+}
+
+impl Dimension {
+    /// noise_settings file name.
+    pub fn settings(self) -> &'static str { match self { Dimension::Overworld => "overworld", Dimension::Nether => "nether" } }
+    /// Dimension-type world bottom.
+    pub fn min_y(self) -> i32 { match self { Dimension::Overworld => -64, Dimension::Nether => 0 } }
+    /// Number of 16-block sections of the dimension type (overworld 384 / nether 256 blocks).
+    pub fn sections(self) -> usize { match self { Dimension::Overworld => 24, Dimension::Nether => 16 } }
+    /// Registry id (`minecraft:...`).
+    pub fn id(self) -> &'static str { match self { Dimension::Overworld => "minecraft:overworld", Dimension::Nether => "minecraft:the_nether" } }
+    pub fn from_id(s: &str) -> Option<Dimension> {
+        match s.trim_start_matches("minecraft:") { "overworld" => Some(Dimension::Overworld), "the_nether" | "nether" => Some(Dimension::Nether), _ => None }
+    }
+}
+
 /// Output of [`Generator::generate_chunk`].
 pub struct GeneratedChunk {
-    /// 24 sections (y = -64 upwards), index `y<<8 | z<<4 | x`, global block-state ids.
+    /// The dimension's sections from `min_y` upwards (overworld: 24 from y = -64, nether: 16 from
+    /// y = 0), index `y<<8 | z<<4 | x`, global block-state ids.
     pub blocks: Vec<[u16; 4096]>,
-    /// 24 sections, index `y<<4 | z<<2 | x` (4×4×4 cells), biome registry ids.
+    /// Same sections, index `y<<4 | z<<2 | x` (4×4×4 cells), biome registry ids.
     pub biomes: Vec<[u8; 64]>,
+    /// World y of the bottom of `blocks[0]`.
+    pub min_y: i32,
 }
 
 impl GeneratedChunk {
     pub fn get(&self, x: usize, y: i32, z: usize) -> u16 {
-        let yy = (y - MIN_Y) as usize;
+        let yy = (y - self.min_y) as usize;
         self.blocks[yy >> 4][((yy & 15) << 8) | (z << 4) | x]
     }
 }
@@ -117,9 +141,16 @@ pub fn biome_names(data_dir: &Path) -> Result<Vec<String>> {
     Ok(v)
 }
 
-/// Overworld chunk generator. Cheap to share between threads.
+/// Chunk generator for one dimension (overworld or nether). Cheap to share between threads.
+///
+/// Internally every chunk is a 24-section buffer from y = -64 (the overworld layout); the noise
+/// settings' generation range (`gen_min_y`, `gen_height`, nether: 0..128) is filled inside it and
+/// the public results are cropped to the dimension's own sections.
 pub struct Generator {
     pub seed: i64,
+    pub dim: Dimension,
+    gen_min_y: i32,
+    gen_height: i32,
     graph: Graph,
     router: Router,
     aquifer_rand: PosFactory,
@@ -227,12 +258,23 @@ impl Generator {
         Self::try_new(seed, data_dir.as_ref()).expect("failed to load worldgen data")
     }
 
-    pub fn try_new(seed: i64, data_dir: &Path) -> Result<Generator> {
+    pub fn try_new(seed: i64, data_dir: &Path) -> Result<Generator> { Self::try_new_dim(seed, data_dir, Dimension::Overworld) }
+
+    /// Generator for `dim` using ./data (or $BASALT_DATA). Panics if the data is missing.
+    pub fn new_dim(seed: i64, dim: Dimension) -> Generator {
+        Self::try_new_dim(seed, &default_data_dir(), dim).expect("failed to load worldgen data")
+    }
+
+    pub fn try_new_dim(seed: i64, data_dir: &Path, dim: Dimension) -> Result<Generator> {
         let wg = data_dir.join("data/minecraft/worldgen");
-        let settings_path = wg.join("noise_settings/overworld.json");
+        let settings_path = wg.join(format!("noise_settings/{}.json", dim.settings()));
         let settings: Value = serde_json::from_str(&std::fs::read_to_string(&settings_path).with_context(|| format!("reading {}", settings_path.display()))?)?;
-        let rand = Xoroshiro::new(seed).fork_positional();
+        let legacy = settings["legacy_random_source"].as_bool().unwrap_or(false);
+        let rand = random::Positional::world(seed, legacy);
+        let gen_min_y = settings["noise"]["min_y"].as_i64().unwrap_or(MIN_Y as i64) as i32;
+        let gen_height = settings["noise"]["height"].as_i64().unwrap_or(HEIGHT as i64) as i32;
         let mut b = GraphBuilder::new(&wg, rand);
+        b.world_seed = seed;
         let r = &settings["noise_router"];
         let mut p = |k: &str| -> Result<NodeId> { b.parse(&r[k]).with_context(|| format!("noise_router.{k}")) };
         let aq = AquiferNodes {
@@ -255,7 +297,7 @@ impl Generator {
             iron_ore: state("deepslate_iron_ore")?, raw_iron: state("raw_iron_block")?, tuff: state("tuff")?,
         };
         let biome_names = biome_names(data_dir)?;
-        let biomes = biome::BiomeSource::load(data_dir, &biome_names)?;
+        let biomes = biome::BiomeSource::load_preset(data_dir, &biome_names, dim.settings())?;
         let default_block = state_from_json(&settings["default_block"])?;
         let sea_level = settings["sea_level"].as_i64().unwrap_or(63) as i32;
         let mut carvers = Vec::new();
@@ -274,7 +316,7 @@ impl Generator {
                     Some(i) => i,
                     None => {
                         // Carvers of other dimensions (e.g. nether_cave) are not supported: keep a slot.
-                        carvers.push(carver::Carver::load(&data_dir.join("data/minecraft"), &c).ok());
+                        carvers.push(carver::Carver::load(&data_dir.join("data/minecraft"), &c, gen_min_y, gen_height).ok());
                         carver_names.push(c);
                         carvers.len() - 1
                     }
@@ -283,13 +325,16 @@ impl Generator {
             }
             biome_carvers.push(idx);
         }
-        let features = features::Features::load(&data_dir.join("data/minecraft"), &biome_names, &biomes.possible_biomes())?;
+        features::GEN_RANGE.with(|r| r.set((gen_min_y, gen_height)));
+        let features = features::Features::load(&data_dir.join("data/minecraft"), &biome_names, &biomes.possible_biomes());
+        features::GEN_RANGE.with(|r| r.set((MIN_Y, HEIGHT)));
+        let features = features?;
         let surface = surface::SurfaceSystem::load(&wg, &settings, rand, &biome_names, default_block, sea_level, random::biome_zoom_seed(seed))?;
         Ok(Generator {
-            seed, biome_names, biomes, surface, carvers, biome_carvers, trig: carver::Trig::new(), features,
+            seed, dim, gen_min_y, gen_height, biome_names, biomes, surface, carvers, biome_carvers, trig: carver::Trig::new(), features,
             protos: std::sync::Mutex::new(ProtoCache { map: HashMap::new(), order: Default::default(), cap: 1024 }),
-            aquifer_rand: rand.from_hash("minecraft:aquifer").fork_positional(),
-            ore_rand: rand.from_hash("minecraft:ore").fork_positional(),
+            aquifer_rand: rand.from_hash("minecraft:aquifer").fork_positional().xoro(),
+            ore_rand: rand.from_hash("minecraft:ore").fork_positional().xoro(),
             sea_level,
             aquifers_enabled: settings["aquifers_enabled"].as_bool().unwrap_or(true),
             ore_veins_enabled: settings["ore_veins_enabled"].as_bool().unwrap_or(true),
@@ -311,7 +356,7 @@ impl Generator {
     /// Chunk at the carver stage, cached (shared by the decoration of its neighbours).
     pub fn proto(&self, cx: i32, cz: i32) -> std::sync::Arc<Proto> {
         if let Some(p) = self.protos.lock().unwrap().map.get(&(cx, cz)) { return p.clone(); }
-        let c = self.generate_stages(cx, cz, Stage::Carvers);
+        let c = self.generate_raw(cx, cz, Stage::Carvers);
         let p = std::sync::Arc::new(Proto { blocks: c.blocks, biomes: c.biomes });
         let mut cache = self.protos.lock().unwrap();
         if !cache.map.contains_key(&(cx, cz)) {
@@ -348,15 +393,34 @@ impl Generator {
             reg.write = ((nx - 1) * 16, (nx + 2) * 16 - 1, (nz - 1) * 16, (nz + 2) * 16 - 1);
             self.features.decorate(self.seed, nx, nz, &list, &mut reg);
         }
-        GeneratedChunk { blocks: reg.take_chunk(cx, cz), biomes: own_biomes }
+        self.crop(GeneratedChunk { blocks: reg.take_chunk(cx, cz), biomes: own_biomes, min_y: MIN_Y })
     }
 
     /// Feature types present in the data that are not implemented yet (type → count).
+    /// Global placed-feature order per decoration step (debugging aid).
+    pub fn feature_steps(&self) -> &Vec<Vec<String>> { &self.features.steps }
+
     pub fn unsupported_features(&self) -> &std::collections::BTreeMap<String, usize> { &self.features.unsupported }
 
-    /// Generate up to (and including) the given stage.
+    /// Cut the internal 24-section buffer down to the dimension's own sections.
+    fn crop(&self, mut c: GeneratedChunk) -> GeneratedChunk {
+        let first = ((self.dim.min_y() - MIN_Y) / 16) as usize;
+        let n = self.dim.sections();
+        if first == 0 && n == SECTIONS { return c; }
+        c.blocks = c.blocks.drain(first..first + n).collect();
+        c.biomes = c.biomes.drain(first..first + n).collect();
+        c.min_y = self.dim.min_y();
+        c
+    }
+
+    /// Generate up to (and including) the given stage (cropped to the dimension's sections).
     pub fn generate_stages(&self, cx: i32, cz: i32, stage: Stage) -> GeneratedChunk {
         if stage >= Stage::Features { return self.decorated(cx, cz); }
+        self.crop(self.generate_raw(cx, cz, stage))
+    }
+
+    /// Up to the given stage (at most Carvers) in the internal 24-section layout.
+    fn generate_raw(&self, cx: i32, cz: i32, stage: Stage) -> GeneratedChunk {
         let mut e = Eval::new(&self.graph);
         let mut aq = Aquifer::new(self.router.aq, self.aquifer_rand, self.sea_level, self.aquifers_enabled);
         let mut blocks = self.fill_noise(&mut e, &mut aq, cx, cz);
@@ -374,7 +438,7 @@ impl Generator {
                 self.carve(&mut env, cx, cz, &mut blocks);
             }
         }
-        GeneratedChunk { blocks, biomes }
+        GeneratedChunk { blocks, biomes, min_y: MIN_Y }
     }
 
     fn carve(&self, env: &mut Env, cx: i32, cz: i32, blocks: &mut [[u16; 4096]]) {
@@ -382,7 +446,7 @@ impl Generator {
         let mut ctx = carver::CarveCtx {
             trig: &self.trig, cx, cz, mask: vec![0u64; 16 * 16 * HEIGHT as usize / 64],
             grass: state("grass_block[snowy=false]").unwrap_or(0), mycelium: state("mycelium[snowy=false]").unwrap_or(0),
-            dirt: state("dirt").unwrap_or(0), lava: self.blocks.lava,
+            dirt: state("dirt").unwrap_or(0), lava: self.blocks.lava, cave_air: state("cave_air").unwrap_or(0),
         };
         let mut target = CarveChunk { env, blocks, heights, corners };
         let mut r = random::JavaRandom::new(0);
@@ -461,18 +525,18 @@ impl Generator {
         const CW: i32 = 4;
         const CH: i32 = 8;
         const NX: usize = 5;
-        const NY: usize = (HEIGHT / CH) as usize + 1;
+        let ny: usize = (self.gen_height / CH) as usize + 1;
         let ns = self.interp_args.len();
         // corners[slot][ix][iz][iy]
-        let mut corners = vec![0f64; ns * NX * NX * NY];
-        let idx = |s: usize, ix: usize, iz: usize, iy: usize| ((s * NX + ix) * NX + iz) * NY + iy;
+        let mut corners = vec![0f64; ns * NX * NX * ny];
+        let idx = |s: usize, ix: usize, iz: usize, iy: usize| ((s * NX + ix) * NX + iz) * ny + iy;
         e.set_mode(Mode::Direct);
         for ix in 0..NX {
             for iz in 0..NX {
-                for iy in 0..NY {
+                for iy in 0..ny {
                     let x = x0 + ix as i32 * CW;
                     let z = z0 + iz as i32 * CW;
-                    let y = MIN_Y + iy as i32 * CH;
+                    let y = self.gen_min_y + iy as i32 * CH;
                     for (s, a) in self.interp_args.iter().enumerate() {
                         corners[idx(s, ix, iz, iy)] = e.eval(*a, x, y, z);
                     }
@@ -487,7 +551,7 @@ impl Generator {
             for lz in 0..16i32 {
                 let iz = (lz / CW) as usize;
                 let fz = (lz % CW) as f64 / CW as f64;
-                for yy in 0..HEIGHT {
+                for yy in 0..self.gen_height {
                     let iy = (yy / CH) as usize;
                     let fy = (yy % CH) as f64 / CH as f64;
                     e.set_mode(Mode::Interpolated);
@@ -503,7 +567,7 @@ impl Generator {
                     }
                     let x = x0 + lx;
                     let z = z0 + lz;
-                    let y = MIN_Y + yy;
+                    let y = self.gen_min_y + yy;
                     let d = e.eval(self.router.final_density, x, y, z);
                     let st = match aq.compute(e, x, y, z, d) {
                         Some(Fluid::Air) => bl.air,
@@ -513,7 +577,8 @@ impl Generator {
                             if self.ore_veins_enabled { self.ore_vein(e, x, y, z).unwrap_or(self.default_block) } else { self.default_block }
                         }
                     };
-                    out[(yy >> 4) as usize][(((yy & 15) << 8) | (lz << 4) | lx) as usize] = st;
+                    let by = y - MIN_Y;
+                    out[(by >> 4) as usize][(((by & 15) << 8) | (lz << 4) | lx) as usize] = st;
                 }
             }
         }

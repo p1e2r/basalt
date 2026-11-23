@@ -163,10 +163,40 @@ impl Heightmaps {
 /// Bits per heightmap entry: ceil(log2(HEIGHT + 1)) = 9.
 pub fn heightmap_bits() -> u8 { crate::paletted::ceil_log2(HEIGHT as usize + 1) }
 
+/// Where a dimension's build range sits inside Basalt's fixed 24-section chunk buffer
+/// (y -64..320). The overworld uses all of it; the Nether (dimension type min_y 0, height 256,
+/// no sky light) uses sections 4..20. The network and Anvil encodings only carry the
+/// dimension's own sections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Layout {
+    /// Buffer index of the dimension's bottom section.
+    pub first: usize,
+    /// Number of sections in the dimension.
+    pub count: usize,
+    /// The dimension type has sky light.
+    pub sky: bool,
+}
+
+impl Layout {
+    pub const OVERWORLD: Layout = Layout { first: 0, count: SECTIONS, sky: true };
+    pub const NETHER: Layout = Layout { first: 4, count: 16, sky: false };
+    /// World y of the dimension's bottom.
+    pub fn min_y(&self) -> i32 { MIN_Y + self.first as i32 * 16 }
+    /// One above the dimension's top block.
+    pub fn max_y(&self) -> i32 { self.min_y() + self.count as i32 * 16 }
+    pub fn contains_y(&self, y: i32) -> bool { (self.min_y()..self.max_y()).contains(&y) }
+}
+
+impl Default for Layout {
+    fn default() -> Self { Layout::OVERWORLD }
+}
+
 #[derive(Debug, Clone)]
 pub struct Chunk {
     pub x: i32,
     pub z: i32,
+    /// The dimension layout (which buffer sections are real, sky light or not).
+    pub layout: Layout,
     /// `SECTIONS` sections, bottom-up from `MIN_Y`.
     pub sections: Vec<Section>,
     /// `LIGHT_SECTIONS` (= SECTIONS + 2) sky light arrays; index 0 is the section below the world.
@@ -202,7 +232,7 @@ impl Chunk {
         let mut sky_light: Vec<LightArray> = (0..LIGHT_SECTIONS).map(|_| LightArray::filled(0)).collect();
         sky_light[LIGHT_SECTIONS - 1] = LightArray::filled(15);
         let mut c = Chunk {
-            x, z, sections, sky_light,
+            x, z, layout: Layout::OVERWORLD, sections, sky_light,
             block_light: (0..LIGHT_SECTIONS).map(|_| LightArray::filled(0)).collect(),
             heightmaps: Heightmaps::default(), block_entities: Vec::new(), extra: Default::default(),
             dirty: true, lit: false,
@@ -293,11 +323,25 @@ impl Chunk {
         }
     }
 
+    /// Put the chunk into a dimension layout (a sky-less one drops all sky light).
+    pub fn set_layout(&mut self, l: Layout) {
+        self.layout = l;
+        if !l.sky { for a in self.sky_light.iter_mut() { *a = LightArray::filled(0); } }
+    }
+
+    /// A heightmap packed relative to the dimension's bottom (what the network and the region
+    /// files carry: `highest y - dimension min_y + 1`).
+    pub fn heightmaps_packed_rel(&self, k: HeightmapKind) -> Vec<u64> {
+        let off = (self.layout.min_y() - MIN_Y) as u32;
+        let bits = crate::paletted::ceil_log2(self.layout.count * 16 + 1);
+        crate::paletted::pack(self.heightmaps.get(k).iter().map(|v| (*v as u32).saturating_sub(off)), bits)
+    }
+
     /// Reset light to the unlit state (sky 15 above the world, 0 elsewhere).
     pub fn clear_light(&mut self) {
         for a in self.block_light.iter_mut() { *a = LightArray::filled(0); }
         for a in self.sky_light.iter_mut() { *a = LightArray::filled(0); }
-        self.sky_light[LIGHT_SECTIONS - 1] = LightArray::filled(15);
+        if self.layout.sky { self.sky_light[LIGHT_SECTIONS - 1] = LightArray::filled(15); }
         self.lit = false;
         self.dirty = true;
     }
@@ -332,7 +376,7 @@ impl Chunk {
     pub fn sky_light(&self, lx: usize, y: i32, lz: usize) -> u8 {
         match Self::light_index(lx, y, lz) {
             Some((s, i)) => self.sky_light[s].get(i),
-            None => if y >= MIN_Y { 15 } else { 0 },
+            None => if y >= MIN_Y && self.layout.sky { 15 } else { 0 },
         }
     }
     pub fn block_light(&self, lx: usize, y: i32, lz: usize) -> u8 {
@@ -363,12 +407,12 @@ impl Chunk {
         write_varint(w, kinds.len() as i32);
         for k in kinds {
             write_varint(w, k as i32);
-            let longs = self.heightmaps.packed(k);
+            let longs = self.heightmaps_packed_rel(k);
             write_varint(w, longs.len() as i32);
             for l in longs { w.extend_from_slice(&l.to_be_bytes()); }
         }
         let mut data = Vec::with_capacity(4096);
-        for s in &self.sections {
+        for s in &self.sections[self.layout.first..self.layout.first + self.layout.count] {
             data.extend_from_slice(&(s.non_air as i16).to_be_bytes());
             data.extend_from_slice(&(s.fluids as i16).to_be_bytes());
             s.blocks.write_network(&mut data);
@@ -400,10 +444,13 @@ impl Chunk {
             }
             (has, empty)
         };
-        let (sky, sky_empty) = masks(&self.sky_light);
-        let (blk, blk_empty) = masks(&self.block_light);
+        let lr = self.layout.first..self.layout.first + self.layout.count + 2;
+        let (sky, sky_empty) = if self.layout.sky { masks(&self.sky_light[lr.clone()]) } else { (0, 0) };
+        let (blk, blk_empty) = masks(&self.block_light[lr.clone()]);
         for m in [sky, blk, sky_empty, blk_empty] { write_bitset(w, m); }
-        for arrs in [&self.sky_light, &self.block_light] {
+        let none: &[LightArray] = &[];
+        let sky_arrs = if self.layout.sky { &self.sky_light[lr.clone()] } else { none };
+        for arrs in [sky_arrs, &self.block_light[lr]] {
             let n = arrs.iter().filter(|a| a.uniform() != Some(0)).count();
             write_varint(w, n as i32);
             for a in arrs.iter().filter(|a| a.uniform() != Some(0)) {

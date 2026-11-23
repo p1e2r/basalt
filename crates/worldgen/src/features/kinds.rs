@@ -46,6 +46,15 @@ pub enum Kind {
     Spring(Box<super::misc::Spring>),
     MonsterRoom,
     Geode(Box<super::misc::Geode>),
+    HugeFungus(Box<super::nether::HugeFungus>),
+    NetherVegetation(Box<super::nether::Vegetation>),
+    WeepingVines,
+    TwistingVines { width: i32, height: i32, max_height: i32 },
+    GlowstoneBlob,
+    BasaltPillar,
+    Delta(Box<super::nether::Delta>),
+    BasaltColumns(Box<super::nether::BasaltColumns>),
+    ReplaceBlobs(Box<super::nether::ReplaceBlobs>),
 }
 
 fn rule_test(f: &Features, v: &Value) -> Result<Arc<Vec<bool>>> {
@@ -122,6 +131,18 @@ pub fn parse(f: &mut Features, ty: &str, c: &Value) -> Result<Kind> {
             radius: c.get("foliage_radius").and_then(|x| x.as_i64()).unwrap_or(2) as i32,
             can_place_on: Pred::parse(&f.tags, &c["can_place_on"])?,
         },
+        "huge_fungus" => Kind::HugeFungus(Box::new(super::nether::HugeFungus::parse(f, c)?)),
+        "nether_forest_vegetation" => Kind::NetherVegetation(Box::new(super::nether::parse_vegetation(f, c)?)),
+        "weeping_vines" => Kind::WeepingVines,
+        "twisting_vines" => Kind::TwistingVines {
+            width: c["spread_width"].as_i64().unwrap_or(8) as i32, height: c["spread_height"].as_i64().unwrap_or(4) as i32,
+            max_height: c["max_height"].as_i64().unwrap_or(8) as i32,
+        },
+        "glowstone_blob" => Kind::GlowstoneBlob,
+        "basalt_pillar" => Kind::BasaltPillar,
+        "delta_feature" => Kind::Delta(Box::new(super::nether::Delta::parse(c)?)),
+        "basalt_columns" => Kind::BasaltColumns(Box::new(super::nether::BasaltColumns::parse(c)?)),
+        "netherrack_replace_blobs" => Kind::ReplaceBlobs(Box::new(super::nether::ReplaceBlobs::parse(c)?)),
         t => bail!("unsupported feature type {t}"),
     })
 }
@@ -169,6 +190,15 @@ pub fn place(f: &Features, reg: &mut Region, r: &mut R, id: usize, x: i32, y: i3
         Kind::Spring(s) => s.place(reg, x, y, z),
         Kind::MonsterRoom => super::misc::monster_room(f, reg, r, x, y, z),
         Kind::Geode(g) => g.place(f, reg, r, x, y, z),
+        Kind::HugeFungus(h) => h.place(f, reg, r, x, y, z),
+        Kind::NetherVegetation(v) => super::nether::nether_vegetation(f, v, reg, r, x, y, z),
+        Kind::WeepingVines => super::nether::weeping_vines(reg, r, x, y, z),
+        Kind::TwistingVines { width, height, max_height } => super::nether::twisting_vines(reg, r, x, y, z, *width, *height, *max_height),
+        Kind::GlowstoneBlob => super::nether::glowstone_blob(reg, r, x, y, z),
+        Kind::BasaltPillar => super::nether::basalt_pillar(reg, r, x, y, z),
+        Kind::Delta(d) => d.place(reg, r, x, y, z),
+        Kind::BasaltColumns(b) => b.place(reg, r, x, y, z),
+        Kind::ReplaceBlobs(b) => b.place(reg, r, x, y, z),
         Kind::HugeMushroom { red, cap, stem, radius, can_place_on } => super::tree::huge_mushroom(f, *red, cap, stem, *radius, can_place_on, reg, r, x, y, z),
     }
 }

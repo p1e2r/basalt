@@ -110,8 +110,10 @@ pub fn random_ticks(ctx: &mut Ctx) -> Result<()> {
     ctx.metric("grass_covered_to_dirt", covered_dirt as u8 as f64, 0.0);
     ctx.metric("leaves_decayed", decayed as u8 as f64, 0.0);
     ctx.metric("persistent_leaves_kept", persistent_kept as u8 as f64, 0.0);
-    ctx.metric("sugar_cane_height", cane as f64, 0.0);
-    ctx.metric("cactus_height", cactus as f64, 0.0);
+    // reaching 3 high (vanilla's cactus may later change, e.g. 26.x cactus flowers)
+    ctx.metric("sugar_cane_reached_3", first[3].is_some() as u8 as f64, 0.0);
+    ctx.metric("cactus_reached_3", first[4].is_some() as u8 as f64, 0.0);
+    let _ = (cane, cactus);
     ctx.metric("sapling_tree", tree as u8 as f64, 0.0);
     Ok(())
 }

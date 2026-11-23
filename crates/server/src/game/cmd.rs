@@ -113,6 +113,40 @@ impl Game {
             .map(|p| p.name.clone())
             .unwrap_or_default();
         log::info!("{name} issued /{cmd}");
+        // `execute in <dimension> run <command>`: the one execute form Basalt supports (it sets the
+        // dimension a following tp/teleport resolves its destination in)
+        if let Some(rest) = cmd.strip_prefix("execute in ") {
+            let (dim, run) = rest.split_once(' ').unwrap_or((rest, ""));
+            let Some(d) = super::dim::dim_index(dim) else {
+                self.tell(eid, red(tr("argument.dimension.invalid", vec![s(dim)])));
+                return;
+            };
+            let Some(inner) = run.strip_prefix("run ") else {
+                self.tell(eid, red(tr("command.unknown.command", vec![])));
+                return;
+            };
+            let first = inner.split(' ').next().unwrap_or("");
+            if matches!(first, "tp" | "teleport") || d == self.cur {
+                let prev = self.cmd_dim.replace(d);
+                self.command(eid, inner);
+                self.cmd_dim = prev;
+            } else {
+                // any other command runs in the target dimension: the sender visits it for the
+                // duration (no packets about the move are sent)
+                let back = self.cur;
+                let Some(p) = self.players.remove(&eid) else {
+                    return;
+                };
+                self.enter(d);
+                self.players.insert(eid, p);
+                self.command(eid, inner);
+                if let Some(p) = self.players.remove(&eid) {
+                    self.enter(back);
+                    self.players.insert(eid, p);
+                }
+            }
+            return;
+        }
         let first = cmd.split(' ').next().unwrap_or("");
         // Basalt-only commands (plain text, not in vanilla)
         match first {
@@ -823,8 +857,21 @@ impl Game {
                 pitch = pi;
             }
         }
+        let who = if targets.len() == 1 {
+            self.display_name(targets[0])
+        } else {
+            s(targets.len())
+        };
         for &t in &targets {
             match t {
+                Target::Player(e) if self.cmd_dim.is_some_and(|d| d != self.cur) => {
+                    // `execute in <dim> run tp ...`: the destination is in another dimension
+                    let pl = &self.players[&e];
+                    let (y, pi) = (yaw.unwrap_or(pl.yaw), pitch.unwrap_or(pl.pitch));
+                    let (to, back) = (self.cmd_dim.unwrap_or(self.cur), self.cur);
+                    self.change_dimension(e, to, dest, y, pi);
+                    self.enter(back);
+                }
                 Target::Player(e) => {
                     let pl = self.players.get_mut(&e).unwrap();
                     pl.pos = dest;
@@ -858,11 +905,6 @@ impl Game {
                 }
             }
         }
-        let who = if targets.len() == 1 {
-            self.display_name(targets[0])
-        } else {
-            s(targets.len())
-        };
         let key = if dest_entity.is_some() {
             "commands.teleport.success.entity"
         } else {

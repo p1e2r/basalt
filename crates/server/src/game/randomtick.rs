@@ -34,7 +34,8 @@ impl Game {
             return;
         }
         let mut picks: Vec<[i32; 3]> = Vec::new();
-        // like vanilla, only chunks within the simulation distance of a player get random ticks
+        // like vanilla: chunks a player has loaded, within the simulation distance (in-memory worlds
+        // keep every chunk they ever loaded)
         let sim = (self.sh.cfg.view_distance as i32).min(10);
         let centres: Vec<(i32, i32)> = self
             .players
@@ -47,7 +48,17 @@ impl Game {
                 )
             })
             .collect();
-        for (cx, cz) in self.world.loaded_chunks() {
+        let watched: std::collections::HashSet<(i32, i32)> = self
+            .players
+            .values()
+            .flat_map(|p| p.loaded.iter().copied())
+            .collect();
+        for (cx, cz) in self
+            .world
+            .loaded_chunks()
+            .into_iter()
+            .filter(|c| watched.contains(c))
+        {
             if !centres
                 .iter()
                 .any(|(px, pz)| (cx - px).abs() <= sim && (cz - pz).abs() <= sim)

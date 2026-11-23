@@ -192,6 +192,8 @@ pub struct Game {
     entity_atlas: entity::EntityAtlas,
     biomes: Arc<Mutex<Arc<Vec<Biome>>>>,
     dim_types: Vec<String>,
+    /// the current dimension type (None before login)
+    pub dim: Option<assets::DimensionType>,
     world: World,
     player: Player,
     mesher: Mesher,
@@ -305,7 +307,7 @@ impl Game {
         let (otx, _orx) = tokio::sync::mpsc::unbounded_channel();
         let mut sounds = o.sounds; sounds.master = o.cfg.master_volume;
         let mut g = Game {
-            gpu, assets, rules, ui, entity_atlas, biomes, dim_types: Vec::new(), world: World::new(-64, 384), player: Player::new(), mesher,
+            gpu, assets, rules, ui, entity_atlas, biomes, dim_types: Vec::new(), dim: None, world: World::new(-64, 384), player: Player::new(), mesher,
             dirty: HashMap::new(), in_flight: HashSet::new(), events: rx, out: otx, entities: HashMap::new(), player_names: HashMap::new(), my_eid: 0, name: o.name,
             chat: Vec::new(), chat_input: None, cmd_tree: None, sug: Sug::default(), hp: 20.0, food: 20, xp: (0.0, 0), title: (String::new(), String::new(), -1, [10, 70, 20]), actionbar: (String::new(), 0), hotbar: Default::default(), held: 0, inventory: vec![ItemStack::default(); 46], inv_state: 0, carried: ItemStack::default(), day_time: 6000,
             spawned: false, loaded_sent: false, connected: false, keys: HashSet::new(), mouse: [false; 2], mouse_pos: (0.0, 0.0), slider_drag: None, last_tick: Instant::now(),
@@ -374,6 +376,7 @@ impl Game {
         let name = self.dim_types.get(dim_type as usize).cloned().unwrap_or_default();
         let (min_y, height) = self.assets.dimension_types.get(&name).map(|d| (d.min_y, d.height)).unwrap_or((-64, 384));
         self.world = World::new(min_y, height);
+        self.dim = self.assets.dimension_types.get(&name).cloned();
         self.gpu.sections.clear(); self.dirty.clear(); self.entities.clear(); self.destroy.clear();
     }
 
@@ -1269,13 +1272,20 @@ impl Game {
         let sun = [theta.cos(), theta.sin(), 0.0];
         let daylight = (0.5 + 2.0 * theta.sin()).clamp(0.2, 1.0);
         let col = |c: u32, k: f32| [(c >> 16 & 255) as f32 / 255.0 * k, (c >> 8 & 255) as f32 / 255.0 * k, (c & 255) as f32 / 255.0 * k, 1.0];
+        let skyless = self.dim.as_ref().is_some_and(|d| !d.has_skylight);
+        // shader flag: ambient light >= 0 means "no sky" (sky = fog colour, no sun, no sky light)
+        let ambient = if skyless { self.dim.as_ref().map(|d| d.ambient_light).unwrap_or(0.0) } else { -1.0 };
+        let daylight = if skyless { 1.0 } else { daylight };
         let dk = 0.05 + 0.95 * daylight;
         let underwater = self.assets.info(self.world.get(eye[0].floor() as i32, eye[1].floor() as i32, eye[2].floor() as i32)).fluid == 1;
-        let (fog_start, fog_end, fogc) = if std::env::var("BASALT_NOFOG").is_ok() { (1e6, 1e6 + 1.0, col(fog, dk)) } else if underwater { (0.0, 24.0, col(0x0A2A6A, dk)) } else { (render_dist - (render_dist * 0.1).clamp(4.0, 64.0), render_dist, col(fog, dk)) };
+        let (mut fog_start, mut fog_end, fogc) = if std::env::var("BASALT_NOFOG").is_ok() { (1e6, 1e6 + 1.0, col(fog, dk)) } else if underwater { (0.0, 24.0, col(0x0A2A6A, dk)) } else { (render_dist - (render_dist * 0.1).clamp(4.0, 64.0), render_dist, col(fog, dk)) };
+        // sky-less dimensions (the nether): environment fog distances of the dimension type, no sky
+        if let (false, Some((a, b))) = (underwater || std::env::var("BASALT_NOFOG").is_ok(), self.dim.as_ref().filter(|d| !d.has_skylight).and_then(|d| d.fog)) { fog_start = a.min(render_dist); fog_end = b.min(render_dist); }
+        let sky = if skyless { fog } else { sky };
         let u = Uniforms {
             vp: vp.to_cols_array_2d(), inv_vp: vp.inverse().to_cols_array_2d(),
             cam: [eye[0] as f32, eye[1] as f32, eye[2] as f32, 0.0], fog_color: fogc, sky_color: col(sky, dk),
-            params: [fog_start, fog_end, daylight, day_time as f32], screen: [w, h, underwater as u8 as f32, 0.0], sun: [sun[0], sun[1], sun[2], 0.0],
+            params: [fog_start, fog_end, daylight, day_time as f32], screen: [w, h, underwater as u8 as f32, ambient], sun: [sun[0], sun[1], sun[2], 0.0],
         };
         let cam = Vec3::new(eye[0] as f32, eye[1] as f32, eye[2] as f32);
         let mut fd = FrameData { u, cam, vp, render_dist, extra: MeshData::default(), skinned: MeshData::default(), items3d: MeshData::default(), overlay: MeshData::default(), hand_skin: MeshData::default(), hand_items: MeshData::default(), layers: Vec::new(), backdrop: self.backdrop(), blur: self.cfg.extra.get("menu_blur").copied().unwrap_or(5.0) };

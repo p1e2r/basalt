@@ -7,13 +7,20 @@ pub trait Generator: Send + Sync {
     fn generate(&self, cx: i32, cz: i32) -> Chunk;
 }
 
-/// Vanilla-matching overworld terrain (crates/worldgen).
+/// Vanilla-matching terrain of one dimension (crates/worldgen).
 pub struct Vanilla(pub basalt_worldgen::Generator);
 
 impl Generator for Vanilla {
     fn generate(&self, cx: i32, cz: i32) -> Chunk {
         let g = self.0.generate_chunk(cx, cz);
-        Chunk::from_generated(cx, cz, &g.blocks, &g.biomes)
+        // the world's chunk buffer always spans y -64..320: place the dimension's sections in it
+        let first = ((g.min_y - basalt_world::MIN_Y) / 16) as usize;
+        if first == 0 && g.blocks.len() == basalt_world::SECTIONS { return Chunk::from_generated(cx, cz, &g.blocks, &g.biomes); }
+        let mut blocks = vec![[0u16; 4096]; basalt_world::SECTIONS];
+        let mut biomes = vec![g.biomes[0]; basalt_world::SECTIONS];
+        for (i, (b, bi)) in g.blocks.iter().zip(&g.biomes).enumerate() { blocks[first + i] = *b; biomes[first + i] = *bi; }
+        if let Some(top) = g.biomes.last() { for b in biomes.iter_mut().skip(first + g.biomes.len()) { *b = *top; } }
+        Chunk::from_generated(cx, cz, &blocks, &biomes)
     }
 }
 

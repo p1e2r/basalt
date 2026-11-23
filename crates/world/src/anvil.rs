@@ -228,11 +228,11 @@ pub fn chunk_to_nbt(c: &Chunk) -> Tag {
     ins("DataVersion", Tag::Int(basalt_data::WORLD_VERSION));
     ins("xPos", Tag::Int(c.x));
     ins("zPos", Tag::Int(c.z));
-    ins("yPos", Tag::Int(MIN_Y >> 4));
+    ins("yPos", Tag::Int(c.layout.min_y() >> 4));
     ins("Status", Tag::String("minecraft:full".into()));
     ins("isLightOn", Tag::Byte(c.lit as i8));
     let mut sections = Vec::with_capacity(SECTIONS);
-    for (i, s) in c.sections.iter().enumerate() {
+    for (i, s) in c.sections.iter().enumerate().skip(c.layout.first).take(c.layout.count) {
         let mut sc = Compound::new();
         sc.insert("Y".into(), Tag::Byte(((MIN_Y >> 4) + i as i32) as i8));
         let (pal, data) = s.blocks.to_disk();
@@ -262,14 +262,14 @@ pub fn chunk_to_nbt(c: &Chunk) -> Tag {
     ins("sections", Tag::List(sections));
     let mut hm = Compound::new();
     for k in HeightmapKind::ALL {
-        hm.insert(k.disk_name().into(), Tag::LongArray(c.heightmaps.packed(k).into_iter().map(|l| l as i64).collect()));
+        hm.insert(k.disk_name().into(), Tag::LongArray(c.heightmaps_packed_rel(k).into_iter().map(|l| l as i64).collect()));
     }
     ins("Heightmaps", Tag::Compound(hm));
     ins("block_entities", Tag::List(c.block_entities.clone()));
     for k in ["block_ticks", "fluid_ticks"] {
         root.entry(k.into()).or_insert(Tag::List(vec![]));
     }
-    root.entry("PostProcessing".into()).or_insert_with(|| Tag::List((0..SECTIONS).map(|_| Tag::List(vec![])).collect()));
+    root.entry("PostProcessing".into()).or_insert_with(|| Tag::List((0..c.layout.count).map(|_| Tag::List(vec![])).collect()));
     root.entry("InhabitedTime".into()).or_insert(Tag::Long(0));
     root.entry("LastUpdate".into()).or_insert(Tag::Long(0));
     root.entry("structures".into()).or_insert_with(|| basalt_nbt::compound([("References", Tag::Compound(Compound::new())), ("starts", Tag::Compound(Compound::new()))]));
@@ -282,7 +282,10 @@ const KNOWN_KEYS: &[&str] = &["DataVersion", "xPos", "zPos", "yPos", "Status", "
 /// Parse a vanilla on-disk chunk. Heightmaps and block counts are recomputed from the blocks.
 /// Missing sky light layers are reconstructed: sections entirely above every column's
 /// highest light-blocking block are fully lit (15), others 0.
-pub fn chunk_from_nbt(t: &Tag) -> Result<Chunk> {
+pub fn chunk_from_nbt(t: &Tag) -> Result<Chunk> { chunk_from_nbt_in(t, crate::Layout::OVERWORLD) }
+
+/// Like [`chunk_from_nbt`] for a chunk of a dimension with the given layout.
+pub fn chunk_from_nbt_in(t: &Tag, layout: crate::Layout) -> Result<Chunk> {
     let root = t.as_compound().ok_or_else(|| anyhow!("chunk root is not a compound"))?;
     let geti = |k: &str| root.get(k).and_then(|v| v.as_i64()).map(|v| v as i32);
     let x = geti("xPos").ok_or_else(|| anyhow!("missing xPos"))?;
@@ -340,6 +343,7 @@ pub fn chunk_from_nbt(t: &Tag) -> Result<Chunk> {
         c.sky_light[li] = match s { Some(a) => a, None => LightArray::filled(if bottom > top { 15 } else { 0 }) };
     }
     c.block_light = block;
+    c.set_layout(layout);
     c.lit = lit;
     if let Some(Tag::List(be)) = root.get("block_entities") {
         c.block_entities = be.iter().filter(|t| t.as_compound().is_some()).cloned().collect();
@@ -356,8 +360,10 @@ pub fn chunk_to_bytes(c: &Chunk) -> Vec<u8> {
     out
 }
 
-pub fn chunk_from_bytes(b: &[u8]) -> Result<(Chunk, String)> {
+pub fn chunk_from_bytes(b: &[u8]) -> Result<(Chunk, String)> { chunk_from_bytes_in(b, crate::Layout::OVERWORLD) }
+
+pub fn chunk_from_bytes_in(b: &[u8], layout: crate::Layout) -> Result<(Chunk, String)> {
     let (_, t) = basalt_nbt::Reader::new(b).named()?;
     let status = t.get("Status").and_then(|s| s.as_str()).unwrap_or("").to_string();
-    Ok((chunk_from_nbt(&t)?, status))
+    Ok((chunk_from_nbt_in(&t, layout)?, status))
 }

@@ -66,6 +66,9 @@ pub struct State {
     pub name: String,
     pub eid: i32,
     pub gamemode: u8,
+    /// Current dimension (login / respawn), e.g. `minecraft:the_nether`; respawns counts respawn packets.
+    pub dim: String,
+    pub respawns: u32,
     pub may_fly: bool,
     pub body: Body,
     pub input: Input,
@@ -215,7 +218,7 @@ impl Bot {
         let (otx, mut orx) = unbounded_channel::<Vec<u8>>();
         let st = Arc::new(Mutex::new(State {
             weather_events: Vec::new(), rain: 0.0, thunder: 0.0,
-            name: name.to_string(), eid: -1, gamemode: 0, may_fly: false, body: Body::default(), input: Input::default(), goal: None, frozen: false,
+            name: name.to_string(), eid: -1, gamemode: 0, dim: String::new(), respawns: 0, may_fly: false, body: Body::default(), input: Input::default(), goal: None, frozen: false,
             spawned: false, loaded_sent: false, dead: false, death_msg: None, health: 20.0, food: 20, saturation: 5.0, air: 300, ticks_frozen: 0, flags: 0,
             effects: HashMap::new(), inv: vec![Stack::default(); 46], cursor: Stack::default(), held: 0, state_id: 0, cont_log: Vec::new(), screen: None, container: Vec::new(),
             chat: Vec::new(), entities: HashMap::new(), players: HashMap::new(), world: World::default(), teleports: Vec::new(), plog: Vec::new(),
@@ -527,15 +530,15 @@ fn handle(s: &mut State, id: i32, data: &[u8]) -> Result<()> {
             s.eid = r.i32()?; r.bool()?;
             let n = r.varint()?; for _ in 0..n { r.str()?; }
             r.varint()?; r.varint()?; r.varint()?; r.bool()?; r.bool()?; r.bool()?;
-            r.varint()?; r.str()?; r.i64()?; s.gamemode = r.u8()?;
+            r.varint()?; s.dim = r.str()?; r.i64()?; s.gamemode = r.u8()?; s.world = World::for_dim(&s.dim);
         }
         cb::RESPAWN => {
-            r.varint()?; r.str()?; r.i64()?; s.gamemode = r.u8()?;
-            s.world = World::default(); s.entities.clear(); s.dead = false; s.spawned = false; s.loaded_sent = false;
+            r.varint()?; s.dim = r.str()?; r.i64()?; s.gamemode = r.u8()?; s.world = World::for_dim(&s.dim);
+            s.respawns += 1; s.world = World::for_dim(&s.dim); s.entities.clear(); s.dead = false; s.spawned = false; s.loaded_sent = false;
             s.body.vel = [0.0; 3]; s.health = 20.0; s.effects.clear();
         }
         cb::CHUNK_BATCH_FINISHED => { let mut w = Writer::with_id(sb::CHUNK_BATCH_RECEIVED); w.f32(25.0); s.send(w); }
-        cb::LEVEL_CHUNK_WITH_LIGHT => { let cx = r.i32()?; let cz = r.i32()?; let c = Column::decode(&mut r)?; s.world.chunks.insert((cx, cz), c); }
+        cb::LEVEL_CHUNK_WITH_LIGHT => { let cx = r.i32()?; let cz = r.i32()?; let c = Column::decode(&mut r, s.world.sections)?; s.world.chunks.insert((cx, cz), c); }
         cb::FORGET_LEVEL_CHUNK => { let cz = r.i32()?; let cx = r.i32()?; s.world.chunks.remove(&(cx, cz)); }
         cb::CONTAINER_SET_DATA => { let w = r.varint()?; let id = r.i16()?; let v = r.i16()?; if s.screen.as_ref().map(|x| x.0) == Some(w) { s.props.insert(id, v); s.prop_log.push((Instant::now(), id, v)); } }
         cb::BLOCK_EVENT => { let (x, y, z) = r.position()?; let t = r.u8()?; let v = r.u8()?; s.block_events.push((Instant::now(), [x, y, z], t, v)); }

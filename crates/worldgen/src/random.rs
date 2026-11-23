@@ -123,6 +123,70 @@ impl PosFactory {
     pub fn from_seed(&self, seed: i64) -> Xoroshiro { Xoroshiro::from_state(seed ^ self.lo, self.hi) }
 }
 
+/// Positional random factory of either flavour: Xoroshiro (modern noise settings) or the legacy
+/// java.util.Random one (`legacy_random_source: true`, e.g. the Nether). Legacy: `from_hash(s)` is
+/// `JavaRandom(String.hashCode(s) ^ seed)`, `at(x, y, z)` is `JavaRandom(pos_seed ^ seed)`.
+#[derive(Clone, Copy, Debug)]
+pub enum Positional {
+    Xoro(PosFactory),
+    Legacy(i64),
+}
+
+impl Positional {
+    /// The world's root factory: `<source>(seed).forkPositional()`.
+    pub fn world(seed: i64, legacy: bool) -> Self {
+        if legacy { Positional::Legacy(JavaRandom::new(seed).next_long()) } else { Positional::Xoro(Xoroshiro::new(seed).fork_positional()) }
+    }
+    pub fn at(&self, x: i32, y: i32, z: i32) -> AnyRng {
+        match self {
+            Positional::Xoro(f) => AnyRng::X(f.at(x, y, z)),
+            Positional::Legacy(s) => AnyRng::J(JavaRandom::new(pos_seed(x, y, z) ^ s)),
+        }
+    }
+    pub fn from_hash(&self, name: &str) -> AnyRng {
+        match self {
+            Positional::Xoro(f) => AnyRng::X(f.from_hash(name)),
+            Positional::Legacy(s) => AnyRng::J(JavaRandom::new(crate::noise::java_hash(name) as i64 ^ s)),
+        }
+    }
+    pub fn is_legacy(&self) -> bool { matches!(self, Positional::Legacy(_)) }
+    /// The Xoroshiro factory (legacy: a fixed dummy; only used by stages the legacy settings disable).
+    pub fn xoro(&self) -> PosFactory {
+        match self { Positional::Xoro(f) => *f, Positional::Legacy(s) => PosFactory { lo: *s, hi: !*s } }
+    }
+}
+
+/// A generator of either flavour (what a [`Positional`] hands out).
+#[derive(Clone, Debug)]
+pub enum AnyRng {
+    X(Xoroshiro),
+    J(JavaRandom),
+}
+
+impl AnyRng {
+    pub fn fork_positional(&mut self) -> Positional {
+        match self {
+            AnyRng::X(x) => Positional::Xoro(x.fork_positional()),
+            AnyRng::J(j) => Positional::Legacy(j.next_long()),
+        }
+    }
+}
+
+macro_rules! any_dispatch {
+    ($s:ident, $r:ident => $e:expr) => { match $s { AnyRng::X($r) => $e, AnyRng::J($r) => $e } };
+}
+
+impl Rng for AnyRng {
+    fn next_long(&mut self) -> i64 { any_dispatch!(self, r => r.next_long()) }
+    fn next_int(&mut self) -> i32 { any_dispatch!(self, r => r.next_int()) }
+    fn next_int_bounded(&mut self, bound: i32) -> i32 { any_dispatch!(self, r => r.next_int_bounded(bound)) }
+    fn next_double(&mut self) -> f64 { any_dispatch!(self, r => r.next_double()) }
+    fn next_float(&mut self) -> f32 { any_dispatch!(self, r => r.next_float()) }
+    fn next_bool(&mut self) -> bool { any_dispatch!(self, r => r.next_bool()) }
+    fn consume(&mut self, n: usize) { any_dispatch!(self, r => r.consume(n)) }
+    fn set_seed(&mut self, seed: i64) { any_dispatch!(self, r => r.set_seed(seed)) }
+}
+
 /// java.util.Random-compatible LCG.
 #[derive(Clone, Debug)]
 pub struct JavaRandom {
