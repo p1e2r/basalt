@@ -605,6 +605,16 @@ pub fn scoreboard(ctx: &mut Ctx) -> Result<()> {
     bot.cmd_reply("tag @s remove bzsel")?;
     is(ctx, "sel_no_tags", "tag @s[tag=] list", "commands.tag.list.single.empty")?;
     is(ctx, "list_self", "scoreboard players list @s", "commands.scoreboard.players.list.entity.success")?;
+    // operations: #bz = 9, @s = 7
+    for (label, c) in [("op_add", "#bz += @s"), ("op_mod", "#bz %= @s"), ("op_swap", "#bz >< @s"), ("op_min", "#bz < @s"), ("op_mul", "#bz *= @s"), ("op_set", "#bz = @s")] {
+        let (t, rest) = c.split_once(' ').unwrap();
+        let (op, src) = rest.split_once(' ').unwrap();
+        let a = is(ctx, label, &format!("scoreboard players operation {t} {o} {op} {src} {o}"), "commands.scoreboard.players.operation.success.single")?;
+        ctx.metric(&format!("{label}_value"), a.get(2).and_then(|v| v.parse().ok()).unwrap_or(-999.0), 0.0);
+    }
+    is(ctx, "op_div0", &format!("scoreboard players operation #bz {o} /= #nobody {o}"), "arguments.operation.div0")?;
+    let a = is(ctx, "op_after_get", &format!("scoreboard players get @s {o}"), "commands.scoreboard.players.get.success")?;
+    ctx.metric("op_self_after", a.get(1).and_then(|v| v.parse().ok()).unwrap_or(-999.0), 0.0);
     is(ctx, "display", &format!("scoreboard objectives setdisplay sidebar {o}"), "commands.scoreboard.objectives.display.set")?;
     is(ctx, "display_again", &format!("scoreboard objectives setdisplay sidebar {o}"), "commands.scoreboard.objectives.display.alreadySet")?;
     is(ctx, "reset", &format!("scoreboard players reset @s {o}"), "commands.scoreboard.players.reset.specific.single")?;

@@ -508,6 +508,51 @@ impl Game {
                     ),
                 }
             }
+            "scoreboard players operation targets targetObjective operation source sourceObjective" => {
+                // measured on vanilla 26.2 (2026-11-24): unset scores count as 0, /= and %= by 0 fail
+                // with arguments.operation.div0, >< swaps, the reply shows the target's new value
+                let (to, so) = (p.arg("targetObjective").to_string(), p.arg("sourceObjective").to_string());
+                self.need_objective(&to)?;
+                self.need_objective(&so)?;
+                let op = p.arg("operation").to_string();
+                let targets = self.holders(eid, p.arg("targets"))?;
+                let sources = self.holders(eid, p.arg("source"))?;
+                if targets.is_empty() || sources.is_empty() {
+                    return Err(err("argument.entity.notfound.entity", &[]));
+                }
+                let mut last = 0;
+                for t in &targets {
+                    for src in &sources {
+                        let a = *self.scoreboard.scores.get(&(t.clone(), to.clone())).unwrap_or(&0);
+                        let b = *self.scoreboard.scores.get(&(src.clone(), so.clone())).unwrap_or(&0);
+                        let floor_div = |x: i32, y: i32| { let q = x.wrapping_div(y); if (x % y != 0) && ((x < 0) != (y < 0)) { q - 1 } else { q } };
+                        let v = match op.as_str() {
+                            "=" => b,
+                            "+=" => a.wrapping_add(b),
+                            "-=" => a.wrapping_sub(b),
+                            "*=" => a.wrapping_mul(b),
+                            "/=" | "%=" if b == 0 => return Err(err("arguments.operation.div0", &[])),
+                            "/=" => floor_div(a, b),
+                            "%=" => a.wrapping_sub(floor_div(a, b).wrapping_mul(b)),
+                            "<" => a.min(b),
+                            ">" => a.max(b),
+                            "><" => {
+                                self.scoreboard.scores.insert((src.clone(), so.clone()), a);
+                                self.sb_broadcast(score_packet(src, &so, a));
+                                b
+                            }
+                            _ => return Err(err("arguments.operation.invalid", &[])),
+                        };
+                        self.scoreboard.scores.insert((t.clone(), to.clone()), v);
+                        self.sb_broadcast(score_packet(t, &to, v));
+                        last = v;
+                    }
+                }
+                let who = if targets.len() == 1 { text::plain(&targets[0]) } else { s(targets.len()) };
+                let key = plural("commands.scoreboard.players.operation.success", targets.len());
+                let args = if targets.len() == 1 { vec![self.obj_text(&to), who, s(last)] } else { vec![self.obj_text(&to), who] };
+                self.ok(eid, &key, args);
+            }
             _ => return Err(err("command.unknown.command", &[])),
         }
         Ok(())
