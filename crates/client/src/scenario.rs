@@ -14,7 +14,7 @@ use winit::keyboard::KeyCode;
 const W: u32 = 854;
 const H: u32 = 480;
 
-pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus"];
+pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles"];
 
 enum Outcome { Pass(String), Skip(String) }
 
@@ -40,7 +40,7 @@ pub fn run(args: &Args, assets: Arc<Assets>, name: &str) -> Result<bool> {
         let t = Instant::now();
         let r = match s {
             "edge_chunks" => edge_chunks(&ctx), "inventory" => inventory(&ctx), "crafting_table" => crafting_table(&ctx), "death" => death(&ctx),
-            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx),
+            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx),
             other => Err(anyhow!("unknown scenario {other} (known: {})", ALL.join(", "))),
         };
         let secs = t.elapsed().as_secs_f32();
@@ -722,4 +722,71 @@ fn menus(c: &Ctx) -> Result<Outcome> {
     click_at(&mut g, x, y, 0)?; click_at(&mut g, x, y, 0)?;
     if !wait_until(&mut g, 20.0, |g| g.spawned && g.screen.is_none())? { bail!("did not join from the server list"); }
     Ok(Outcome::Pass(format!("title→multiplayer→direct→join, pause→options fov {new_fov}→saved, disconnect→title, add server→join; ui clicks {clicks}+")))
+}
+
+/// Held item in first person (block model and an extruded flat item), the lower/raise animation on
+/// switching, and the item name shown above the hotbar (vanilla client recording, 2026-11-23).
+fn held_item(c: &Ctx) -> Result<Outcome> {
+    let mut g = c.game("held")?;
+    join(&mut g)?;
+    cmd(&mut g, "gamemode survival");
+    cmd(&mut g, "clear @s");
+    cmd(&mut g, "time set noon");
+    tp(&mut g, [860.5, -60.0, 860.5], 0.0, 20.0)?;
+    let mut details = Vec::new();
+    for item in ["oak_planks", "torch"] {
+        cmd(&mut g, "clear @s");
+        cmd(&mut g, &format!("give @s {item}"));
+        if !wait_until(&mut g, 3.0, |g| g.hotbar[0].item == item_id(item) && g.hotbar[0].count > 0)? { bail!("no {item}"); }
+        let want = crate::lang::item_name(item_id(item));
+        if !wait_until(&mut g, 0.3, |g| g.held_name.1 > 0 && g.held_name.0 == want)? { bail!("item name not shown for {item}: {:?}", g.held_name); }
+        if g.equip.0 >= 1.0 { bail!("no equip animation after selecting {item}"); }
+        wait(&mut g, 0.5)?;
+        if g.equip.0 < 1.0 { bail!("equip animation did not finish for {item}"); }
+        g.fp_swing = -1;
+        let with = capture(&mut g)?;
+        g.hide_hand = true; let without = capture(&mut g)?; g.hide_hand = false;
+        // the item sits in the lower right quarter of the view
+        let (w, h) = (W as i32, H as i32);
+        let inside = diff_count(&with, &without, w / 2, h / 2, w, h);
+        let outside = diff_count(&with, &without, 0, 0, w / 2, h / 2);
+        save(&g, &with, &format!("held_{item}"));
+        if inside < 800 { bail!("{item} barely drawn in the hand ({inside} px)"); }
+        if outside > inside / 10 { bail!("{item} drawn outside the lower right ({outside} px)"); }
+        // the name fades out after about 2 s
+        wait(&mut g, 2.3)?;
+        if g.held_name.1 > 0 { bail!("item name still shown after 2.3 s"); }
+        details.push(format!("{item} {inside}px"));
+    }
+    Ok(Outcome::Pass(details.join(", ")))
+}
+
+/// Breaking a block bursts chips of its texture that fall and vanish; digging sprays a few.
+fn break_particles(c: &Ctx) -> Result<Outcome> {
+    let mut g = c.game("parts")?;
+    join(&mut g)?;
+    cmd(&mut g, "gamemode survival");
+    cmd(&mut g, "clear @s");
+    tp(&mut g, [900.5, -60.0, 900.5], 0.0, 0.0)?;
+    let b = [900, -60, 902];
+    cmd(&mut g, &format!("setblock {} {} {} dirt", b[0], b[1], b[2]));
+    if !wait_until(&mut g, 3.0, |g| basalt_data::BlockState(g.world.get(b[0], b[1], b[2]) as u32).name() == "dirt")? { bail!("setblock failed"); }
+    wait(&mut g, 0.3)?;
+    look_at(&mut g, [b[0] as f64 + 0.5, b[1] as f64 + 0.5, b[2] as f64]);
+    step(&mut g)?;
+    g.last_dig = None;
+    g.mouse_button(0, true);
+    let (mut dig_max, mut after) = (0usize, 0usize);
+    let t0 = Instant::now();
+    while g.last_dig.is_none() && t0.elapsed().as_secs_f32() < 4.0 { step(&mut g)?; dig_max = dig_max.max(g.particles.len()); }
+    g.mouse_button(0, false);
+    if g.last_dig.is_none() { bail!("dirt did not break"); }
+    step(&mut g)?;
+    after = after.max(g.particles.len());
+    let img = capture(&mut g)?; save(&g, &img, "break_particles");
+    if dig_max < 3 { bail!("digging sprayed {dig_max} particles"); }
+    if after < 50 { bail!("break burst only {after} particles (vanilla: 4x4x4)"); }
+    wait(&mut g, 2.5)?;
+    if !g.particles.is_empty() { bail!("{} particles still alive after 2.5 s", g.particles.len()); }
+    Ok(Outcome::Pass(format!("{dig_max} while digging, {after} on break, all gone after 2.5 s")))
 }

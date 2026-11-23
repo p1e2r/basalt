@@ -58,6 +58,10 @@ pub struct Frame<'a> {
     pub items3d: &'a MeshData,
     /// block-breaking cracks (block atlas, alpha blended)
     pub overlay: &'a MeshData,
+    /// first-person arm (entity atlas) and held item (block atlas), drawn after the world over a
+    /// cleared depth buffer so they never clip into nearby blocks
+    pub hand_skin: &'a MeshData,
+    pub hand_items: &'a MeshData,
     /// 2D layers drawn in order, each with its texture
     pub ui_layers: &'a [(MeshData, Tex)],
 }
@@ -176,6 +180,7 @@ impl Gpu {
         }
         vis.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
         let extra = self.upload(f.extra); let skinned = self.upload(f.skinned); let items3d = self.upload(f.items3d); let overlay = self.upload(f.overlay);
+        let (hand_skin, hand_items) = (self.upload(f.hand_skin), self.upload(f.hand_items));
         let layers: Vec<(Option<GpuMesh>, Tex)> = f.ui_layers.iter().map(|(m, t)| (self.upload(m), *t)).collect();
         let mut enc = self.device.create_command_encoder(&Default::default());
         {
@@ -197,6 +202,17 @@ impl Gpu {
             if let Some(m) = &overlay { rp.set_pipeline(&self.p_crack); draw_mesh(&mut rp, m); }
             rp.set_pipeline(&self.p_trans);
             for (_, s) in vis.iter().rev() { if let Some(m) = &s.layers[2] { draw_mesh(&mut rp, m); } }
+        }
+        {
+            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { view, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &self.depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }),
+                timestamp_writes: None, occlusion_query_set: None });
+            rp.set_bind_group(0, &self.ubind, &[]);
+            let draw_mesh = |rp: &mut wgpu::RenderPass, m: &GpuMesh| { rp.set_vertex_buffer(0, m.vb.slice(..)); rp.set_index_buffer(m.ib.slice(..), wgpu::IndexFormat::Uint32); rp.draw_indexed(0..m.count, 0, 0..1); };
+            rp.set_pipeline(&self.p_cutout);
+            if let Some(m) = &hand_skin { rp.set_bind_group(1, &self.skin_bind, &[]); draw_mesh(&mut rp, m); }
+            if let Some(m) = &hand_items { rp.set_bind_group(1, &self.atlas_bind, &[]); draw_mesh(&mut rp, m); }
             rp.set_pipeline(&self.p_ui);
             for (m, t) in &layers {
                 let Some(m) = m else { continue };

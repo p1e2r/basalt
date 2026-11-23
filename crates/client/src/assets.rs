@@ -106,6 +106,9 @@ pub struct StateInfo {
     pub ao_occluder: bool,
 }
 
+/// Per part of a block state: its weighted (model, weight) choices.
+pub type VariantParts = Vec<Vec<(u32, u32)>>;
+
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Rect { pub x: u32, pub y: u32, pub w: u32, pub h: u32 }
 
@@ -175,7 +178,14 @@ fn parse_color(v: Option<&Value>) -> Option<u32> {
 // ------------------------------------------------------------------ models
 
 /// `forced`: texture variables declared as {"sprite": .., "force_translucent": true}
-struct RawModel { textures: HashMap<String, String>, forced: std::collections::HashSet<String>, elements: Option<Vec<Value>>, ao: bool }
+struct RawModel { textures: HashMap<String, String>, forced: std::collections::HashSet<String>, elements: Option<Vec<Value>>, ao: bool, display: HashMap<String, [f32; 9]> }
+
+/// `display` transform of a model: rotation (degrees), translation (1/16 block), scale.
+fn parse_display(v: &Value) -> Option<[f32; 9]> {
+    let g = |k: &str, d: [f32; 3]| -> [f32; 3] { v.get(k).and_then(|a| a.as_array()).map(|a| [0, 1, 2].map(|i| a.get(i).and_then(|x| x.as_f64()).unwrap_or(d[i] as f64) as f32)).unwrap_or(d) };
+    let (r, t, s) = (g("rotation", [0.0; 3]), g("translation", [0.0; 3]), g("scale", [1.0; 3]));
+    Some([r[0], r[1], r[2], t[0], t[1], t[2], s[0], s[1], s[2]])
+}
 
 struct Baker<'a> {
     jar: &'a Jar,
@@ -218,9 +228,9 @@ impl<'a> Baker<'a> {
         let name = strip(name).to_string();
         if let Some(m) = self.raw.get(&name) { return Some(m.clone()); }
         let v = self.jar.json(&format!("assets/minecraft/models/{name}.json"))?;
-        let mut textures = HashMap::new(); let mut forced = std::collections::HashSet::new(); let mut elements = None; let mut ao = true;
+        let mut textures = HashMap::new(); let mut forced = std::collections::HashSet::new(); let mut elements = None; let mut ao = true; let mut display = HashMap::new();
         if let Some(p) = v.get("parent").and_then(|p| p.as_str()) {
-            if let Some(pm) = self.raw(p) { textures = pm.textures.clone(); forced = pm.forced.clone(); elements = pm.elements.clone(); ao = pm.ao; }
+            if let Some(pm) = self.raw(p) { textures = pm.textures.clone(); forced = pm.forced.clone(); elements = pm.elements.clone(); ao = pm.ao; display = pm.display.clone(); }
         }
         if let Some(t) = v.get("textures").and_then(|t| t.as_object()) {
             for (k, val) in t {
@@ -231,7 +241,8 @@ impl<'a> Baker<'a> {
         }
         if let Some(e) = v.get("elements").and_then(|e| e.as_array()) { elements = Some(e.clone()); }
         if let Some(a) = v.get("ambientocclusion").and_then(|a| a.as_bool()) { ao = a; }
-        let m = std::rc::Rc::new(RawModel { textures, forced, elements, ao });
+        if let Some(d) = v.get("display").and_then(|d| d.as_object()) { for (k, t) in d { if let Some(t) = parse_display(t) { display.insert(k.clone(), t); } } }
+        let m = std::rc::Rc::new(RawModel { textures, forced, elements, ao, display });
         self.raw.insert(name, m.clone());
         Some(m)
     }
@@ -518,15 +529,19 @@ pub struct Assets {
     pub item_icons: Vec<Option<String>>,
     /// item id -> baked block model (3D icon / dropped mini-block), tinted with `item_tint`
     pub item_models: Vec<Option<u32>>,
+    /// `display.firstperson_righthand` of each item's model (rotation°, translation/16, scale)
+    pub item_fp: Vec<Option<[f32; 9]>>,
     pub item_tint: Vec<Option<u32>>,
     /// per block state: the blockstate file applied no model at all
     /// 0 = has a model, 1 = the blockstate file applied no model, 2 = multipart with no matching part (renders nothing, like vanilla)
     pub no_model: Vec<u8>,
+    /// per block state: atlas name of its particle texture (break/dig particles)
+    pub particle: Vec<Option<String>>,
     /// per block state: the blockstate file offers several weighted models (vanilla picks one by position)
     pub random_variant: Vec<bool>,
     /// per block state with weighted variants: for each part (multipart apply / the variants entry) its (model, weight) list;
     /// vanilla picks one per part from a position-seeded random generator (see `mesh::pick_variants`)
-    pub variant_parts: Vec<Option<Box<Vec<Vec<(u32, u32)>>>>>,
+    pub variant_parts: Vec<Option<Box<VariantParts>>>,
 }
 
 impl Assets {
@@ -537,9 +552,12 @@ impl Assets {
         let mut states = Vec::with_capacity(basalt_data::blocks::STATE_COUNT);
         crate::lang::init(jar.files.get("assets/minecraft/lang/en_us.json").map(|v| v.as_slice()));
         let mut no_model = Vec::with_capacity(basalt_data::blocks::STATE_COUNT);
+        let mut particle: Vec<Option<String>> = Vec::with_capacity(basalt_data::blocks::STATE_COUNT);
         let mut random_variant = Vec::with_capacity(basalt_data::blocks::STATE_COUNT);
-        let mut variant_parts: Vec<Option<Box<Vec<Vec<(u32, u32)>>>>> = vec![None; basalt_data::blocks::STATE_COUNT];
+        let mut variant_parts: Vec<Option<Box<VariantParts>>> = vec![None; basalt_data::blocks::STATE_COUNT];
+        #[allow(clippy::type_complexity)]
         let (mut item_models, mut item_tint, mut item_icons): (Vec<Option<u32>>, Vec<Option<u32>>, Vec<Option<String>>) = (Vec::new(), Vec::new(), Vec::new());
+        let mut item_fp: Vec<Option<[f32; 9]>> = Vec::new();
         {
             let mut baker = Baker { jar: &jar, raw: HashMap::new(), atlas: &atlas };
             let mut cache: HashMap<String, u32> = HashMap::new();
@@ -549,6 +567,7 @@ impl Assets {
                 let bs = bs_cache.entry(b.name).or_insert_with(|| jar.json(&format!("assets/minecraft/blockstates/{}.json", b.name)));
                 // collect applied (model, x, y, uvlock) = the first variant of every part, plus every part's weighted variants
                 let mut applied: Vec<(String, i32, i32, bool)> = Vec::new();
+                #[allow(clippy::type_complexity)]
                 let mut parts: Vec<Vec<(String, i32, i32, bool, u32)>> = Vec::new();
                 let mut random = false;
                 let mut push = |v: &Value| {
@@ -589,6 +608,9 @@ impl Assets {
                 }
                 // a multipart state matching no part renders nothing in vanilla either (e.g. an isolated wall without post)
                 random_variant.push(random);
+                // break/dig particle sprite: the first applied model's `particle` texture
+                particle.push(applied.first().and_then(|f| baker.raw(&f.0)).and_then(|r| Baker::resolve_tex(&r, "#particle")).map(|t| t.0).filter(|t| atlas.rects.contains_key(t))
+                    .or_else(|| match b.name { "water" => Some("block/water_still".into()), "lava" => Some("block/lava_still".into()), _ => None }));
                 no_model.push(if !applied.is_empty() { 0 } else if bs.as_ref().map(|b| b.get("multipart").is_some()).unwrap_or(false) { 2 } else { 1 });
                 let key = format!("{applied:?}");
                 let mi = match cache.get(&key) { Some(i) => *i, None => {
@@ -617,7 +639,7 @@ impl Assets {
             }
             // items: items/<name>.json → a block model (3D icon) or an item model's layer0 texture
             for n in basalt_data::registries::ITEM.iter() {
-                let mut model_idx = None; let mut icon = None; let mut tint = None;
+                let mut model_idx = None; let mut icon = None; let mut tint = None; let mut fp = None;
                 let def = jar.json(&format!("assets/minecraft/items/{n}.json"));
                 let model = def.as_ref().and_then(|d| d.get("model"));
                 // follow the first plain "minecraft:model" reachable through select/condition/range cases
@@ -643,13 +665,14 @@ impl Assets {
                     }
                     // flat icon: layer0 of the model (follow parents)
                     if let Some(raw) = baker.raw(mname) {
+                        fp = raw.display.get("firstperson_righthand").copied();
                         if let Some(t) = raw.textures.get("layer0").or(raw.textures.get("particle")) {
                             let t = strip(t).to_string();
                             if !t.starts_with('#') && atlas.rects.contains_key(&t) { icon = Some(t); }
                         }
                     }
                 }
-                item_models.push(model_idx); item_tint.push(tint); item_icons.push(icon);
+                item_models.push(model_idx); item_tint.push(tint); item_icons.push(icon); item_fp.push(fp);
             }
         }
         // icons not found through the item definition: guess from texture names
@@ -685,7 +708,7 @@ impl Assets {
             water_still: uvrect("block/water_still"), water_flow: uvrect("block/water_flow"), lava_still: uvrect("block/lava_still"), water_overlay: uvrect("block/water_overlay"), lava_flow: uvrect("block/lava_flow"),
             grass_map: jar.png("assets/minecraft/textures/colormap/grass.png"), foliage_map: jar.png("assets/minecraft/textures/colormap/foliage.png"),
             font: jar.png("assets/minecraft/textures/font/ascii.png"),
-            atlas, models, states, biome_json, dimension_types, gui, entity_tex, item_icons, item_models, item_tint, no_model, random_variant, variant_parts,
+            atlas, models, states, biome_json, dimension_types, gui, entity_tex, item_icons, item_models, item_fp, item_tint, no_model, particle, random_variant, variant_parts,
         })
     }
 
