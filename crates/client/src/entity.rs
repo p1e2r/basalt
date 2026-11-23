@@ -212,10 +212,13 @@ fn cube(from: [f32; 3], size: [f32; 3], uv: [f32; 2]) -> Cube { Cube { from, siz
 fn cube_i(from: [f32; 3], size: [f32; 3], uv: [f32; 2], inflate: f32) -> Cube { Cube { from, size, uv, inflate, mirror: false } }
 fn cube_m(from: [f32; 3], size: [f32; 3], uv: [f32; 2]) -> Cube { Cube { from, size, uv, inflate: 0.0, mirror: true } }
 
+/// (vanilla part name, pivot px, rotation rad)
+pub type PartPose = (&'static str, [f32; 3], [f32; 3]);
+
 thread_local! {
     /// When set, every model part emitted is recorded as (vanilla part name, pivot, rotation) — the
     /// animation comparer (`--anim-eval`, anim.rs) diffs these against the oracle's bone dumps.
-    pub static REC: std::cell::RefCell<Option<Vec<(&'static str, [f32; 3], [f32; 3])>>> = const { std::cell::RefCell::new(None) };
+    pub static REC: std::cell::RefCell<Option<Vec<PartPose>>> = const { std::cell::RefCell::new(None) };
 }
 
 struct Emitter<'a> { out: &'a mut MeshData, base: Mat4, tex: [u32; 4], aw: f32, ah: f32, color: [u8; 4], light: [u8; 2] }

@@ -473,7 +473,7 @@ impl Game {
             Event::EntityData { id, entries } => { if let Some(e) = self.entities.get_mut(&id) { e.apply_meta(&entries); } }
             Event::HeadYaw { id, yaw } => { if let Some(e) = self.entities.get_mut(&id) { e.set_head(yaw); } }
             Event::Animate { id, action } => { if action == 0 || action == 3 { if let Some(e) = self.entities.get_mut(&id) { e.swing = 0; } } }
-            Event::Hurt { id } => { if id == self.my_eid { self.self_hurt = 10; } if let Some(e) = self.entities.get_mut(&id) { e.hurt = 10; } }
+            Event::Hurt { id } => { if id == self.my_eid { self.self_hurt = 10; } else if let Some(e) = self.entities.get_mut(&id) { e.hurt = 10; } }
             Event::EntityEvent { id, status } => { if let Some(e) = self.entities.get_mut(&id) { match status { 3 => { if e.death == 0 { e.death = 1; } } 2 => e.hurt = 10, _ => {} } } }
             Event::TakeItem { item, collector } => {
                 if collector == self.my_eid { let p = self.player.pos; self.sounds.play("entity.item.pickup", Some(p), 0.2, 1.4); }
