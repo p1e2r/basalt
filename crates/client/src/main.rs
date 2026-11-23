@@ -226,6 +226,8 @@ pub struct Game {
     /// other players' block_destruction progress: eid → (block, stage)
     destroy: HashMap<i32, ([i32; 3], i8)>,
     fp_swing: i32,
+    /// sprint state last reported with player_command
+    sprinting: bool,
     pub particles: particles::Particles,
     /// first-person equip progress (now, previous tick) and the (slot, item) it was raised for
     pub equip: (f32, f32), equip_for: i32,
@@ -281,7 +283,7 @@ impl Game {
             dirty: HashMap::new(), in_flight: HashSet::new(), events: rx, out: otx, entities: HashMap::new(), player_names: HashMap::new(), my_eid: 0, name: o.name,
             chat: Vec::new(), chat_input: None, cmd_tree: None, sug: Sug::default(), hp: 20.0, food: 20, hotbar: Default::default(), held: 0, inventory: vec![ItemStack::default(); 46], inv_state: 0, carried: ItemStack::default(), day_time: 6000,
             spawned: false, loaded_sent: false, connected: false, keys: HashSet::new(), mouse: [false; 2], mouse_pos: (0.0, 0.0), slider_drag: None, last_tick: Instant::now(),
-            last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, particles: Default::default(), equip: (1.0, 1.0), equip_for: -1, held_name: (String::new(), 0), splash: String::new(), menu_t0: Instant::now(), step_dist: 0.0,
+            last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, sprinting: false, particles: Default::default(), equip: (1.0, 1.0), equip_for: -1, held_name: (String::new(), 0), splash: String::new(), menu_t0: Instant::now(), step_dist: 0.0,
             last_place: Instant::now(), last_space: None, debug: false, disconnected: None, death_msg: None, respawn_at: None, auto_respawn: o.auto_respawn,
             screen: Some(Screen::Title), cfg: o.cfg, sounds, last_addr: String::new(), quit: false, fullscreen_changed: false, hide_entities: false, hide_cracks: false, hide_gui: false, hide_hand: false, fixed_time: None, last_chunk_at: Instant::now(), stats: Stats::default(), clicks_sent: 0, ticks: 0,
             frames: (0, Instant::now(), 0.0),
@@ -601,6 +603,12 @@ impl Game {
         let flags = (inp.forward > 0.0) as u8 | ((inp.forward < 0.0) as u8) << 1 | ((inp.strafe > 0.0) as u8) << 2 | ((inp.strafe < 0.0) as u8) << 3
             | (inp.jump as u8) << 4 | (inp.sneak as u8) << 5 | (inp.sprint as u8) << 6;
         if flags != self.last_input_flags { let mut w = Writer::with_id(sb::PLAYER_INPUT); w.u8(flags); send(&self.out, w); self.last_input_flags = flags; }
+        // sprinting also sends player_command 1 (start) / 2 (stop), like the vanilla client (oracle client-input, 2026-11-23)
+        let sprinting = inp.sprint && inp.forward > 0.0 && !inp.sneak && !self.player.flying;
+        if sprinting != self.sprinting {
+            self.sprinting = sprinting;
+            let mut w = Writer::with_id(sb::PLAYER_COMMAND); w.varint(self.my_eid).varint(if sprinting { 1 } else { 2 }).varint(0); send(&self.out, w);
+        }
         let before = self.player.pos;
         self.player.tick(&self.assets, &self.world, inp);
         // footsteps
@@ -692,7 +700,8 @@ impl Game {
             d.ticks += 1;
             let (b, f, ticks, total) = (d.block, d.face, d.ticks, d.total);
             if ticks % 4 == 0 { let st = self.world.get(b[0], b[1], b[2]); self.block_sound(st, "hit", [b[0] as f64 + 0.5, b[1] as f64 + 0.5, b[2] as f64 + 0.5]); }
-            if self.fp_swing < 0 || self.fp_swing >= 3 { self.swing_arm(); }
+            // vanilla sends a swing every tick while digging; the animation only restarts once half done
+            if self.fp_swing < 0 || self.fp_swing >= 3 { self.swing_arm(); } else { let mut w = Writer::with_id(sb::SWING); w.varint(0); send(&self.out, w); }
             { let st = self.world.get(b[0], b[1], b[2]); let tint = self.particle_tint(st, b); self.particles.block_hit(&self.assets, st, b, f, tint); }
             if ticks >= total {
                 self.player_action(2, b, f);

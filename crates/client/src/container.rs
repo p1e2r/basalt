@@ -150,6 +150,35 @@ impl Game {
                     slots[idx] = carried.with_count(s.count.max(0) + 1); carried = carried.with_count(carried.count - 1);
                 } else if !s.same_item(&carried) { slots[idx] = carried; carried = s; }
             }
+            // shift-click: move the stack into the other part of the window, merging into matching
+            // stacks first, then empty slots (what vanilla predicts; oracle client-input 2026-11-23)
+            1 if valid && !kind.is_result(slot) && !slots[idx].is_empty() && !matches!(kind, Kind::Furnace(_) | Kind::Other) => {
+                let ps = kind.player_start();
+                let (hot, end) = (ps + 27, ps + 36);
+                let (range, rev): (Vec<usize>, bool) = match kind {
+                    Kind::Generic(_) if idx < ps => ((ps..end).collect(), true),
+                    Kind::Generic(_) => ((0..ps).collect(), false),
+                    Kind::Inventory if idx < 9 || idx == 45 => ((9..45).collect(), false),
+                    Kind::Crafting if idx < 10 => ((10..46).collect(), true),
+                    _ if idx >= hot && idx < end => ((ps..hot).collect(), false),
+                    _ => ((hot..end).collect(), false),
+                };
+                let order: Vec<usize> = if rev { range.into_iter().rev().collect() } else { range };
+                let mut st = slots[idx].clone();
+                let m = max(self, &st);
+                for pass in 0..2 {
+                    for &i in &order {
+                        if st.count <= 0 || i >= slots.len() || i == idx { continue; }
+                        let t = slots[i].clone();
+                        if pass == 0 && !t.is_empty() && t.same_item(&st) && t.count < m {
+                            let n = (m - t.count).min(st.count); slots[i] = t.with_count(t.count + n); st = st.with_count(st.count - n);
+                        } else if pass == 1 && t.is_empty() {
+                            slots[i] = st.clone(); st = st.with_count(0);
+                        }
+                    }
+                }
+                slots[idx] = if st.count > 0 { st } else { ItemStack::default() };
+            }
             2 if valid && !kind.is_result(slot) => {
                 let hb = if button == 40 { if kind == Kind::Inventory { Some(45) } else { None } } else { Some(kind.player_start() + 27 + button as usize) };
                 if let Some(hb) = hb { if hb < slots.len() { slots.swap(idx, hb); } }
