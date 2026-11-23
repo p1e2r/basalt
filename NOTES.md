@@ -320,3 +320,41 @@ real server/client over the wire.
     cannot finish that crate; `cargo fmt --check` differs in ~109 files (dense one-line style).
   - scenarios: `m5_undead_sun` fails on the shared vanilla server right now (reference run: zombie never ignites at noon) with both
     the old and new check binaries; not touched by this work, probably server state (retest on a clean vanilla).
+
+## Containers (M6: chests, barrels, furnaces) — measured on vanilla 26.2 with `basalt-probe proxy` + scenarios m6_*
+- Right-click on a container block (not sneaking with an item in hand; reach: eye to block box <= 4.5 + 1.0) answers with
+  `sound` (block.chest.open, id 349), `open_screen`, `container_set_content`, and for chests `block_event`; nothing else.
+- `open_screen`: varint window id (1..100, counts up per open), varint menu type (MENU registry: generic_9x3 = 2,
+  generic_9x6 = 5, furnace = 14, blast_furnace = 10, smoker = 22), title as a network-NBT compound `{translate: "..."}`:
+  `container.chest`, `container.chestDouble`, `container.barrel`, `container.furnace`, `container.blast_furnace`, `container.smoker`.
+  `container_set_content`: container slots first, then the 27 main + 9 hotbar slots of the player, then the cursor.
+- Chest lid (`block_event`): position, u8 type = 1, u8 value = viewer count, varint block registry id (chest = 201). Sent
+  at open, re-sent about every 5 ticks while someone has it open, and with the new count when a viewer closes (count 0 at the end).
+  Double chests send it for *both* halves. Sounds: `sound` packet source 4 (blocks), volume 0.5, pitch 0.9..1.0, at the block centre
+  (for a double chest the midpoint of the halves): block.chest.open (349) when the count goes 0 -> 1, block.chest.close (347) at 1 -> 0.
+  Barrels have no block_event: the `open` blockstate flips with the first/last viewer, sounds block.barrel.open/close (141/140)
+  at the middle of the face the barrel is facing.
+- Chest pairing (measured, scenario m6_double_chest): chest facing south, west neighbour placed first: west = `type=right`,
+  east = `type=left`; so a half pairs with the block clockwise of its facing when it is `left` and counter-clockwise when `right`.
+  A new chest whose clockwise neighbour is a single chest with the same facing becomes `left`, counter-clockwise `right`; the
+  neighbour flips to the opposite type. Different facing never pairs. Double-chest window slots 0..26 = the RIGHT half, 27..53 = the
+  LEFT half. Breaking one half turns the other `single`. A solid block above a half blocks opening.
+- Barrel facing = opposite of the nearest looking direction (looking down at the floor -> `up`, horizontal -> opposite of the look).
+- Double-click (mode 6) collects only when the *clicked slot is empty* (or untakeable); on a non-empty slot it is a no-op.
+  Otherwise every click mode (0-6, drags) behaves exactly like the player inventory: scenario m6_chest_clicks compares the container
+  and window after 30 consecutive steps and they match. Shift-click: container -> inventory fills from the last slot backwards
+  (hotbar end first), inventory -> container from the first slot; furnace: result -> inventory (reverse), smeltable -> input slot,
+  fuel -> fuel slot, else main <-> hotbar.
+- Closing returns the cursor stack to the inventory. Breaking a container closes its viewers' windows (clientbound container_close)
+  and spills the contents (also in creative); the block itself drops as usual.
+- Furnaces: `container_set_data` = varint window, i16 property, i16 value; ids 0 = burn time left, 1 = burn duration (fuel's burn
+  time), 2 = cook progress, 3 = cook total. All four are sent right after the content when the window opens; afterwards only the
+  ones that changed, each tick. Tick order: the tick that lights the fuel already counts one cook tick (burn 1600, progress 1; burn
+  time + progress stays 1601), progress returns to 0 in the tick it reaches the total (199 -> 0, ingot appears), without fuel
+  progress decays 2 per tick and `lit` goes false when the burn time hits 0. Defaults: cook total 200 (furnace), 100 (blast
+  furnace, smoker, per recipe `cookingtime`). Block entity NBT (all numbers shorts): `lit_time_remaining`, `lit_total_time`,
+  `cooking_time_spent`, `cooking_total_time`, `RecipesUsed {recipe id: n}` (e.g. `minecraft:iron_ingot_from_smelting_iron_ore`),
+  `Items [{Slot: byte, id, count: int, components?}]`, `components: {}`. Taking anything from the result slot pays out the stored
+  experience (floor(sum xp) plus a random extra point for the fraction) and clears RecipesUsed.
+- Chunk packets carry container block entities with no NBT at all (the NBT field is the single TAG_End byte 0x00), type ids
+  chest 1, furnace 0, trapped_chest 2, barrel 26, smoker 27, blast_furnace 28. Placing a container sends no block_entity_data.

@@ -34,6 +34,8 @@ pub struct ServerState {
     pub pos: [f64; 3],
     pub gamemode: i64,
     pub dead: bool,
+    /// experience points (total)
+    pub xp_total: i64,
 }
 
 impl ServerState {
@@ -86,7 +88,7 @@ pub fn state(kind: Kind, bot: &Bot) -> Result<ServerState> {
             let mut s = ServerState {
                 health: j["health"].as_f64().unwrap_or(0.0), food: j["food"].as_i64().unwrap_or(0), saturation: j["saturation"].as_f64().unwrap_or(0.0),
                 air: j["air"].as_i64().unwrap_or(0), ticks_frozen: j["ticks_frozen"].as_i64().unwrap_or(0), fire_ticks: j["fire_ticks"].as_i64().unwrap_or(0),
-                gamemode: j["gamemode"].as_i64().unwrap_or(0), dead: j["dead"].as_bool().unwrap_or(false), ..Default::default()
+                gamemode: j["gamemode"].as_i64().unwrap_or(0), dead: j["dead"].as_bool().unwrap_or(false), xp_total: j["xp_total"].as_i64().unwrap_or(0), ..Default::default()
             };
             if let Some(p) = j["pos"].as_array() { for i in 0..3 { s.pos[i] = p.get(i).and_then(|v| v.as_f64()).unwrap_or(0.0); } }
             if let Some(m) = j["effects"].as_object() { for (k, v) in m { s.effects.insert(k.clone(), (v[0].as_i64().unwrap_or(0), v[1].as_i64().unwrap_or(0))); } }
@@ -100,7 +102,7 @@ pub fn state(kind: Kind, bot: &Bot) -> Result<ServerState> {
         Kind::Vanilla => {
             let num = |p: &str| -> Result<f64> { Ok(vanilla_get(bot, p)?.and_then(|v| v.as_f64()).unwrap_or(0.0)) };
             let mut s = ServerState { health: num("Health")?, food: num("foodLevel")? as i64, saturation: num("foodSaturationLevel")?,
-                air: num("Air")? as i64, ticks_frozen: num("TicksFrozen")? as i64, fire_ticks: (num("Fire")? as i64).max(0), gamemode: num("playerGameType")? as i64, ..Default::default() };
+                air: num("Air")? as i64, ticks_frozen: num("TicksFrozen")? as i64, fire_ticks: (num("Fire")? as i64).max(0), gamemode: num("playerGameType")? as i64, xp_total: num("XpTotal")? as i64, ..Default::default() };
             s.dead = s.health <= 0.0;
             if let Some(Value::Array(p)) = vanilla_get(bot, "Pos")? { for i in 0..3 { s.pos[i] = p.get(i).and_then(|v| v.as_f64()).unwrap_or(0.0); } }
             if let Some(Value::Array(es)) = vanilla_get(bot, "active_effects")? {
@@ -169,6 +171,57 @@ pub fn items_near(kind: Kind, bot: &Bot, r: f64) -> Result<i64> {
                 }
             }
             bail!("execute if entity: unexpected reply {:?}", lines.iter().map(|l| &l.plain).collect::<Vec<_>>())
+        }
+    }
+}
+
+/// A container block entity as seen by the server: slot -> (item, count) and furnace properties.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ContState {
+    pub items: BTreeMap<usize, (String, i64)>,
+    pub lit: i64,
+    pub lit_total: i64,
+    pub cook: i64,
+    pub cook_total: i64,
+    /// RecipesUsed (recipe id -> count)
+    pub used: BTreeMap<String, i64>,
+}
+
+impl ContState {
+    pub fn count(&self, item: &str) -> i64 { self.items.values().filter(|i| i.0 == item).map(|i| i.1).sum() }
+    pub fn slot(&self, i: usize) -> Option<(&str, i64)> { self.items.get(&i).map(|x| (x.0.as_str(), x.1)) }
+}
+
+/// Server-side container contents at `p` (vanilla: `data get block`, Basalt: `/basalt:container`); None = no block entity.
+pub fn container(kind: Kind, bot: &Bot, p: [i32; 3]) -> Result<Option<ContState>> {
+    match kind {
+        Kind::Basalt => {
+            let line = basalt_line(bot, &format!("basalt:container {} {} {}", p[0], p[1], p[2]), "BASALT_CONTAINER ")?;
+            let j: Value = serde_json::from_str(&line)?;
+            if j.is_null() { return Ok(None); }
+            let mut c = ContState { lit: j["lit"].as_i64().unwrap_or(0), lit_total: j["lit_total"].as_i64().unwrap_or(0), cook: j["cook"].as_i64().unwrap_or(0), cook_total: j["cook_total"].as_i64().unwrap_or(0), ..Default::default() };
+            if let Some(m) = j["items"].as_object() { for (k, v) in m { c.items.insert(k.parse().unwrap_or(0), (strip(v[0].as_str().unwrap_or("")), v[1].as_i64().unwrap_or(0))); } }
+            if let Some(m) = j["used"].as_object() { for (k, v) in m { c.used.insert(strip(k), v.as_i64().unwrap_or(0)); } }
+            Ok(Some(c))
+        }
+        Kind::Vanilla => {
+            let lines = bot.cmd_reply(&format!("data get block {} {} {}", p[0], p[1], p[2]))?;
+            for l in &lines {
+                match l.key.as_deref() {
+                    Some("commands.data.block.query") => {
+                        let v = l.args.get(3).ok_or_else(|| anyhow!("query reply without value"))?;
+                        let j = parse_snbt(v).ok_or_else(|| anyhow!("unparseable SNBT {v}"))?;
+                        let n = |k: &str| j[k].as_f64().unwrap_or(0.0) as i64;
+                        let mut c = ContState { lit: n("lit_time_remaining"), lit_total: n("lit_total_time"), cook: n("cooking_time_spent"), cook_total: n("cooking_total_time"), ..Default::default() };
+                        for it in j["Items"].as_array().into_iter().flatten() { c.items.insert(it["Slot"].as_f64().unwrap_or(0.0) as usize, (strip(it["id"].as_str().unwrap_or("")), it["count"].as_f64().unwrap_or(1.0) as i64)); }
+                        if let Some(m) = j["RecipesUsed"].as_object() { for (k, v) in m { c.used.insert(strip(k), v.as_f64().unwrap_or(0.0) as i64); } }
+                        return Ok(Some(c));
+                    }
+                    Some(k) if k.starts_with("commands.data.block") => return Ok(None),
+                    _ => {}
+                }
+            }
+            bail!("data get block: unexpected reply {:?}", lines.iter().map(|l| &l.plain).collect::<Vec<_>>())
         }
     }
 }

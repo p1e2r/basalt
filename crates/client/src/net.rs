@@ -46,6 +46,7 @@ pub enum Event {
     Cursor(ItemStack),
     OpenScreen { window: i32, menu: i32, title: String },
     CloseScreen(i32),
+    ContainerData { window: i32, id: i16, value: i16 },
     AddEntity { id: i32, uuid: Uuid, kind: i32, pos: [f64; 3], vel: [f64; 3], yaw: f32, pitch: f32, head_yaw: f32 },
     MoveEntity { id: i32, delta: [f64; 3], rot: Option<(f32, f32)>, on_ground: bool },
     TeleportEntity { id: i32, pos: [f64; 3], yaw: f32, pitch: f32, on_ground: bool },
@@ -312,6 +313,7 @@ fn handle_play(id: i32, data: &[u8], tx: &Sender<Event>, players: &mut HashMap<U
         cb::SET_CURSOR_ITEM => Event::Cursor(read_slot(&mut r).unwrap_or_default()),
         cb::OPEN_SCREEN => { let window = r.varint()?; let menu = r.varint()?; let title = crate::lang::text(&r.nbt()?); Event::OpenScreen { window, menu, title } }
         cb::CONTAINER_CLOSE => Event::CloseScreen(r.varint()?),
+        cb::CONTAINER_SET_DATA => { let window = r.varint()?; let id = r.i16()?; let value = r.i16()?; Event::ContainerData { window, id, value } }
         cb::SET_PLAYER_INVENTORY => { let slot = r.varint()?; Event::Slot { window: -2, state: 0, slot, item: read_slot(&mut r)? } }
         cb::PLAYER_INFO_UPDATE => {
             let actions = r.u8()?; let n = r.varint()?;

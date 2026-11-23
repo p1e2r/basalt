@@ -414,8 +414,9 @@ impl Game {
                 let ps = kind.player_start();
                 for i in 0..36 { if ps + i < slots.len() { slots[ps + i] = self.inventory[9 + i].clone(); } }
                 self.chat_input = None; self.mouse = [false; 2];
-                self.screen = Some(Screen::Container(container::Open { window, kind, title, slots, state: 0, drag: None, last_click: None, hover: None }));
+                self.screen = Some(Screen::Container(container::Open { window, kind, title, slots, state: 0, drag: None, last_click: None, hover: None, props: [0; 4] }));
             }
+            Event::ContainerData { window, id, value } => { if let Some(Screen::Container(c)) = &mut self.screen { if c.window == window && (0..4).contains(&id) { c.props[id as usize] = value; } } }
             Event::CloseScreen(w) => { if self.open_container().map(|c| c.window == w).unwrap_or(false) { self.screen = None; self.carried = ItemStack::default(); } }
             Event::AddEntity { id, uuid, kind, pos, vel, yaw, pitch, head_yaw } => { self.entities.insert(id, entity::Entity::new(id, uuid, kind, pos, vel, yaw, pitch, head_yaw)); }
             Event::MoveEntity { id, delta, rot, on_ground } => { if let Some(e) = self.entities.get_mut(&id) { let p = [e.server_pos[0] + delta[0], e.server_pos[1] + delta[1], e.server_pos[2] + delta[2]]; e.move_to(p, rot); e.on_ground = on_ground; } }

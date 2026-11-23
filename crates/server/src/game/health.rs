@@ -90,6 +90,7 @@ impl Game {
         // death animation for everyone else
         self.broadcast(Some(eid), || { let mut w = Writer::with_id(cb::ENTITY_EVENT); w.i32(eid).u8(3); w });
         self.system_chat(text::plain(&msg));
+        self.force_close(eid); // an open container / crafting window closes on death
         // drop the whole inventory (keepInventory off)
         let stacks: Vec<Stack> = { let p = self.players.get_mut(&eid).unwrap(); let v = p.inv.iter().skip(1).copied().filter(|s| s.count > 0).chain(std::iter::once(p.cursor).filter(|s| s.count > 0)).collect(); p.inv = [Stack::default(); 46]; p.cursor = Stack::default(); v };
         for s in stacks { self.throw_item(eid, s, true); }

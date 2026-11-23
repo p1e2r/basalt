@@ -349,6 +349,8 @@ impl Chunk {
             let z = be.get("z")?.as_i64()? as i32;
             let mut c = be.as_compound()?.clone();
             for k in ["id", "x", "y", "z", "keepPacked"] { c.remove(k); }
+            // containers sync nothing (measured: vanilla's chunk packet carries no NBT for chests, furnaces, barrels)
+            if matches!(id.trim_start_matches("minecraft:"), "chest" | "trapped_chest" | "barrel" | "furnace" | "blast_furnace" | "smoker") { c.clear(); }
             Some((((x & 15) << 4 | (z & 15)) as u8, y as i16, ty, Tag::Compound(c)))
         }).collect()
     }
@@ -380,7 +382,8 @@ impl Chunk {
             w.push(xz);
             w.extend_from_slice(&y.to_be_bytes());
             write_varint(w, ty);
-            basalt_nbt::write_network(w, &nbt);
+            // vanilla sends containers/furnaces with no NBT at all (a single TAG_End byte), not an empty compound
+            if nbt.as_compound().map(|c| c.is_empty()).unwrap_or(false) { w.push(0); } else { basalt_nbt::write_network(w, &nbt); }
         }
         self.write_light(w);
     }
