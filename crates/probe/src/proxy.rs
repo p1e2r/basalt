@@ -33,11 +33,13 @@ async fn pipe(mut r: tokio::net::tcp::OwnedReadHalf, mut w: tokio::net::tcp::Own
         loop {
             let mut rd = Reader::new(&buf);
             let Ok(len) = rd.varint() else { break };
+            if len < 0 { buf.clear(); break; }
             let hdr = rd.pos;
             if buf.len() < hdr + len as usize { break; }
             let pkt = buf[hdr..hdr + len as usize].to_vec();
             buf.drain(..hdr + len as usize);
-            let mut pr = Reader::new(&pkt); let id = pr.varint()?; let body = &pkt[pr.pos..];
+            // never let a packet we can't parse stop the forwarding (bytes were already written above)
+            let mut pr = Reader::new(&pkt); let Ok(id) = pr.varint() else { continue }; let body = &pkt[pr.pos..];
             let mut s = st.lock().unwrap();
             let name = match (*s, c2s) {
                 (St::Hs, true) => "handshake",

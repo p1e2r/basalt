@@ -122,6 +122,19 @@ impl PerlinNoise {
         Self::finish(levels, amps, first_octave)
     }
 
+    /// Modern construction over a legacy (java.util.Random) source: the positional fork
+    /// seeds each octave with `String.hashCode("octave_N") ^ seed`.
+    pub fn new_legacy_positional(r: &mut crate::random::JavaRandom, first_octave: i32, amps: &[f64]) -> Self {
+        let seed = r.next_long();
+        let levels = (0..amps.len())
+            .map(|k| if amps[k] != 0.0 {
+                let h = java_hash(&format!("octave_{}", first_octave + k as i32)) as i64;
+                Some(ImprovedNoise::new(&mut crate::random::JavaRandom::new(h ^ seed)))
+            } else { None })
+            .collect();
+        Self::finish(levels, amps, first_octave)
+    }
+
     /// Legacy construction (octaves drawn sequentially, highest frequency first).
     pub fn new_legacy<R: Rng>(r: &mut R, first_octave: i32, amps: &[f64]) -> Self {
         let n = amps.len() as i32;
@@ -199,6 +212,32 @@ impl NormalNoise {
     pub fn get(&self, x: f64, y: f64, z: f64) -> f64 {
         const K: f64 = 1.0181268882175227;
         (self.first.get(x, y, z) + self.second.get(x * K, y * K, z * K)) * self.factor
+    }
+}
+
+/// java.lang.String#hashCode
+pub fn java_hash(s: &str) -> i32 {
+    s.encode_utf16().fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(c as i32))
+}
+
+impl NormalNoise {
+    /// Normal noise seeded the way block-state providers do (legacy random with a seed).
+    pub fn new_seeded_legacy(seed: i64, p: &NoiseParams) -> Self {
+        let mut r = crate::random::JavaRandom::new(seed);
+        let first = PerlinNoise::new_legacy_positional(&mut r, p.first_octave, &p.amplitudes);
+        let second = PerlinNoise::new_legacy_positional(&mut r, p.first_octave, &p.amplitudes);
+        Self::from_parts(first, second, &p.amplitudes)
+    }
+
+    fn from_parts(first: PerlinNoise, second: PerlinNoise, amps: &[f64]) -> Self {
+        let mut lo = i32::MAX;
+        let mut hi = i32::MIN;
+        for (i, a) in amps.iter().enumerate() {
+            if *a != 0.0 { lo = lo.min(i as i32); hi = hi.max(i as i32); }
+        }
+        let octaves = hi - lo;
+        let dev = 0.1 * (1.0 + 1.0 / (octaves + 1) as f64);
+        Self { first, second, factor: 0.16666666666666666 / dev }
     }
 }
 

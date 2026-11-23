@@ -17,6 +17,7 @@ pub mod carver;
 pub mod density;
 pub mod features;
 pub mod noise;
+pub mod region;
 pub mod random;
 pub mod surface;
 
@@ -47,6 +48,11 @@ impl GeneratedChunk {
         self.blocks[yy >> 4][((yy & 15) << 8) | (z << 4) | x]
     }
 }
+
+/// Order in which the chunk and its neighbours are decorated.
+/// Vanilla's order depends on its scheduling; for a block of loaded chunks, ascending x then
+/// z matches the saved worlds best (measured with the compare tool, e.g. 351/351 spruce logs).
+const DECORATION_ORDER: [(i32, i32); 9] = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 0), (0, 1), (1, -1), (1, 0), (1, 1)];
 
 /// Generation stages, in order.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -133,46 +139,19 @@ pub struct Generator {
     biome_carvers: Vec<Vec<usize>>,
     trig: carver::Trig,
     features: features::Features,
+    protos: std::sync::Mutex<ProtoCache>,
 }
 
-/// Ore placement target: the chunk being generated (writes outside it are dropped).
-struct OreChunk<'a, 'b, 'g> {
-    env: &'b mut Env<'a, 'g>,
-    blocks: &'b mut [[u16; 4096]],
-    cx: i32,
-    cz: i32,
-    floor: [i32; 256],
+/// A chunk generated up to the carver stage (input for decoration).
+pub struct Proto {
+    pub blocks: Vec<[u16; 4096]>,
+    pub biomes: Vec<[u8; 64]>,
 }
 
-impl features::OreWorld for OreChunk<'_, '_, '_> {
-    fn get(&self, x: i32, y: i32, z: i32) -> Option<u16> {
-        let (lx, lz) = (x - self.cx * 16, z - self.cz * 16);
-        if !(0..16).contains(&lx) || !(0..16).contains(&lz) || !(MIN_Y..MIN_Y + HEIGHT).contains(&y) { return None; }
-        let yy = y - MIN_Y;
-        Some(self.blocks[(yy >> 4) as usize][(((yy & 15) << 8) | (lz << 4) | lx) as usize])
-    }
-    fn bounds(&self) -> (i32, i32, i32, i32) { (self.cx * 16, self.cx * 16 + 15, self.cz * 16, self.cz * 16 + 15) }
-    fn set(&mut self, x: i32, y: i32, z: i32, state: u16) {
-        let (lx, lz) = (x - self.cx * 16, z - self.cz * 16);
-        if !(0..16).contains(&lx) || !(0..16).contains(&lz) || !(MIN_Y..MIN_Y + HEIGHT).contains(&y) { return; }
-        let yy = y - MIN_Y;
-        self.blocks[(yy >> 4) as usize][(((yy & 15) << 8) | (lz << 4) | lx) as usize] = state;
-    }
-    fn ocean_floor(&mut self, x: i32, z: i32) -> i32 {
-        let (lx, lz) = (x - self.cx * 16, z - self.cz * 16);
-        if (0..16).contains(&lx) && (0..16).contains(&lz) { return self.floor[(lz * 16 + lx) as usize]; }
-        use surface::SurfaceEnv;
-        self.env.preliminary_surface(x, z)
-    }
-    fn biome(&mut self, x: i32, y: i32, z: i32) -> u8 {
-        let g = self.env.g;
-        g.surface.zoomed_biome(self.env, x, y, z)
-    }
-    fn get_approx(&mut self, x: i32, y: i32, z: i32) -> u16 {
-        use surface::SurfaceEnv;
-        let g = self.env.g;
-        if y < self.env.preliminary_surface(x, z) { g.default_block } else if y < g.sea_level { g.default_fluid } else { g.blocks.air }
-    }
+struct ProtoCache {
+    map: HashMap<(i32, i32), std::sync::Arc<Proto>>,
+    order: std::collections::VecDeque<(i32, i32)>,
+    cap: usize,
 }
 
 /// Target for the carvers: the chunk's blocks plus aquifer and surface access.
@@ -308,6 +287,7 @@ impl Generator {
         let surface = surface::SurfaceSystem::load(&wg, &settings, rand, &biome_names, default_block, sea_level, random::biome_zoom_seed(seed))?;
         Ok(Generator {
             seed, biome_names, biomes, surface, carvers, biome_carvers, trig: carver::Trig::new(), features,
+            protos: std::sync::Mutex::new(ProtoCache { map: HashMap::new(), order: Default::default(), cap: 1024 }),
             aquifer_rand: rand.from_hash("minecraft:aquifer").fork_positional(),
             ore_rand: rand.from_hash("minecraft:ore").fork_positional(),
             sea_level,
@@ -324,8 +304,59 @@ impl Generator {
         self.generate_stages(cx, cz, Stage::Features)
     }
 
+    /// Set how many carver-stage chunks are kept for decorating neighbours (default 1024,
+    /// about 200 KB each).
+    pub fn set_proto_cache_size(&self, n: usize) { self.protos.lock().unwrap().cap = n.max(25); }
+
+    /// Chunk at the carver stage, cached (shared by the decoration of its neighbours).
+    pub fn proto(&self, cx: i32, cz: i32) -> std::sync::Arc<Proto> {
+        if let Some(p) = self.protos.lock().unwrap().map.get(&(cx, cz)) { return p.clone(); }
+        let c = self.generate_stages(cx, cz, Stage::Carvers);
+        let p = std::sync::Arc::new(Proto { blocks: c.blocks, biomes: c.biomes });
+        let mut cache = self.protos.lock().unwrap();
+        if !cache.map.contains_key(&(cx, cz)) {
+            cache.map.insert((cx, cz), p.clone());
+            cache.order.push_back((cx, cz));
+            while cache.order.len() > cache.cap {
+                if let Some(k) = cache.order.pop_front() { cache.map.remove(&k); }
+            }
+        }
+        p
+    }
+
+    /// Decorate chunk (cx, cz): runs the features of it and its 8 neighbours over the
+    /// carver-stage 5×5 chunk area around it.
+    fn decorated(&self, cx: i32, cz: i32) -> GeneratedChunk {
+        let mut blocks = Vec::with_capacity(25);
+        let mut biomes = Vec::with_capacity(25);
+        for dz in -2..=2 {
+            for dx in -2..=2 {
+                let p = self.proto(cx + dx, cz + dz);
+                blocks.push(p.blocks.clone());
+                biomes.push(p.biomes.clone());
+            }
+        }
+        let own_biomes = biomes[12].clone();
+        let mut reg = region::Region::new(self, cx - 2, cz - 2, 5, blocks, biomes);
+        for (dx, dz) in DECORATION_ORDER {
+            let (nx, nz) = (cx + dx, cz + dz);
+            let mut set = vec![false; self.biome_names.len()];
+            for ex in -1..=1 {
+                for ez in -1..=1 { reg.chunk_biomes(nx + ex, nz + ez, &mut set); }
+            }
+            let list: Vec<u8> = set.iter().enumerate().filter(|(_, v)| **v).map(|(i, _)| i as u8).collect();
+            reg.write = ((nx - 1) * 16, (nx + 2) * 16 - 1, (nz - 1) * 16, (nz + 2) * 16 - 1);
+            self.features.decorate(self.seed, nx, nz, &list, &mut reg);
+        }
+        GeneratedChunk { blocks: reg.take_chunk(cx, cz), biomes: own_biomes }
+    }
+
+    /// Feature types present in the data that are not implemented yet (type → count).
+    pub fn unsupported_features(&self) -> &std::collections::BTreeMap<String, usize> { &self.features.unsupported }
+
     /// Generate up to (and including) the given stage.
     pub fn generate_stages(&self, cx: i32, cz: i32, stage: Stage) -> GeneratedChunk {
+        if stage >= Stage::Features { return self.decorated(cx, cz); }
         let mut e = Eval::new(&self.graph);
         let mut aq = Aquifer::new(self.router.aq, self.aquifer_rand, self.sea_level, self.aquifers_enabled);
         let mut blocks = self.fill_noise(&mut e, &mut aq, cx, cz);
@@ -342,104 +373,8 @@ impl Generator {
             if stage >= Stage::Carvers {
                 self.carve(&mut env, cx, cz, &mut blocks);
             }
-            if stage >= Stage::Features {
-                self.decorate(&mut env, cx, cz, &mut blocks, &biomes);
-            }
         }
         GeneratedChunk { blocks, biomes }
-    }
-
-    fn decorate(&self, env: &mut Env, cx: i32, cz: i32, blocks: &mut [[u16; 4096]], own: &[[u8; 64]]) {
-        // Biomes present in each chunk of the 3x3 area. Vanilla uses each decorated chunk's own
-        // 3x3 neighbourhood; chunks two away are skipped here (their biomes can only matter
-        // through the biome filter at positions inside the decorated chunk, which is rare).
-        let mut present: HashMap<(i32, i32), Vec<bool>> = HashMap::new();
-        for dx in -1..=1 {
-            for dz in -1..=1 {
-                let b = if dx == 0 && dz == 0 { own.to_vec() } else { self.fill_biomes(env.e, cx + dx, cz + dz) };
-                for (si, sec) in b.iter().enumerate() {
-                    for (j, v) in sec.iter().enumerate() {
-                        env.cache.insert(((cx + dx) * 4 + (j & 3) as i32, si as i32 * 4 + (j >> 4) as i32 + MIN_Y / 4, (cz + dz) * 4 + ((j >> 2) & 3) as i32), *v);
-                    }
-                }
-                let mut set = vec![false; self.biome_names.len()];
-                for sec in &b { for v in sec { set[*v as usize] = true; } }
-                present.insert((cx + dx, cz + dz), set);
-            }
-        }
-        let mut floor = [MIN_Y; 256];
-        for lx in 0..16 {
-            for lz in 0..16 {
-                let mut y = MIN_Y + HEIGHT - 1;
-                loop {
-                    if y < MIN_Y { break; }
-                    let yy = y - MIN_Y;
-                    let b = blocks[(yy >> 4) as usize][(((yy & 15) << 8) | (lz << 4) | lx) as usize];
-                    if b != self.blocks.air && b != self.default_fluid && b != self.blocks.lava && !BlockState(b as u32).is_air() { break; }
-                    y -= 1;
-                }
-                floor[(lz * 16 + lx) as usize] = y + 1;
-            }
-        }
-        let mut w = OreChunk { env, blocks, cx, cz, floor };
-        for dz in -1..=1 {
-            for dx in -1..=1 {
-                let (nx, nz) = (cx + dx, cz + dz);
-                let mut set = vec![false; self.biome_names.len()];
-                for ex in -1..=1 {
-                    for ez in -1..=1 {
-                        let Some(p) = present.get(&(nx + ex, nz + ez)) else { continue };
-                        for (i, v) in p.iter().enumerate() { if *v { set[i] = true; } }
-                    }
-                }
-                let list: Vec<u8> = set.iter().enumerate().filter(|(_, v)| **v).map(|(i, _)| i as u8).collect();
-                self.features.decorate_ores(&self.trig, self.seed, nx, nz, &list, &mut w);
-            }
-        }
-        self.freeze_top_layer(w.env, cx, cz, w.blocks);
-    }
-
-    /// The final "freeze_top_layer" feature: ice on cold water, snow on cold ground.
-    fn freeze_top_layer(&self, env: &mut Env, cx: i32, cz: i32, blocks: &mut [[u16; 4096]]) {
-        let ids = &self.surface.ids;
-        let snow = state("snow").unwrap_or(0);
-        let idx = |y: i32, lx: i32, lz: i32| { let yy = y - MIN_Y; ((yy >> 4) as usize, (((yy & 15) << 8) | (lz << 4) | lx) as usize) };
-        for lx in 0..16 {
-            for lz in 0..16 {
-                let (x, z) = (cx * 16 + lx, cz * 16 + lz);
-                // MOTION_BLOCKING: highest solid or fluid block, plus one.
-                let mut y = MIN_Y + HEIGHT - 1;
-                while y >= MIN_Y {
-                    let (s, i) = idx(y, lx, lz);
-                    if !BlockState(blocks[s][i] as u32).is_air() { break; }
-                    y -= 1;
-                }
-                let n = y + 1;
-                if n >= MIN_Y + HEIGHT { continue; }
-                let biome = self.surface.zoomed_biome(env, x, n, z);
-                if n - 1 >= MIN_Y {
-                    let (s, i) = idx(n - 1, lx, lz);
-                    if blocks[s][i] == self.default_fluid && self.surface.cold_enough_to_snow(biome, x, n - 1, z) {
-                        blocks[s][i] = ids.ice;
-                    }
-                }
-                if !self.surface.cold_enough_to_snow(biome, x, n, z) || n - 1 < MIN_Y { continue; }
-                let (s, i) = idx(n - 1, lx, lz);
-                let below = BlockState(blocks[s][i] as u32);
-                let survives = match below.name() {
-                    "ice" | "packed_ice" | "barrier" => false,
-                    "honey_block" | "soul_sand" | "mud" => true,
-                    "water" | "lava" | "powder_snow" => false,
-                    _ => true,
-                };
-                if !survives { continue; }
-                let (s2, i2) = idx(n, lx, lz);
-                blocks[s2][i2] = snow;
-                if below.get("snowy").is_some() {
-                    if let Some(v) = below.with("snowy", "true") { blocks[s][i] = v.0 as u16; }
-                }
-            }
-        }
     }
 
     fn carve(&self, env: &mut Env, cx: i32, cz: i32, blocks: &mut [[u16; 4096]]) {
