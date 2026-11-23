@@ -67,7 +67,7 @@ pub enum Screen {
 
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
-pub enum Kind { Button { label: String, enabled: bool }, Slider { label: String, value: f32 }, Field { text: String, focused: bool, hint: String }, Label { text: String, color: [u8; 4], scale: f32 }, Row { title: String, sub: String, selected: bool }, Icon { sprite: String, tooltip: String } }
+pub enum Kind { Button { label: String, enabled: bool }, Slider { label: String, value: f32 }, Field { text: String, focused: bool, hint: String }, Label { text: String, color: [u8; 4], scale: f32 }, Row { title: String, sub: String, selected: bool }, Icon { sprite: String, tooltip: String }, Server { index: usize, selected: bool } }
 
 /// A widget in GUI units.
 #[derive(Clone, Debug)]
@@ -106,18 +106,23 @@ impl Game {
                 v.push(label("Basalt 26.2", 2.0 + self.ui.text_width("Basalt 26.2", 1.0) / 2.0, gh - 10.0, white, 1.0));
             }
             Some(Screen::Multiplayer { selected, .. }) => {
-                v.push(label(&t("multiplayer.title"), cx, 12.0, white, 1.0));
-                for (i, s) in self.cfg.servers.iter().enumerate() {
-                    v.push(Widget { id: format!("row{i}"), x: cx - 152.0, y: 32.0 + i as f32 * 36.0, w: 304.0, h: 32.0, kind: Kind::Row { title: s.name.clone(), sub: s.addr.clone(), selected: *selected == Some(i) } });
+                // vanilla 26.2 server list (recording 2026-11-23): 304-wide rows 36 apart under the header
+                v.push(label(&t("multiplayer.title"), cx, 13.0, white, 1.0));
+                for i in 0..self.cfg.servers.len() {
+                    let y = 36.0 + i as f32 * 36.0;
+                    if y + 36.0 > gh - 64.0 { break; }
+                    v.push(Widget { id: format!("row{i}"), x: cx - 152.0, y, w: 304.0, h: 36.0, kind: Kind::Server { index: i, selected: *selected == Some(i) } });
                 }
                 let by = gh - 52.0;
                 let sel = selected.is_some();
-                let mut join = button("join", &t("selectServer.select"), cx - 154.0, by, 100.0); join.kind = Kind::Button { label: t("selectServer.select"), enabled: sel }; v.push(join);
+                let en = |b: Widget, on: bool| if on { b } else { disabled(b) };
+                v.push(en(button("join", &t("selectServer.select"), cx - 154.0, by, 100.0), sel));
                 v.push(button("direct", &t("selectServer.direct"), cx - 50.0, by, 100.0));
                 v.push(button("add", &t("selectServer.add"), cx + 54.0, by, 100.0));
-                let mut edit = button("edit", &t("selectServer.edit"), cx - 154.0, by + 24.0, 74.0); edit.kind = Kind::Button { label: t("selectServer.edit"), enabled: sel }; v.push(edit);
-                let mut del = button("delete", &t("selectServer.delete"), cx - 76.0, by + 24.0, 74.0); del.kind = Kind::Button { label: t("selectServer.delete"), enabled: sel }; v.push(del);
-                v.push(button("back", &t("gui.back"), cx + 4.0 + 76.0, by + 24.0, 74.0));
+                v.push(en(button("edit", &t("selectServer.edit"), cx - 154.0, by + 24.0, 74.0), sel));
+                v.push(en(button("delete", &t("selectServer.delete"), cx - 76.0, by + 24.0, 74.0), sel));
+                v.push(button("refresh", &t("selectServer.refresh"), cx + 2.0, by + 24.0, 74.0));
+                v.push(button("back", &t("gui.back"), cx + 80.0, by + 24.0, 74.0));
             }
             Some(Screen::EditServer { name, addr, focus, .. }) => {
                 v.push(label(&t("manageServer.edit"), cx, 17.0, white, 1.0));
@@ -262,7 +267,7 @@ impl Game {
             Kind::Field { .. } => {
                 if let Some(Screen::EditServer { focus, .. }) = &mut self.screen { *focus = if w.id == "name" { 0 } else { 1 }; }
             }
-            Kind::Row { .. } => {
+            Kind::Row { .. } | Kind::Server { .. } if w.id.starts_with("row") => {
                 let i: usize = w.id[3..].parse().unwrap_or(0);
                 if let Some(Screen::Multiplayer { selected, last_click }) = &mut self.screen {
                     let dbl = last_click.map(|(j, t)| j == i && t.elapsed().as_millis() < 300).unwrap_or(false);
@@ -272,6 +277,7 @@ impl Game {
             }
             Kind::Label { .. } => {}
             Kind::Icon { .. } => { self.sounds.play_ui("ui.button.click"); self.menu_action(&w.id); }
+            Kind::Row { .. } | Kind::Server { .. } => { if w.id.starts_with("lang:") { self.menu_action(&w.id); } }
         }
     }
     pub(crate) fn menu_motion(&mut self) {
@@ -299,6 +305,21 @@ impl Game {
     }
 
     pub(crate) fn menu_action(&mut self, id: &str) {
+        let was_list = matches!(self.screen, Some(Screen::Multiplayer { .. }));
+        self.menu_action_inner(id);
+        if (!was_list || id == "refresh") && matches!(self.screen, Some(Screen::Multiplayer { .. })) { self.refresh_pings(); }
+    }
+
+    /// Ping every saved server again (results arrive in Game::pump).
+    pub(crate) fn refresh_pings(&mut self) {
+        self.ping_rounds += 1;
+        for s in self.cfg.servers.clone() {
+            self.pings.insert(s.addr.clone(), crate::status::PingState::Pinging(Instant::now()));
+            crate::status::spawn(s.addr, self.ping_chan_tx());
+        }
+    }
+
+    fn menu_action_inner(&mut self, id: &str) {
         let screen = self.screen.take();
         self.screen = match (screen, id) {
             (Some(Screen::Title), "multiplayer") => Some(Screen::Multiplayer { selected: None, last_click: None }),
@@ -464,10 +485,11 @@ impl Game {
         let (w, h) = (self.gpu.size.0 as f32, self.gpu.size.1 as f32);
         // behind every other menu: the blurred world (in game) or the blurred panorama (render.rs Backdrop)
         if let Some(Screen::Death { .. }) = &self.screen { a.gradient(ui, 0.0, 0.0, w, h, [80, 0, 0, 96], [128, 48, 48, 160]); }
-        if matches!(self.screen, Some(Screen::Page { .. })) {
+        if matches!(self.screen, Some(Screen::Page { .. }) | Some(Screen::Multiplayer { .. })) {
             // list area between a 33-unit header and footer: darker tiles + separator lines
             let iw = if self.connected && self.spawned { "inworld_" } else { "" };
-            let (top, bottom) = (33.0 * s, h - 33.0 * s);
+            let foot = if matches!(self.screen, Some(Screen::Multiplayer { .. })) { 64.0 } else { 33.0 };
+            let (top, bottom) = (33.0 * s, h - foot * s);
             let tile = 16.0 * s;
             let mut y = top; while y < bottom { let mut x = 0.0; while x < w { a.sprite_sized(ui, &format!("{iw}menu_list_background"), x, y, 16.0, ((bottom - y) / s).min(16.0), s, [255; 4]); x += tile; } y += tile; }
             let mut x = 0.0; while x < w { a.sprite_sized(ui, &format!("{iw}header_separator"), x, top - 2.0 * s, 32.0, 2.0, s, [255; 4]); a.sprite_sized(ui, &format!("{iw}footer_separator"), x, bottom, 32.0, 2.0, s, [255; 4]); x += 32.0 * s; }
@@ -525,6 +547,37 @@ impl Game {
                         a.sprite(ui, sprite, x + ((wd.w - iw) / 2.0).floor() * s, y + ((wd.h - ih) / 2.0).floor() * s, s);
                     }
                 }
+                Kind::Server { index, selected } => {
+                    let Some(srv) = self.cfg.servers.get(*index) else { continue };
+                    if *selected { a.rect(ui, x, y, wd.w * s, wd.h * s, [160, 160, 160, 255]); a.rect(ui, x + s, y + s, (wd.w - 2.0) * s, (wd.h - 2.0) * s, [0, 0, 0, 255]); }
+                    else if hov(&wd) { a.rect(ui, x, y, wd.w * s, wd.h * s, [255, 255, 255, 24]); }
+                    let (tx, right) = (x + 35.0 * s, x + (wd.w - 2.0) * s);
+                    a.text(ui, &srv.name, tx, y + 3.0 * s, s, [255; 4]);
+                    let ping_spr: String = match self.pings.get(&srv.addr) {
+                        Some(crate::status::PingState::Done(st)) => {
+                            for (li, line) in st.motd.iter().enumerate() {
+                                let mut lx = tx;
+                                for (txt, col) in line { a.text(ui, txt, lx, y + (14.0 + li as f32 * 9.0) * s, s, *col); lx += a.text_width(txt, s); }
+                            }
+                            let compatible = st.protocol == basalt_protocol::PROTOCOL_VERSION as i64;
+                            let (info, col) = if compatible { (format!("{}/{}", st.online, st.max), [128, 128, 128, 255]) } else { (st.version.clone(), [255, 85, 85, 255]) };
+                            a.text(ui, &info, right - 13.0 * s - a.text_width(&info, s), y + 3.0 * s, s, col);
+                            let bars = match st.ping_ms { 0..=149 => 5, 150..=299 => 4, 300..=599 => 3, 600..=999 => 2, _ => 1 };
+                            if compatible { format!("sprites/server_list/ping_{bars}") } else { "sprites/server_list/incompatible".into() }
+                        }
+                        Some(crate::status::PingState::Failed(_)) => {
+                            a.text(ui, &t("multiplayer.status.cannot_connect"), tx, y + 14.0 * s, s, [255, 85, 85, 255]);
+                            "sprites/server_list/unreachable".into()
+                        }
+                        Some(crate::status::PingState::Pinging(t0)) => {
+                            a.text(ui, &t("multiplayer.status.pinging"), tx, y + 14.0 * s, s, [128, 128, 128, 255]);
+                            let f = (t0.elapsed().as_millis() / 100 % 8) as usize;
+                            format!("sprites/server_list/pinging_{}", if f > 4 { 8 - f } else { f + 1 })
+                        }
+                        None => "sprites/server_list/pinging_1".into(),
+                    };
+                    a.sprite(ui, &ping_spr, right - 10.0 * s, y + 3.0 * s, s);
+                }
                 Kind::Row { title, sub, selected } if sub == "\u{0}center" => {
                     // single-line centred row (language list): white frame when selected
                     if *selected { a.rect(ui, x, y, wd.w * s, wd.h * s, [255; 4]); a.rect(ui, x + s, y + s, (wd.w - 2.0) * s, (wd.h - 2.0) * s, [0, 0, 0, 255]); }
@@ -542,6 +595,18 @@ impl Game {
         // tooltip of the hovered icon button
         if let Some(Kind::Icon { tooltip, .. }) = self.widgets().into_iter().find(|wd| hov(wd) && matches!(wd.kind, Kind::Icon { .. })).map(|wd| wd.kind) {
             self.tooltip(ui, &tooltip, mx / s, my / s);
+        }
+    }
+
+    /// Server favicons (icon texture layer, drawn after `draw_menu`).
+    pub(crate) fn draw_menu_icons(&self, m: &mut MeshData) {
+        let s = self.gui_scale();
+        for wd in self.widgets() {
+            let Kind::Server { index, .. } = wd.kind else { continue };
+            let Some(srv) = self.cfg.servers.get(index) else { continue };
+            if let Some(&slot) = self.icon_slots.get(&srv.addr) {
+                self.ui.quad(m, (wd.x + 2.0) * s, (wd.y + 2.0) * s, 32.0 * s, 32.0 * s, crate::render::icon_uv(slot), [255; 4]);
+            }
         }
     }
 

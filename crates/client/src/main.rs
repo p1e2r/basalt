@@ -21,6 +21,7 @@ mod render;
 mod scenario;
 mod script;
 mod sound;
+mod status;
 mod suggest;
 mod ui;
 mod world;
@@ -235,6 +236,11 @@ pub struct Game {
     pub held_name: (String, i32),
     /// title screen splash line and when the menus started (panorama spin, splash pulse)
     pub splash: String, pub menu_t0: Instant,
+    /// server list pings by address, their result channel, and favicon slots by address
+    pub pings: HashMap<String, status::PingState>,
+    ping_chan: (mpsc::Sender<status::PingResult>, mpsc::Receiver<status::PingResult>),
+    pub icon_slots: HashMap<String, usize>,
+    pub ping_rounds: u32,
     step_dist: f64,
     last_place: Instant,
     last_space: Option<Instant>,
@@ -283,7 +289,7 @@ impl Game {
             dirty: HashMap::new(), in_flight: HashSet::new(), events: rx, out: otx, entities: HashMap::new(), player_names: HashMap::new(), my_eid: 0, name: o.name,
             chat: Vec::new(), chat_input: None, cmd_tree: None, sug: Sug::default(), hp: 20.0, food: 20, hotbar: Default::default(), held: 0, inventory: vec![ItemStack::default(); 46], inv_state: 0, carried: ItemStack::default(), day_time: 6000,
             spawned: false, loaded_sent: false, connected: false, keys: HashSet::new(), mouse: [false; 2], mouse_pos: (0.0, 0.0), slider_drag: None, last_tick: Instant::now(),
-            last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, sprinting: false, particles: Default::default(), equip: (1.0, 1.0), equip_for: -1, held_name: (String::new(), 0), splash: String::new(), menu_t0: Instant::now(), step_dist: 0.0,
+            last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, sprinting: false, particles: Default::default(), equip: (1.0, 1.0), equip_for: -1, held_name: (String::new(), 0), splash: String::new(), menu_t0: Instant::now(), pings: HashMap::new(), ping_chan: mpsc::channel(), icon_slots: HashMap::new(), ping_rounds: 0, step_dist: 0.0,
             last_place: Instant::now(), last_space: None, debug: false, disconnected: None, death_msg: None, respawn_at: None, auto_respawn: o.auto_respawn,
             screen: Some(Screen::Title), cfg: o.cfg, sounds, last_addr: String::new(), quit: false, fullscreen_changed: false, hide_entities: false, hide_cracks: false, hide_gui: false, hide_hand: false, fixed_time: None, last_chunk_at: Instant::now(), stats: Stats::default(), clicks_sent: 0, ticks: 0,
             frames: (0, Instant::now(), 0.0),
@@ -512,6 +518,21 @@ impl Game {
     }
 
     fn pump(&mut self) {
+        while let Ok((addr, r)) = self.ping_chan.1.try_recv() {
+            let st = match r {
+                Ok(mut st) => {
+                    if let Some(icon) = st.icon.take().filter(|i| i.w == 64 && i.h == 64) {
+                        let n = self.icon_slots.len();
+                        let slot = *self.icon_slots.entry(addr.clone()).or_insert(n);
+                        self.gpu.set_icon(slot, &icon.rgba);
+                        st.icon = Some(icon);
+                    }
+                    status::PingState::Done(st)
+                }
+                Err(e) => status::PingState::Failed(format!("{e:#}")),
+            };
+            self.pings.insert(addr, st);
+        }
         let start = Instant::now();
         while let Ok(ev) = self.events.try_recv() { self.handle(ev); if start.elapsed() > Duration::from_millis(30) { break; } }
         while let Ok((k, m, dt)) = self.mesher.done.try_recv() {
@@ -1184,11 +1205,17 @@ impl Game {
                 self.draw_container(c, &mut bg, &mut ents, &mut it, &mut top, &mut top_items);
                 fd.layers.push((bg, Tex::Ui)); fd.layers.push((ents, Tex::Entities)); fd.layers.push((it, Tex::Blocks)); fd.layers.push((top, Tex::Ui)); fd.layers.push((top_items, Tex::Blocks));
             }
-            Some(_) => { let mut m = MeshData::default(); self.draw_menu(&mut m); fd.layers.push((m, Tex::Ui)); }
+            Some(_) => {
+                let (mut m, mut icons) = (MeshData::default(), MeshData::default());
+                self.draw_menu(&mut m); self.draw_menu_icons(&mut icons);
+                fd.layers.push((m, Tex::Ui)); fd.layers.push((icons, Tex::Icons));
+            }
             None => {}
         }
         fd
     }
+
+    pub(crate) fn ping_chan_tx(&self) -> mpsc::Sender<status::PingResult> { self.ping_chan.0.clone() }
 
     /// Behind menus: the blurred world in game, the blurred spinning panorama elsewhere.
     fn backdrop(&self) -> render::Backdrop {

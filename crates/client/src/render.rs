@@ -31,6 +31,9 @@ pub struct Gpu {
     atlas_bind: wgpu::BindGroup,
     ui_bind: wgpu::BindGroup,
     skin_bind: wgpu::BindGroup,
+    /// server list favicons: 8x4 slots of 64x64 (`set_icon`)
+    icon_tex: wgpu::Texture,
+    icon_bind: wgpu::BindGroup,
     p_opaque: wgpu::RenderPipeline,
     p_cutout: wgpu::RenderPipeline,
     p_trans: wgpu::RenderPipeline,
@@ -49,7 +52,7 @@ pub struct Gpu {
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub enum Tex { Ui, Blocks, Entities }
+pub enum Tex { Ui, Blocks, Entities, Icons }
 
 /// What is behind a menu: nothing special, the world blurred, or the title panorama (blurred).
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -144,6 +147,9 @@ impl Gpu {
         let atlas_bind = tex_bind(&upload_tex(&device, &queue, assets.atlas.w, assets.atlas.h, &assets.atlas.rgba));
         let ui_bind = tex_bind(&upload_tex(&device, &queue, ui_atlas.1, ui_atlas.2, ui_atlas.0));
         let skin_bind = tex_bind(&upload_tex(&device, &queue, skin.1, skin.2, skin.0));
+        let icon_tex = device.create_texture(&wgpu::TextureDescriptor { label: Some("icons"), size: wgpu::Extent3d { width: 512, height: 256, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Rgba8Unorm, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[] });
+        let icon_bind = tex_bind(&icon_tex.create_view(&Default::default()));
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[&ulayout, &tlayout], push_constant_ranges: &[] });
         let vattrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Unorm8x4, 3 => Unorm8x4];
         let vlayout = wgpu::VertexBufferLayout { array_stride: std::mem::size_of::<Vertex>() as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &vattrs };
@@ -186,7 +192,7 @@ impl Gpu {
             address_mode_u: wgpu::AddressMode::ClampToEdge, address_mode_v: wgpu::AddressMode::ClampToEdge, ..Default::default() });
         let mkbuf = || device.create_buffer(&wgpu::BufferDescriptor { label: Some("post"), size: std::mem::size_of::<PostU>() as u64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let (ubuf_h, ubuf_v, ubuf_p) = (mkbuf(), mkbuf(), mkbuf());
-        Ok(Gpu { device, queue, surface, config, format, size, offscreen, depth, ubuf, ubind, atlas_bind, ui_bind, skin_bind, p_opaque, p_cutout, p_trans, p_crack, p_sky, p_ui,
+        Ok(Gpu { device, queue, surface, config, format, size, offscreen, depth, ubuf, ubind, atlas_bind, ui_bind, skin_bind, icon_tex, icon_bind, p_opaque, p_cutout, p_trans, p_crack, p_sky, p_ui,
             p_blur, p_pano, post_layout, lin_sampler, ubuf_h, ubuf_v, ubuf_p, pano_layout, pano_bind: None, post: None, sections: HashMap::new() })
     }
 
@@ -213,6 +219,13 @@ impl Gpu {
             wgpu::BindGroupEntry { binding: 0, resource: self.ubuf_p.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&view) },
             wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.lin_sampler) }] }));
+    }
+
+    /// Put a 64x64 RGBA image into icon slot `i` (0..32); UV rect is `icon_uv(i)`.
+    pub fn set_icon(&mut self, i: usize, rgba: &[u8]) {
+        if i >= 32 || rgba.len() != 64 * 64 * 4 { return; }
+        self.queue.write_texture(wgpu::ImageCopyTexture { texture: &self.icon_tex, mip_level: 0, origin: wgpu::Origin3d { x: (i % 8) as u32 * 64, y: (i / 8) as u32 * 64, z: 0 }, aspect: wgpu::TextureAspect::All }, rgba,
+            wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(256), rows_per_image: Some(64) }, wgpu::Extent3d { width: 64, height: 64, depth_or_array_layers: 1 });
     }
 
     fn ensure_post(&mut self) {
@@ -316,7 +329,7 @@ impl Gpu {
             rp.set_pipeline(&self.p_ui);
             for (m, t) in layers.iter().take(f.hud_layers) {
                 let Some(m) = m else { continue };
-                rp.set_bind_group(1, match t { Tex::Ui => &self.ui_bind, Tex::Blocks => &self.atlas_bind, Tex::Entities => &self.skin_bind }, &[]);
+                rp.set_bind_group(1, match t { Tex::Ui => &self.ui_bind, Tex::Blocks => &self.atlas_bind, Tex::Entities => &self.skin_bind, Tex::Icons => &self.icon_bind }, &[]);
                 rp.set_vertex_buffer(0, m.vb.slice(..)); rp.set_index_buffer(m.ib.slice(..), wgpu::IndexFormat::Uint32); rp.draw_indexed(0..m.count, 0, 0..1);
             }
             f.hud_layers
@@ -344,7 +357,7 @@ impl Gpu {
             rp.set_pipeline(&self.p_ui);
             for (m, t) in layers.iter().skip(first_ui) {
                 let Some(m) = m else { continue };
-                rp.set_bind_group(1, match t { Tex::Ui => &self.ui_bind, Tex::Blocks => &self.atlas_bind, Tex::Entities => &self.skin_bind }, &[]);
+                rp.set_bind_group(1, match t { Tex::Ui => &self.ui_bind, Tex::Blocks => &self.atlas_bind, Tex::Entities => &self.skin_bind, Tex::Icons => &self.icon_bind }, &[]);
                 draw_mesh(&mut rp, m);
             }
         }
@@ -419,3 +432,6 @@ fn frustum_planes(vp: &Mat4) -> [glam::Vec4; 5] {
     let n = |p: glam::Vec4| p / p.truncate().length();
     [n(r[3] + r[0]), n(r[3] - r[0]), n(r[3] + r[1]), n(r[3] - r[1]), n(r[3] - r[2])]
 }
+
+/// UV rect of icon slot `i` in the icon texture (see `Gpu::set_icon`).
+pub fn icon_uv(i: usize) -> [f32; 4] { let (x, y) = ((i % 8) as f32 * 64.0, (i / 8) as f32 * 64.0); [x / 512.0, y / 256.0, (x + 64.0) / 512.0, (y + 64.0) / 256.0] }

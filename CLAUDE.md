@@ -105,7 +105,13 @@ Read NOTES.md for verified packet formats.
       /kill @e[type=..], /mobs [r] (debug). Mobs persist in <world>/entities.json. --no-spawning.
       Missing: XP orbs, breeding, sheep eating grass, zombie reinforcements/drowned conversion,
       mob-vs-mob pushing, swimming AI beyond buoyancy, difficulty fixed at Easy.
-- [~] M6 world logic (weather done: /weather + cycle + rain/thunder levels, scenario m6_weather matches vanilla; containers done: chests (single/double/trapped), barrels, furnace/blast furnace/smoker as block entities (server game/container.rs; Anvil-persisted, windows + click modes + lid events + smelting + XP; scenarios m6_chest_*, m6_double_chest, m6_barrel, m6_break_contents, m6_furnace_*, m6_blast_smoker, m6_container_persistence all match vanilla; client screens M7/chest + M7/furnace; todo: ender chest, XP orbs, chest/furnace models in the client, fluids, falling blocks, random ticks/growth, block ticks)   - [~] M7 client parity (merged; 10/10 tools/client-scenarios.sh; asset grid 0 problems; needs check-all --client: fixed after play-testing: first-person arm placement, signed head pitch, command tree + suggestions (scenarios first_person_arm/head_pitch/command_suggestions); known visual gaps vs real client = no clouds, no below-horizon void sky, sky tint, first-person arm/held items, XP bar, particles, glint, non-ASCII font)
+- [~] M6 world logic (weather done: /weather + cycle + rain/thunder levels, scenario m6_weather matches vanilla; containers done: chests (single/double/trapped), barrels, furnace/blast furnace/smoker as block entities (server game/container.rs; Anvil-persisted, windows + click modes + lid events + smelting + XP; scenarios m6_chest_*, m6_double_chest, m6_barrel, m6_break_contents, m6_furnace_*, m6_blast_smoker, m6_container_persistence all match vanilla; client screens M7/chest + M7/furnace; todo: ender chest, XP orbs, chest/furnace models in the client, fluids, falling blocks, random ticks/growth, block ticks)
+- [~] M7 client parity (19/19 tools/client-scenarios.sh, 2026-11-23; asset grid 0 problems; input parity vs the real client:
+      `basalt-check client-input` 0 divergences (oracle scripted-input channel, tools/oracle-mod Control.java, port 25789);
+      done: held item + equip anim, item name above hotbar, break/dig particles, menus like vanilla (blurred world /
+      panorama backdrops, title with splash, pause icons, options + all sub-pages, language switching, server list pings
+      with MOTD/players/ping bars/favicons); todo: singleplayer (integrated basalt-server), check-all --client group,
+      clouds, below-horizon void sky, sky tint, XP bar, glint, non-ASCII font, toasts (recipe unlocks), advancements/stats screens)
 - [ ] M8 Nether/End, portals, structures
 - [ ] M9 redstone  - [ ] M10 enchant/anvil/brewing/smithing/XP  - [ ] M11 villagers/raids/AI
 - [ ] M12 bosses/endgame  - [ ] M13 commands/datapacks/advancements/scoreboards

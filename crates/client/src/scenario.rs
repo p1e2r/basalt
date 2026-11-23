@@ -14,7 +14,7 @@ use winit::keyboard::KeyCode;
 const W: u32 = 854;
 const H: u32 = 480;
 
-pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace"];
+pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list"];
 
 enum Outcome { Pass(String), Skip(String) }
 
@@ -40,7 +40,7 @@ pub fn run(args: &Args, assets: Arc<Assets>, name: &str) -> Result<bool> {
         let t = Instant::now();
         let r = match s {
             "edge_chunks" => edge_chunks(&ctx), "inventory" => inventory(&ctx), "crafting_table" => crafting_table(&ctx), "death" => death(&ctx),
-            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx),
+            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx),
             other => Err(anyhow!("unknown scenario {other} (known: {})", ALL.join(", "))),
         };
         let secs = t.elapsed().as_secs_f32();
@@ -956,3 +956,30 @@ fn options_pages(c: &Ctx) -> Result<Outcome> {
 }
 
 fn set_opt_back(g: &mut Game, id: &str) { g.set_opt(id, 1.0); }
+
+/// Multiplayer list pings: MOTD / players / ping bars for a live server, the error line for a
+/// closed port, the vanilla server's status when reachable, Refresh re-pings.
+fn server_list(c: &Ctx) -> Result<Outcome> {
+    use crate::menu::ServerEntry;
+    use crate::status::PingState;
+    let mut g = c.game_at("slist", None)?;
+    wait(&mut g, 0.2)?;
+    let dead = "127.0.0.1:25798".to_string();
+    g.cfg.servers = vec![ServerEntry { name: "Basalt test".into(), addr: c.args.addr.clone() }, ServerEntry { name: "Closed port".into(), addr: dead.clone() }];
+    let van = vanilla_addr(c);
+    if let Some(v) = &van { g.cfg.servers.push(ServerEntry { name: "Vanilla".into(), addr: v.clone() }); }
+    press_widget(&mut g, "multiplayer")?;
+    let done = |g: &Game| g.cfg.servers.iter().all(|s| !matches!(g.pings.get(&s.addr), Some(PingState::Pinging(_)) | None));
+    if !wait_until(&mut g, 8.0, done)? { bail!("pings did not finish"); }
+    let img = capture(&mut g)?; save(&g, &img, "server_list_pings");
+    let Some(PingState::Done(st)) = g.pings.get(&c.args.addr) else { bail!("Basalt server ping failed: {:?}", g.pings.get(&c.args.addr).map(|p| matches!(p, PingState::Failed(_)))) };
+    if st.protocol != basalt_protocol::PROTOCOL_VERSION as i64 || st.max <= 0 { bail!("bad status: protocol {} max {}", st.protocol, st.max); }
+    let basalt = format!("{}/{} players, {} ms, motd {:?}", st.online, st.max, st.ping_ms, st.motd.iter().map(|l| l.iter().map(|r| r.0.as_str()).collect::<String>()).collect::<Vec<_>>());
+    if !matches!(g.pings.get(&dead), Some(PingState::Failed(_))) { bail!("closed port did not fail"); }
+    let vanilla = match van.as_ref().and_then(|v| g.pings.get(v)) { Some(PingState::Done(st)) => format!("vanilla {} {}/{}", st.version, st.online, st.max), Some(_) => bail!("vanilla server ping failed"), None => "vanilla skipped".into() };
+    let rounds = g.ping_rounds;
+    press_widget(&mut g, "refresh")?;
+    if g.ping_rounds != rounds + 1 { bail!("Refresh did not re-ping"); }
+    if !wait_until(&mut g, 8.0, done)? { bail!("refresh pings did not finish"); }
+    Ok(Outcome::Pass(format!("{basalt}; closed port fails; {vanilla}; refresh ok")))
+}
