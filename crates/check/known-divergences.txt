@@ -125,3 +125,4 @@ place target-changed/slab
 place target-changed/torch
 worldgen seed=42 site=2,-3,2
 worldgen seed=2026 site=0,0,3
+dig threshold/basalt-accepts-too-early/dry+air

@@ -3,9 +3,17 @@
 1	crates/check/src/bot.rs	warning	the loop variable `i` is used to index `pos`
 1	crates/check/src/bot.rs	warning	the loop variable `i` is used to index `vel`
 1	crates/check/src/bot.rs	warning	this looks like an `else if` but the `else` is missing
+1	crates/check/src/client/mesh_diff.rs	warning	consider using `sort_by_key`
+1	crates/check/src/client/mesh_diff.rs	warning	redundant closure: help: replace the closure with the function itself: `&neighbour_solid`
+1	crates/check/src/client/mesh_diff.rs	warning	the loop variable `i` is used to index `map`
+1	crates/check/src/client/mesh_diff.rs	warning	the loop variable `j` is used to index `used`
+1	crates/check/src/client/mesh_diff.rs	warning	the loop variable `k` is used to index `verts`
+1	crates/check/src/client/mesh_diff.rs	warning	very complex type used. Consider factoring parts into `type` definitions
 1	crates/check/src/main.rs	warning	this loop could be written as a `while let` loop: help: try: `while let Some((i, s)) = ({ let mut q = q.lock().unwrap(); if q.is_empty() { None } else { Some(q.
 1	crates/check/src/physics.rs	warning	the loop variable `i` is used to index `m`
 1	crates/check/src/physics.rs	warning	the loop variable `i` is used to index `v`
+1	crates/client/src/assets.rs	warning	operator precedence might not be obvious: help: consider parenthesizing your expression: `(a * 32) << 16 | (255 - a * 8) << 8 | (a * 4)`
+1	crates/client/src/assets.rs	warning	the loop variable `i` is only used to index `m`
 1	crates/client/src/assets.rs	warning	very complex type used. Consider factoring parts into `type` definitions
 1	crates/client/src/bench.rs	warning	call to `std::mem::drop` with a value that does not implement `Drop`. Dropping such a type only extends its contained lifetimes
 1	crates/client/src/container.rs	warning	called `unwrap` on `slot` after checking its variant with `is_some`
@@ -21,6 +29,7 @@
 1	crates/client/src/main.rs	warning	the loop variable `i` is used to index `vel`
 1	crates/client/src/menu.rs	warning	manual implementation of `.is_multiple_of()`: help: replace with: `(self.frames.1.elapsed().as_millis() / 300).is_multiple_of(2)`
 1	crates/client/src/menu.rs	warning	unneeded `return` statement
+1	crates/client/src/mesh.rs	warning	this function has too many arguments (8/7)
 2	crates/client/src/net.rs	warning	variant name ends with the enum's name
 1	crates/client/src/player.rs	warning	the loop variable `i` is used to index `d`
 1	crates/client/src/player.rs	warning	the loop variable `i` is used to index `m`

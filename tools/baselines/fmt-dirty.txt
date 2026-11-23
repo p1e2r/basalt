@@ -1,4 +1,8 @@
 crates/check/src/bot.rs
+crates/check/src/client/mesh_diff.rs
+crates/check/src/client/mod.rs
+crates/check/src/client/oracle.rs
+crates/check/src/client/rng.rs
 crates/check/src/driver.rs
 crates/check/src/fuzz/arena.rs
 crates/check/src/fuzz/clicks.rs
@@ -32,6 +36,7 @@ crates/client/src/lang.rs
 crates/client/src/main.rs
 crates/client/src/menu.rs
 crates/client/src/mesh.rs
+crates/client/src/meshdump.rs
 crates/client/src/net.rs
 crates/client/src/player.rs
 crates/client/src/render.rs

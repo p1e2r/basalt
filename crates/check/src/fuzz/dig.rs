@@ -25,7 +25,7 @@ const SKIP: &[&str] = &["door", "bed", "torch", "sign", "banner", "button", "pla
     "amethyst_cluster", "bud", "candle", "sprouts", "roots", "fungus", "mushroom", "wheat", "carrots", "potatoes", "beetroots", "stem", "cocoa", "pickle", "egg", "scaffold", "dripstone", "cactus",
     "sugar_cane", "bamboo", "sweet", "torchflower", "pitcher", "spore", "hanging", "lantern", "chorus", "cave_vines", "weeping", "twisting", "nether_wart", "end_rod", "lightning_rod", "bell", "grindstone",
     "cauldron", "flower_pot", "pot", "air", "moving", "structure", "jigsaw", "command", "barrier", "bedrock", "end_gateway", "end_portal", "test", "dead_bush", "azalea", "dried_ghast", "creaking",
-    "vault", "trial", "orchid", "allium", "tulip", "poppy", "dandelion", "cornflower", "bluet", "oxeye", "lilac", "rose", "peony", "concrete_powder", "lichen", "dripleaf", "eyeblossom", "frogspawn", "sculk_vein", "sculk_sensor", "shrieker", "catalyst", "firefly", "leaf_litter", "wildflowers", "tall_", "double", "petals", "bush", "cobweb", "iron_bars", "pane", "chain", "fence", "wall", "glass_pane", "conduit", "mud", "sniffer", "turtle"];
+    "vault", "trial", "leaves", "orchid", "allium", "tulip", "poppy", "dandelion", "cornflower", "bluet", "oxeye", "lilac", "rose", "peony", "concrete_powder", "lichen", "dripleaf", "eyeblossom", "frogspawn", "sculk_vein", "sculk_sensor", "shrieker", "catalyst", "firefly", "leaf_litter", "wildflowers", "tall_", "double", "petals", "bush", "cobweb", "iron_bars", "pane", "chain", "fence", "wall", "glass_pane", "conduit", "mud", "sniffer", "turtle"];
 
 fn candidates() -> &'static Vec<&'static str> {
     static C: OnceLock<Vec<&'static str>> = OnceLock::new();
