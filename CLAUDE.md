@@ -49,7 +49,11 @@ Read NOTES.md for verified packet formats.
       hardness/tool dig times (server validates), loot-table drops as item entities + pickup/merge/
       despawn, Q-drop, all container_click modes, 2x2 + crafting table crafting, armor slots,
       health/hunger/saturation/regen/starve, fall damage, eating, death (drops inventory) + respawn.
-      Tool durability (damage component, persisted). Missing: armor damage reduction (needs M5 combat), non-food use_item (buckets etc.), death
+      Tool durability (damage component, persisted). Environment (game/env.rs): air supply 300 +
+      drowning (Respiration, Water Breathing, conduit power w/ frame detection, turtle helmet),
+      powder-snow freezing (ticks_frozen 140, thaw 2/tick, leather immunity, entity-data synced),
+      suffocation, lava, fire/burning, campfire, magma, cactus, berry bush, void. Status effects
+      (/effect), enchantments on stacks (/enchant), /setblock /fill /kill. Missing: armor damage reduction (needs M5 combat), non-food use_item (buckets etc.), death
       screen in basalt-client (auto-respawns), human-driven real-client inventory test.
 - [ ] M5 mobs   - [ ] M6 world logic   - [ ] M7 client parity
 - [ ] M8 Nether/End, portals, structures

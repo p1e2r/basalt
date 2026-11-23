@@ -135,7 +135,13 @@ fn read_slot(r: &mut Reader) -> Result<ItemStack> {
     // network component patches have no length prefix: only the ones we understand can be skipped
     let damage_ty = basalt_data::registry_id(basalt_data::registries::DATA_COMPONENT_TYPE, "damage").unwrap_or(3);
     let mut damage = 0;
-    for _ in 0..add { let ty = r.varint()?; if ty == damage_ty { damage = r.varint()?; } else { return Err(anyhow!("component {ty} on item {item}")); } }
+    let ench_ty = basalt_data::registry_id(basalt_data::registries::DATA_COMPONENT_TYPE, "enchantments").unwrap_or(13);
+    for _ in 0..add {
+        let ty = r.varint()?;
+        if ty == damage_ty { damage = r.varint()?; }
+        else if ty == ench_ty { let n = r.varint()?; for _ in 0..n { r.varint()?; r.varint()?; } }
+        else { return Err(anyhow!("component {ty} on item {item}")); }
+    }
     for _ in 0..rem { r.varint()?; }
     Ok(ItemStack { count, item, damage })
 }

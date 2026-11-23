@@ -60,3 +60,12 @@ real server/client over the wire.
   (offline, own game dir vanilla/mcclient, quick-play join; log in vanilla/mcclient/logs/latest.log).
   `swift tools/mc-window-shot.swift out.png` captures only the Minecraft window.
   Proxy it through `basalt-probe proxy 127.0.0.1:25570 127.0.0.1:<server> DIR` to record both directions.
+- Entity data (set_entity_data: varint eid, then {u8 index, varint serializer, value}..., 0xff):
+  0 shared flags (byte, ser 0: 0x01 on fire, 0x02 crouch, 0x08 sprint), 1 air supply (varint, ser 1;
+  vanilla lets it reach -20 then deals drown damage and resets to 0; refills +4/tick), 7 ticks frozen
+  (varint), 8 item entity stack (ser 7, slot format), 9 living health (float, ser 3).
+- update_mob_effect: varint eid, varint effect (MOB_EFFECT registry), varint amplifier, varint duration
+  ticks, u8 flags (0x0e = particles+icon+blend). remove_mob_effect: varint eid, varint effect.
+- Item stack components on the wire: damage (type 3) = varint; enchantments (type 13) = varint n,
+  {varint enchantment id (synced enchantment registry order), varint level}.
+- basalt-probe proxy does not handle compression: run the Basalt side with --compression -1 when proxying.

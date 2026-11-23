@@ -1,4 +1,5 @@
 //! Game thread: owns the world and all players; runs at 20 TPS.
+mod env;
 mod health;
 mod inv;
 mod items;
@@ -23,7 +24,10 @@ pub enum ToGame {
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Debug)]
-pub struct Stack { pub item: i32, pub count: i32, pub damage: i32 }
+pub struct Stack { pub item: i32, pub count: i32, pub damage: i32, /// (enchantment registry id, level); level 0 = unused
+    pub ench: [(u16, u8); 3] }
+
+pub const NO_ENCH: [(u16, u8); 3] = [(0, 0); 3];
 
 struct Player {
     eid: i32,
@@ -71,6 +75,13 @@ struct Player {
     state_id: i32,
     drag: (i8, Vec<i16>),
     seen_items: HashSet<i32>,
+    // environment
+    air: i32,
+    fire_ticks: i32,
+    ticks_frozen: i32,
+    /// effect id -> (amplifier, ticks left; -1 = infinite)
+    effects: HashMap<i32, (u8, i32)>,
+    prev_tick_pos: [f64; 3],
 }
 
 impl Player {
@@ -155,9 +166,10 @@ impl Game {
     }
     fn save_player(&self, p: &Player) {
         let Some(d) = &self.dir else { return };
-        let inv: Vec<_> = p.inv.iter().enumerate().filter(|(_, s)| s.count > 0).map(|(i, s)| serde_json::json!([i, s.item, s.count, s.damage])).collect();
+        let inv: Vec<_> = p.inv.iter().enumerate().filter(|(_, s)| s.count > 0).map(|(i, s)| serde_json::json!([i, s.item, s.count, s.damage, s.ench.iter().filter(|e| e.1 > 0).map(|e| [e.0 as u32, e.1 as u32]).collect::<Vec<_>>()])).collect();
         let j = serde_json::json!({ "pos": p.pos, "yaw": p.yaw, "pitch": p.pitch, "gamemode": p.gamemode, "held": p.held, "inv": inv, "flying": p.flying,
-            "health": p.health, "food": p.food, "saturation": p.saturation, "dead": p.dead });
+            "health": p.health, "food": p.food, "saturation": p.saturation, "dead": p.dead, "air": p.air, "fire": p.fire_ticks,
+            "effects": p.effects.iter().map(|(id, (a, t))| [*id as i64, *a as i64, *t as i64]).collect::<Vec<_>>() });
         let _ = std::fs::create_dir_all(d.join("players"));
         let _ = std::fs::write(d.join("players").join(format!("{}.json", p.uuid)), j.to_string());
     }
@@ -171,8 +183,12 @@ impl Game {
         p.flying = v["flying"].as_bool().unwrap_or(false);
         p.health = v["health"].as_f64().unwrap_or(20.0) as f32; p.food = v["food"].as_i64().unwrap_or(20) as i32;
         p.saturation = v["saturation"].as_f64().unwrap_or(5.0) as f32; p.dead = v["dead"].as_bool().unwrap_or(false);
+        p.air = v["air"].as_i64().unwrap_or(env::MAX_AIR as i64) as i32; p.fire_ticks = v["fire"].as_i64().unwrap_or(0) as i32;
+        for e in v["effects"].as_array().into_iter().flatten() { if let (Some(id), Some(a), Some(t)) = (e[0].as_i64(), e[1].as_i64(), e[2].as_i64()) { p.effects.insert(id as i32, (a as u8, t as i32)); } }
         for e in v["inv"].as_array().into_iter().flatten() {
-            if let (Some(i), Some(item), Some(count)) = (e[0].as_u64(), e[1].as_i64(), e[2].as_i64()) { if (i as usize) < 46 { p.inv[i as usize] = Stack { item: item as i32, count: count as i32, damage: e[3].as_i64().unwrap_or(0) as i32 }; } }
+            if let (Some(i), Some(item), Some(count)) = (e[0].as_u64(), e[1].as_i64(), e[2].as_i64()) { if (i as usize) < 46 { let mut ench = NO_ENCH;
+                for (k, en) in e[4].as_array().into_iter().flatten().take(3).enumerate() { ench[k] = (en[0].as_u64().unwrap_or(0) as u16, en[1].as_u64().unwrap_or(0) as u8); }
+                p.inv[i as usize] = Stack { item: item as i32, count: count as i32, damage: e[3].as_i64().unwrap_or(0) as i32, ench }; } }
         }
     }
 
@@ -316,6 +332,7 @@ impl Game {
             dead: false, health: 20.0, food: 20, saturation: 5.0, exhaustion: 0.0, fall_start: None, hurt_cooldown: 0, regen_timer: 0,
             using: None, sprinting: false, jump_held: false, dig_start: None, cursor: Stack::default(), craft_result: Stack::default(),
             table_grid: [Stack::default(); 9], window: inv::Window::Inventory, next_window: 0, state_id: 0, drag: (0, Vec::new()), seen_items: HashSet::new(),
+            air: env::MAX_AIR, fire_ticks: 0, ticks_frozen: 0, effects: HashMap::new(), prev_tick_pos: [0.0; 3],
         };
         self.load_player(&mut p);
         let dims = self.sh.registries.entries("minecraft:dimension_type");
@@ -353,6 +370,7 @@ impl Game {
         self.players.insert(eid, p);
         self.system_chat(text::colored(&format!("{name} joined the game"), "yellow"));
         self.stream_chunks(eid);
+        self.send_effects(eid);
         if self.players[&eid].dead { let p = &self.players[&eid]; let mut w = Writer::with_id(cb::PLAYER_COMBAT_KILL); w.varint(eid).nbt(&text::plain("You died")); p.send(w); }
     }
 
@@ -485,7 +503,7 @@ impl Game {
                 let n = if status == 3 { s.count } else { 1 };
                 p.inv[slot].count -= n; if p.inv[slot].count <= 0 { p.inv[slot] = Stack::default(); }
                 Self::send_window(p);
-                self.throw_item(eid, Stack { item: s.item, count: n, damage: 0 }, false);
+                self.throw_item(eid, Stack { item: s.item, count: n, damage: 0, ench: NO_ENCH }, false);
                 return;
             }
             5 => { if let Some(p) = self.players.get_mut(&eid) { p.using = None; } return; }
@@ -641,17 +659,73 @@ impl Game {
             }
             "give" => {
                 let (item, count) = (args.get(1).copied().unwrap_or(""), args.get(2).and_then(|c| c.parse().ok()).unwrap_or(1));
-                match registry_id(reg::ITEM, item) { Some(id) => { let left = self.give_stack(eid, Stack { item: id, count, damage: 0 }); if left > 0 { self.throw_item(eid, Stack { item: id, count: left, damage: 0 }, false); } reply(self, format!("Gave {count} {item}")); } None => reply(self, format!("Unknown item {item}")) }
+                match registry_id(reg::ITEM, item) { Some(id) => { let left = self.give_stack(eid, Stack { item: id, count, damage: 0, ench: NO_ENCH }); if left > 0 { self.throw_item(eid, Stack { item: id, count: left, damage: 0, ench: NO_ENCH }, false); } reply(self, format!("Gave {count} {item}")); } None => reply(self, format!("Unknown item {item}")) }
             }
             "time" => {
                 let v = match args.get(2).copied().or(args.get(1).copied()) { Some("day") => Some(1000), Some("noon") => Some(6000), Some("night") => Some(13000), Some("midnight") => Some(18000), Some(n) => n.parse().ok(), None => None };
                 match v { Some(t) => { self.day_time = t; let w = self.set_time_packet(); self.broadcast(None, || Writer { buf: w.buf.clone() }); reply(self, format!("Set the time to {t}")); } None => reply(self, "Usage: /time set <day|night|ticks>".into()) }
             }
+            "effect" => {
+                // /effect give <target> <effect> [seconds|infinite] [amplifier] | /effect clear [target] [effect]
+                match args.get(1).copied() {
+                    Some("give") => {
+                        let rest: Vec<&str> = args.iter().skip(2).copied().filter(|a| !(a.starts_with('@') || self.players.values().any(|p| p.name.eq_ignore_ascii_case(a)))).collect();
+                        let name = rest.first().map(|n| n.trim_start_matches("minecraft:")).unwrap_or("");
+                        let secs = rest.get(1).copied().unwrap_or("30");
+                        let ticks = if secs == "infinite" { -1 } else { secs.parse::<i32>().unwrap_or(30) * 20 };
+                        let amp = rest.get(2).and_then(|a| a.parse().ok()).unwrap_or(0u8);
+                        if env::effect_id(name).is_some() { self.add_effect(eid, name, amp, ticks, true); reply(self, format!("Applied effect {name}")); } else { reply(self, format!("Unknown effect {name}")); }
+                    }
+                    Some("clear") => {
+                        let ids: Vec<i32> = self.players[&eid].effects.keys().copied().collect();
+                        let only = args.iter().skip(2).find_map(|a| env::effect_id(a.trim_start_matches("minecraft:")));
+                        for id in ids { if only.map(|o| o == id).unwrap_or(true) { self.clear_effect(eid, id); } }
+                        reply(self, "Removed effects".into());
+                    }
+                    _ => reply(self, "Usage: /effect give <target> <effect> [seconds] [amplifier] | /effect clear".into()),
+                }
+            }
+            "enchant" => {
+                // /enchant [target] <enchantment> [level] — applies to the held item
+                let rest: Vec<&str> = args.iter().skip(1).copied().filter(|a| !a.starts_with('@')).collect();
+                let name = rest.first().map(|n| n.trim_start_matches("minecraft:")).unwrap_or("");
+                let lvl = rest.get(1).and_then(|l| l.parse().ok()).unwrap_or(1u8);
+                match self.sh.registries.id("minecraft:enchantment", &format!("minecraft:{name}")) {
+                    Some(id) => {
+                        let p = self.players.get_mut(&eid).unwrap(); let slot = 36 + p.held;
+                        if p.inv[slot].count <= 0 { reply(self, "Hold an item to enchant".into()); return; }
+                        let e = &mut p.inv[slot].ench;
+                        if let Some(i) = e.iter().position(|x| x.1 > 0 && x.0 as i32 == id).or_else(|| e.iter().position(|x| x.1 == 0)) { e[i] = (id as u16, lvl); }
+                        Self::send_window(p);
+                        reply(self, format!("Enchanted with {name} {lvl}"));
+                    }
+                    None => reply(self, format!("Unknown enchantment {name}")),
+                }
+            }
+            "setblock" | "fill" => {
+                let n = if args[0] == "setblock" { 3 } else { 6 };
+                let cur = self.players[&eid].pos;
+                let coord = |s: &str, c: f64| -> Option<i32> { if let Some(r) = s.strip_prefix('~') { Some((c + if r.is_empty() { 0.0 } else { r.parse::<f64>().ok()? }).floor() as i32) } else { s.parse::<f64>().ok().map(|v| v.floor() as i32) } };
+                let nums: Option<Vec<i32>> = (0..n).map(|i| args.get(1 + i).and_then(|a| coord(a, cur[i % 3]))).collect();
+                let block = args.get(1 + n).map(|b| b.trim_start_matches("minecraft:")).unwrap_or("");
+                let state = parse_block_state(block);
+                match (nums, state) {
+                    (Some(c), Some(st)) => {
+                        let (lo, hi) = if n == 3 { ([c[0], c[1], c[2]], [c[0], c[1], c[2]]) } else { ([c[0].min(c[3]), c[1].min(c[4]), c[2].min(c[5])], [c[0].max(c[3]), c[1].max(c[4]), c[2].max(c[5])]) };
+                        let vol = (hi[0] - lo[0] + 1) as i64 * (hi[1] - lo[1] + 1) as i64 * (hi[2] - lo[2] + 1) as i64;
+                        if vol > 32768 { reply(self, format!("Too many blocks ({vol} > 32768)")); return; }
+                        for x in lo[0]..=hi[0] { for y in lo[1]..=hi[1] { for z in lo[2]..=hi[2] { self.ensure_chunk(x >> 4, z >> 4); self.set_block(x, y, z, st); } } }
+                        reply(self, format!("Changed {vol} block(s)"));
+                    }
+                    _ => reply(self, format!("Usage: /{} <x y z{}> <block[props]>", args[0], if n == 6 { " x y z" } else { "" })),
+                }
+            }
+            "kill" => { let h = self.players[&eid].health; let gm = self.players[&eid].gamemode; if gm == 1 || gm == 3 { reply(self, "Can't kill a creative/spectator player".into()); } else { self.hurt_bypass(eid, h.max(1.0) + 1000.0, "generic_kill"); } }
             "say" => { let m = args[1..].join(" "); self.system_chat(text::plain(&format!("[{name}] {m}"))); }
             "list" => { let names: Vec<_> = self.players.values().map(|p| p.name.clone()).collect(); reply(self, format!("{} online: {}", names.len(), names.join(", "))); }
             "spawn" => { let s = self.spawn; let p = self.players.get_mut(&eid).unwrap(); p.pos = s; Self::teleport(p); self.stream_chunks(eid); }
             "save" | "save-all" => { self.save_level(); reply(self, "Saved the world".into()); }
-            "help" | "" => reply(self, "Commands: /gamemode /tp /give /time /say /list /spawn /save".into()),
+            "help" | "" => reply(self, "Commands: /gamemode /tp /give /time /say /list /spawn /save /effect /enchant /setblock /fill /kill".into()),
             other => reply(self, format!("Unknown command: {other}")),
         }
     }
@@ -664,6 +738,7 @@ impl Game {
         for c in self.gen.finished() { self.add_generated(c); }
         self.tick_items();
         self.tick_survival();
+        self.tick_environment();
         let ids: Vec<i32> = self.players.keys().copied().collect();
         for &eid in &ids { self.stream_chunks(eid); }
         // movement broadcast
@@ -729,11 +804,15 @@ impl Game {
 
 /// Data component type id of `minecraft:damage`.
 fn damage_component() -> i32 { registry_id(reg::DATA_COMPONENT_TYPE, "damage").unwrap_or(3) }
+fn ench_component() -> i32 { registry_id(reg::DATA_COMPONENT_TYPE, "enchantments").unwrap_or(13) }
 
 pub(crate) fn write_slot(w: &mut Writer, s: Stack) {
     if s.count <= 0 { w.varint(0); return; }
     w.varint(s.count).varint(s.item);
-    if s.damage > 0 { w.varint(1).varint(0).varint(damage_component()).varint(s.damage); } else { w.varint(0).varint(0); }
+    let ench: Vec<(u16, u8)> = s.ench.iter().copied().filter(|e| e.1 > 0).collect();
+    w.varint((s.damage > 0) as i32 + (!ench.is_empty()) as i32).varint(0);
+    if s.damage > 0 { w.varint(damage_component()).varint(s.damage); }
+    if !ench.is_empty() { w.varint(ench_component()).varint(ench.len() as i32); for (e, l) in ench { w.varint(e as i32).varint(l as i32); } }
 }
 
 /// Creative / untrusted slot: count, item, then length-prefixed component patches (ignored).
@@ -742,13 +821,25 @@ fn read_slot(r: &mut Reader) -> Result<Stack> {
     if count <= 0 { return Ok(Stack::default()); }
     let item = r.varint()?;
     let (add, rem) = (r.varint()?, r.varint()?);
-    let mut damage = 0;
+    let mut damage = 0; let mut ench = NO_ENCH;
     for _ in 0..add {
         let ty = r.varint()?; let len = r.varint()?; let body = r.take(len.max(0) as usize)?;
         if ty == damage_component() { damage = Reader::new(body).varint().unwrap_or(0).max(0); }
+        if ty == ench_component() {
+            let mut b = Reader::new(body); let n = b.varint().unwrap_or(0);
+            for i in 0..n.clamp(0, 3) as usize { if let (Ok(e), Ok(l)) = (b.varint(), b.varint()) { ench[i] = (e as u16, l.clamp(0, 255) as u8); } }
+        }
     }
     for _ in 0..rem { r.varint()?; }
-    Ok(Stack { item, count: count.min(99), damage })
+    Ok(Stack { item, count: count.min(99), damage, ench })
+}
+
+/// `stone`, `water[level=3]`, `oak_log[axis=x]` → block state id.
+fn parse_block_state(s: &str) -> Option<u32> {
+    let (name, props) = match s.split_once('[') { Some((n, p)) => (n, p.trim_end_matches(']')), None => (s, "") };
+    let mut st = block_default(name)?;
+    for kv in props.split(',').filter(|k| !k.is_empty()) { let (k, v) = kv.split_once('=')?; st = with_prop(st, k.trim(), v.trim()); }
+    Some(st)
 }
 
 /// Items whose block has a different name.
@@ -764,7 +855,7 @@ fn block_for_item(item: &str) -> Option<u32> {
 
 /// Minimal brigadier tree: each command is a literal with an optional greedy string argument.
 fn commands_packet() -> Writer {
-    let cmds = ["gamemode", "gm", "tp", "teleport", "give", "time", "say", "list", "spawn", "save", "save-all", "help"];
+    let cmds = ["gamemode", "gm", "tp", "teleport", "give", "time", "say", "list", "spawn", "save", "save-all", "help", "effect", "enchant", "setblock", "fill", "kill"];
     let greedy = registry_id(reg::COMMAND_ARGUMENT_TYPE, "brigadier:string").unwrap_or(5);
     let n = 1 + cmds.len() * 2;
     let mut w = Writer::with_id(cb::COMMANDS); w.varint(n as i32);

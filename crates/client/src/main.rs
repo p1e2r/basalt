@@ -29,11 +29,11 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
-struct Args { data: String, addr: String, name: String, jar: String, screenshot: Option<String>, wait: f32, size: (u32, u32), pos: Option<[f64; 3]>, look: Option<(f32, f32)>, cmds: Vec<String>, walk: f32, chat: Vec<String>, click: Option<char>, clicks: Vec<(i16, i8, i32)>, hold: f32 }
+struct Args { data: String, addr: String, name: String, jar: String, screenshot: Option<String>, wait: f32, size: (u32, u32), pos: Option<[f64; 3]>, look: Option<(f32, f32)>, cmds: Vec<String>, walk: f32, chat: Vec<String>, click: Option<char>, clicks: Vec<(i16, i8, i32)>, hold: f32, later: Vec<(f32, String)> }
 
 fn parse_args() -> Args {
     let mut a = Args { data: "data".into(), addr: "127.0.0.1:25566".into(), name: "Basalt".into(), jar: std::env::var("BASALT_JAR").unwrap_or_else(|_| "vanilla/client.jar".into()),
-        screenshot: None, wait: 8.0, size: (1280, 720), pos: None, look: None, cmds: Vec::new(), walk: 0.0, chat: Vec::new(), click: None, clicks: Vec::new(), hold: 1.0 };
+        screenshot: None, wait: 8.0, size: (1280, 720), pos: None, look: None, cmds: Vec::new(), walk: 0.0, chat: Vec::new(), click: None, clicks: Vec::new(), hold: 1.0, later: Vec::new() };
     let mut it = std::env::args().skip(1);
     let triple = |s: String| -> Option<[f64; 3]> { let v: Vec<f64> = s.split(',').filter_map(|p| p.parse().ok()).collect(); (v.len() == 3).then(|| [v[0], v[1], v[2]]) };
     while let Some(k) = it.next() {
@@ -47,6 +47,8 @@ fn parse_args() -> Args {
             "--cmd" => a.cmds.push(v()),
             "--chat" => a.chat.push(v()),
             "--click" => a.click = v().chars().next(),
+            // "--later 10:tp @s 0 0 0": run a command N seconds after joining
+            "--later" => { let v = v(); if let Some((t, c)) = v.split_once(':') { a.later.push((t.parse().unwrap_or(0.0), c.to_string())); } }
             "--hold" => a.hold = v().parse().unwrap_or(1.0),
             // container clicks in the player inventory: "slot:button:mode,..."
             "--clicks" => a.clicks = v().split(',').filter_map(|c| { let p: Vec<&str> = c.split(':').collect(); Some((p.first()?.parse().ok()?, p.get(1).unwrap_or(&"0").parse().ok()?, p.get(2).unwrap_or(&"0").parse().ok()?)) }).collect(),
@@ -681,6 +683,8 @@ fn run_screenshot(args: &Args, assets: Arc<Assets>, out: &str) -> Result<()> {
     let mut clicked = false;
     let mut clicked_at: Option<Instant> = None;
     let mut next_click = 0usize;
+    let mut placed_at: Option<Instant> = None;
+    let mut done_later: Vec<String> = Vec::new();
     while start.elapsed().as_secs_f32() < args.wait {
         g.update();
         if g.spawned && !placed && g.loaded_sent {
@@ -695,6 +699,8 @@ fn run_screenshot(args: &Args, assets: Arc<Assets>, out: &str) -> Result<()> {
             match args.click { Some('l') => { g.mouse[0] = true; clicked = true; } Some('r') => { g.use_item(); clicked = true; } _ => {} }
         }
         if clicked && (start.elapsed().as_secs_f32() > args.wait - 1.0 || clicked_at.get_or_insert(Instant::now()).elapsed().as_secs_f32() > args.hold) { g.mouse[0] = false; }
+        if let Some(t0) = placed_at { for (t, c) in &args.later { if !done_later.contains(c) && t0.elapsed().as_secs_f32() >= *t { g.send_chat(&format!("/{c}")); done_later.push(c.clone()); } } }
+        if placed && placed_at.is_none() { placed_at = Some(Instant::now()); }
         if placed && start.elapsed().as_secs_f32() > 4.0 + next_click as f32 * 0.3 && next_click < args.clicks.len() {
             let (slot, button, mode) = args.clicks[next_click]; next_click += 1;
             let mut w = Writer::with_id(sb::CONTAINER_CLICK); w.varint(0).varint(0).i16(slot).i8(button).varint(mode).varint(0).bool(false); send(&g.out, w);

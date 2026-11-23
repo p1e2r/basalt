@@ -3,7 +3,7 @@
 //! Player inventory (window 0): 0 craft result, 1-4 craft grid, 5-8 armor, 9-35 main,
 //! 36-44 hotbar, 45 offhand — stored 1:1 in `Player::inv` (slot 0 unused).
 //! Crafting table window: 0 result, 1-9 grid (`Player::table_grid`), 10-36 main, 37-45 hotbar.
-use super::{Game, Player, Stack};
+use super::{NO_ENCH, Game, Player, Stack};
 use anyhow::Result;
 use basalt_protocol::{ids::play::clientbound as cb, text, Reader, Writer};
 
@@ -49,7 +49,7 @@ impl Game {
         let mut count = s.count;
         let order: Vec<usize> = (36..45).chain(9..36).collect();
         for &i in &order { if count == 0 { break; } let t = &mut p.inv[i]; if t.count > 0 && t.item == s.item && t.count < max { let n = (max - t.count).min(count); t.count += n; count -= n; } }
-        for &i in &order { if count == 0 { break; } let t = &mut p.inv[i]; if t.count == 0 { let n = max.min(count); *t = Stack { item: s.item, count: n, damage: s.damage }; count -= n; } }
+        for &i in &order { if count == 0 { break; } let t = &mut p.inv[i]; if t.count == 0 { let n = max.min(count); *t = Stack { item: s.item, count: n, damage: s.damage, ench: s.ench }; count -= n; } }
         if count != s.count { Self::send_window(p); }
         count
     }
@@ -59,7 +59,7 @@ impl Game {
         let (grid, w) = p.grid();
         let r = if grid.iter().all(|g| g.is_none()) { None } else { self.data.craft(&grid, w, w) };
         let p = self.players.get_mut(&eid).unwrap();
-        p.craft_result = r.map(|r| Stack { item: r.item, count: r.count, damage: 0 }).unwrap_or_default();
+        p.craft_result = r.map(|r| Stack { item: r.item, count: r.count, damage: 0, ench: NO_ENCH }).unwrap_or_default();
     }
 
     /// Take one craft: consume one of each grid ingredient (leaving remainders). Returns the result.
@@ -73,10 +73,10 @@ impl Game {
             let mut s = p.get(l);
             if s.count <= 0 { continue; }
             s.count -= 1;
-            if s.count == 0 { if let Some(Some(rem)) = r.remainders.get(i) { s = Stack { item: *rem, count: 1, damage: 0 }; } }
+            if s.count == 0 { if let Some(Some(rem)) = r.remainders.get(i) { s = Stack { item: *rem, count: 1, damage: 0, ench: NO_ENCH }; } }
             p.set(l, s);
         }
-        Some(Stack { item: r.item, count: r.count, damage: 0 })
+        Some(Stack { item: r.item, count: r.count, damage: 0, ench: NO_ENCH })
     }
 
     pub(super) fn send_window(p: &mut Player) {
@@ -109,7 +109,7 @@ impl Game {
         }
         p.window = Window::Inventory;
         p.craft_result = Stack::default();
-        for s in back { let left = self.give_stack(eid, s); if left > 0 { self.throw_item(eid, Stack { item: s.item, count: left, damage: s.damage }, false); } }
+        for s in back { let left = self.give_stack(eid, s); if left > 0 { self.throw_item(eid, Stack { item: s.item, count: left, damage: s.damage, ench: s.ench }, false); } }
         if let Some(p) = self.players.get_mut(&eid) { Self::send_window(p); }
     }
 
@@ -149,7 +149,7 @@ impl Game {
                     if c.count > 0 {
                         let n = if button == 0 { c.count } else { 1 };
                         p.cursor.count -= n; if p.cursor.count <= 0 { p.cursor = Stack::default(); }
-                        self.throw_item(eid, Stack { item: c.item, count: n, damage: c.damage }, false);
+                        self.throw_item(eid, Stack { item: c.item, count: n, damage: c.damage, ench: c.ench }, false);
                     }
                 } else if let Some(l) = l {
                     if l == Loc::Result {
@@ -158,7 +158,7 @@ impl Game {
                         if res.count > 0 && (cur.count == 0 || (cur.item == res.item && cur.count + res.count <= self.max_stack(res.item))) {
                             if let Some(got) = self.take_craft(eid) {
                                 let p = self.players.get_mut(&eid).unwrap();
-                                p.cursor = Stack { item: got.item, count: cur.count + got.count, damage: got.damage };
+                                p.cursor = Stack { item: got.item, count: cur.count + got.count, damage: got.damage, ench: got.ench };
                             }
                         }
                     } else {
@@ -171,13 +171,13 @@ impl Game {
                             else if s.count == 0 || s.item == c.item {
                                 if !ok_here(self, c.item) { (s, c) } else {
                                     let n = (max_c - s.count.max(0)).min(c.count).max(0);
-                                    (Stack { item: c.item, count: s.count + n, damage: c.damage }, Stack { item: c.item, count: c.count - n, damage: c.damage })
+                                    (Stack { item: c.item, count: s.count + n, damage: c.damage, ench: c.ench }, Stack { item: c.item, count: c.count - n, damage: c.damage, ench: c.ench })
                                 }
                             } else if ok_here(self, c.item) { (c, s) } else { (s, c) }
                         } else if c.count == 0 {
-                            let half = (s.count + 1) / 2; (Stack { item: s.item, count: s.count - half, damage: s.damage }, Stack { item: s.item, count: half, damage: s.damage })
+                            let half = (s.count + 1) / 2; (Stack { item: s.item, count: s.count - half, damage: s.damage, ench: s.ench }, Stack { item: s.item, count: half, damage: s.damage, ench: s.ench })
                         } else if (s.count == 0 || (s.item == c.item && s.count < max_c)) && ok_here(self, c.item) {
-                            (Stack { item: c.item, count: s.count + 1, damage: c.damage }, Stack { item: c.item, count: c.count - 1, damage: c.damage })
+                            (Stack { item: c.item, count: s.count + 1, damage: c.damage, ench: c.ench }, Stack { item: c.item, count: c.count - 1, damage: c.damage, ench: c.ench })
                         } else { (s, c) };
                         let p = self.players.get_mut(&eid).unwrap();
                         p.set(l, ns); p.cursor = if nc.count > 0 { nc } else { Stack::default() };
@@ -228,7 +228,7 @@ impl Game {
             },
             3 => if let (Some(l), true) = (l, creative) {
                 let s = self.players[&eid].get(l);
-                if s.count > 0 && self.players[&eid].cursor.count == 0 { let m = self.max_stack(s.item); self.players.get_mut(&eid).unwrap().cursor = Stack { item: s.item, count: m, damage: s.damage }; }
+                if s.count > 0 && self.players[&eid].cursor.count == 0 { let m = self.max_stack(s.item); self.players.get_mut(&eid).unwrap().cursor = Stack { item: s.item, count: m, damage: s.damage, ench: s.ench }; }
             },
             4 => if let Some(l) = l {
                 if l == Loc::Result {
@@ -237,8 +237,8 @@ impl Game {
                     let s = self.players[&eid].get(l);
                     if s.count > 0 {
                         let n = if button == 1 { s.count } else { 1 };
-                        self.players.get_mut(&eid).unwrap().set(l, Stack { item: s.item, count: s.count - n, damage: s.damage });
-                        self.throw_item(eid, Stack { item: s.item, count: n, damage: s.damage }, false);
+                        self.players.get_mut(&eid).unwrap().set(l, Stack { item: s.item, count: s.count - n, damage: s.damage, ench: s.ench });
+                        self.throw_item(eid, Stack { item: s.item, count: n, damage: s.damage, ench: s.ench }, false);
                     }
                 }
             },
@@ -263,10 +263,10 @@ impl Game {
                                     let room = max - s.count.max(0);
                                     let n = if start == 8 && creative { room } else { per.min(room).min(left) };
                                     if n <= 0 { continue; }
-                                    p.set(t, Stack { item: c.item, count: s.count.max(0) + n, damage: c.damage });
+                                    p.set(t, Stack { item: c.item, count: s.count.max(0) + n, damage: c.damage, ench: c.ench });
                                     if !(start == 8 && creative) { left -= n; }
                                 }
-                                p.cursor = if left > 0 { Stack { item: c.item, count: left, damage: c.damage } } else { Stack::default() };
+                                p.cursor = if left > 0 { Stack { item: c.item, count: left, damage: c.damage, ench: c.ench } } else { Stack::default() };
                             }
                         }
                     }
@@ -283,7 +283,7 @@ impl Game {
                         if cur >= max { break; }
                         let l = loc(win, s).unwrap();
                         let t = p.get(l);
-                        if t.count > 0 && t.item == c.item { let n = (max - cur).min(t.count); cur += n; p.set(l, Stack { item: t.item, count: t.count - n, damage: t.damage }); }
+                        if t.count > 0 && t.item == c.item { let n = (max - cur).min(t.count); cur += n; p.set(l, Stack { item: t.item, count: t.count - n, damage: t.damage, ench: t.ench }); }
                     }
                     p.cursor.count = cur;
                 }
