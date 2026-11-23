@@ -12,13 +12,19 @@ impl Game {
     }
 
     /// Apply damage of a vanilla damage type ("fall", "starve", "generic", …). Returns true if it killed.
-    pub(super) fn hurt(&mut self, eid: i32, amount: f32, kind: &str) -> bool {
+    pub(super) fn hurt(&mut self, eid: i32, amount: f32, kind: &str) -> bool { self.hurt_inner(eid, amount, kind, false) }
+    /// Damage that ignores invulnerability frames (void, /kill).
+    pub(super) fn hurt_bypass(&mut self, eid: i32, amount: f32, kind: &str) -> bool { self.hurt_inner(eid, amount, kind, true) }
+
+    fn hurt_inner(&mut self, eid: i32, amount: f32, kind: &str, bypass: bool) -> bool {
         let dt = self.damage_type(kind);
         let Some(p) = self.players.get_mut(&eid) else { return false };
-        if p.dead || matches!(p.gamemode, 1 | 3) || amount <= 0.0 { return false; }
-        if p.hurt_cooldown > 0 && kind != "starve" { return false; }
+        if p.dead || amount <= 0.0 { return false; }
+        if matches!(p.gamemode, 1 | 3) && kind != "out_of_world" { return false; }
+        if p.hurt_cooldown > 0 && !bypass && kind != "starve" { return false; }
         p.hurt_cooldown = 10;
         p.health = (p.health - amount).max(0.0);
+        log::debug!("{} took {amount} {kind} damage -> {}", p.name, p.health);
         p.exhaustion += 0.1;
         let died = p.health <= 0.0;
         self.broadcast(None, || { let mut w = Writer::with_id(cb::DAMAGE_EVENT); w.varint(eid).varint(dt).varint(0).varint(0).bool(false); w });
@@ -32,7 +38,13 @@ impl Game {
         p.dead = true;
         p.using = None;
         let name = p.name.clone();
-        let msg = match kind { "fall" => format!("{name} hit the ground too hard"), "starve" => format!("{name} starved to death"), "out_of_world" => format!("{name} fell out of the world"), _ => format!("{name} died") };
+        let msg = match kind {
+            "fall" => format!("{name} hit the ground too hard"), "starve" => format!("{name} starved to death"), "out_of_world" => format!("{name} fell out of the world"),
+            "drown" => format!("{name} drowned"), "in_wall" => format!("{name} suffocated in a wall"), "lava" => format!("{name} tried to swim in lava"),
+            "in_fire" | "campfire" => format!("{name} went up in flames"), "on_fire" => format!("{name} burned to death"), "hot_floor" => format!("{name} discovered the floor was lava"),
+            "cactus" => format!("{name} was pricked to death"), "sweet_berry_bush" => format!("{name} was poked to death by a sweet berry bush"), "generic_kill" => format!("{name} was killed"), "freeze" => format!("{name} froze to death"),
+            _ => format!("{name} died"),
+        };
         let mut w = Writer::with_id(cb::PLAYER_COMBAT_KILL); w.varint(eid).nbt(&text::plain(&msg)); p.send(w);
         // death animation for everyone else
         self.broadcast(Some(eid), || { let mut w = Writer::with_id(cb::ENTITY_EVENT); w.i32(eid).u8(3); w });
@@ -52,6 +64,9 @@ impl Game {
         let Some(p) = self.players.get_mut(&eid) else { return };
         if !p.dead { return; }
         p.dead = false; p.health = MAX_HEALTH; p.food = 20; p.saturation = 5.0; p.exhaustion = 0.0; p.fall_start = None;
+        p.air = super::env::MAX_AIR; p.fire_ticks = 0; p.ticks_frozen = 0;
+        let effects: Vec<i32> = p.effects.keys().copied().collect();
+        p.effects.clear();
         p.pos = spawn; p.yaw = 0.0; p.pitch = 0.0;
         let mut w = Writer::with_id(cb::RESPAWN);
         w.varint(dim_type).str("minecraft:overworld").i64(seed_hash).u8(p.gamemode).i8(-1).bool(false).bool(false).bool(false).varint(0).varint(63).u8(0);
@@ -63,6 +78,7 @@ impl Game {
         let mut w = Writer::with_id(cb::GAME_EVENT); w.u8(13).f32(0.0); p.send(w);
         Self::send_window(p);
         let w = self.set_time_packet(); self.players[&eid].send(w);
+        for id in effects { let mut w = Writer::with_id(cb::REMOVE_MOB_EFFECT); w.varint(eid).varint(id); self.players[&eid].send(w); }
         self.send_health(eid);
         // re-add for others (they saw the death animation)
         let add = self.add_entity(&self.players[&eid]);
@@ -94,7 +110,6 @@ impl Game {
             let top = p.fall_start.get_or_insert(old_y.max(p.pos[1]));
             if p.pos[1] > *top { *top = p.pos[1]; }
         }
-        if p_pos_below_world(self, eid) { self.hurt(eid, 4.0, "out_of_world"); }
     }
 
     /// Hunger, regeneration, starvation, eating. Once per tick per player.
@@ -171,9 +186,6 @@ impl Game {
     }
 }
 
-fn p_pos_below_world(g: &Game, eid: i32) -> bool {
-    g.players.get(&eid).map(|p| p.pos[1] < basalt_world::MIN_Y as f64 - 64.0 && !p.dead).unwrap_or(false)
-}
 
 trait Tap { fn tap(self, f: impl FnOnce(&mut Self)) -> Self; }
 impl Tap for Writer { fn tap(mut self, f: impl FnOnce(&mut Self)) -> Self { f(&mut self); self } }

@@ -1,5 +1,5 @@
 //! Item entities: spawning, simple physics, merging, pickup, despawn.
-use super::{Game, Stack};
+use super::{NO_ENCH, Game, Stack};
 use basalt_protocol::{ids::play::clientbound as cb, Writer};
 use basalt_world::props;
 use rand::Rng;
@@ -36,7 +36,7 @@ impl Game {
         for (item, count) in drops {
             let (ox, oy, oz) = (self.rng.gen_range(0.25..0.75), self.rng.gen_range(0.25..0.75), self.rng.gen_range(0.25..0.75));
             let vel = [self.rng.gen_range(-0.1..0.1), 0.2, self.rng.gen_range(-0.1..0.1)];
-            self.spawn_item([b[0] as f64 + ox, b[1] as f64 + oy - 0.125, b[2] as f64 + oz], vel, Stack { item, count, damage: 0 }, 10);
+            self.spawn_item([b[0] as f64 + ox, b[1] as f64 + oy - 0.125, b[2] as f64 + oz], vel, Stack { item, count, damage: 0, ench: NO_ENCH }, 10);
         }
     }
 
