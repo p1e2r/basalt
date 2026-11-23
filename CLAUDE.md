@@ -67,6 +67,11 @@ Read NOTES.md for verified packet formats.
 - Known client gaps: no entity models (boxes only), survival dig time not hardness-based,
   no inventory screen, no sounds, edge chunks without loaded neighbours are not meshed.
 
+## Testing rules (from the user, 2026-11-23)
+- Every new feature ships with a scenario test in the check harness (crates/check).
+- Run `tools/check-all.sh` and get a clean pass/fail table before marking anything done.
+- Prefer differential checks against vanilla (25566) over hand-written expectations.
+
 ## Local setup (macOS)
 1. Java 25 + Rust. `./tools/extract-data.sh` (downloads the official server jar, runs its data
    generator into ./data). Required before any build.
