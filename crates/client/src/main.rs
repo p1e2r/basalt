@@ -12,6 +12,7 @@ mod entity;
 mod lang;
 mod menu;
 mod mesh;
+mod meshdump;
 mod net;
 mod player;
 mod render;
@@ -48,13 +49,14 @@ pub struct Args {
     // visual parity / asset grid / benchmark
     time: Option<i64>, fov: Option<f32>, render_distance: Option<u32>, gui_scale: Option<u32>, no_gui: bool, options: Option<String>,
     asset_grid: Option<String>, grid_items: bool, allowlist: String, bench: Option<String>, seconds: f32, bench_mode: String,
+    mesh_dump: Option<String>, mesh_out: String,
 }
 
 fn parse_args() -> Args {
     let mut a = Args { data: "data".into(), addr: "127.0.0.1:25566".into(), addr_given: false, name: "Basalt".into(), jar: std::env::var("BASALT_JAR").unwrap_or_else(|_| "vanilla/client.jar".into()),
         screenshot: None, wait: 8.0, size: (1280, 720), pos: None, look: None, cmds: Vec::new(), walk: 0.0, chat: Vec::new(), click: None, clicks: Vec::new(), hold: 1.0, later: Vec::new(), attack: 0, attack_every: 0.7,
         scenario: None, vanilla: None, assets: None, asset_index: None, auto_respawn: false,
-        time: None, fov: None, render_distance: None, gui_scale: None, no_gui: false, options: None, asset_grid: None, grid_items: false, allowlist: "tools/asset-allowlist.txt".into(),
+        time: None, fov: None, render_distance: None, gui_scale: None, no_gui: false, options: None, asset_grid: None, grid_items: false, allowlist: "tools/asset-allowlist.txt".into(), mesh_dump: None, mesh_out: "target/mesh-dump".into(),
         bench: None, seconds: 20.0, bench_mode: "rotate".into() };
     let mut it = std::env::args().skip(1);
     let triple = |s: String| -> Option<[f64; 3]> { let v: Vec<f64> = s.split(',').filter_map(|p| p.parse().ok()).collect(); (v.len() == 3).then(|| [v[0], v[1], v[2]]) };
@@ -91,6 +93,7 @@ fn parse_args() -> Args {
             "--no-gui" => a.no_gui = true,
             "--options" => a.options = Some(v()),
             "--asset-grid" => a.asset_grid = Some(v()),
+            "--mesh-dump" => a.mesh_dump = Some(v()), "--out" => a.mesh_out = v(),
             "--blocks" => a.grid_items = false, "--items" => a.grid_items = true,
             "--allowlist" => a.allowlist = v(),
             "--bench" => a.bench = Some(v()),
@@ -1334,6 +1337,7 @@ fn main() -> Result<()> {
     let t = Instant::now();
     let assets = Arc::new(Assets::load(&args.jar).with_context(|| format!("loading assets from {} (pass --jar path/to/26.2.jar)", args.jar))?);
     log::info!("assets loaded in {:.2?}: {} models, atlas {}x{}", t.elapsed(), assets.models.len(), assets.atlas.w, assets.atlas.h);
+    if let Some(req) = args.mesh_dump.clone() { return meshdump::run(&assets, &req, &args.mesh_out); }
     if let Some(out) = args.asset_grid.clone() { let ok = assetgrid::run(&args, assets, &out)?; std::process::exit(if ok { 0 } else { 1 }); }
     if let Some(out) = args.bench.clone() { return bench::run(&args, assets, &out); }
     if let Some(name) = args.scenario.clone() { let ok = scenario::run(&args, assets, &name)?; std::process::exit(if ok { 0 } else { 1 }); }

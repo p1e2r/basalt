@@ -39,12 +39,35 @@ fn fluid_height(a: &Assets, s: &Snapshot, x: i32, y: i32, z: i32, kind: u8) -> f
     if i.fluid_level >= 8 { 1.0 } else { (8 - i.fluid_level) as f32 / 9.0 }
 }
 
+/// Per-quad metadata recorded by `mesh_block` when tracing (used by `--mesh-dump`).
+#[derive(Clone, Copy)]
+pub struct QuadTrace {
+    /// 0 = block model, 1 = fluid
+    pub src: u8,
+    pub layer: u8,
+    pub dir: u8,
+    /// cull face (NO_CULL = none)
+    pub cull: u8,
+    pub tinted: bool,
+    pub tint: [f32; 3],
+    pub shade: bool,
+    pub verts: [Vertex; 4],
+}
+
 pub fn mesh_section(a: &Assets, biomes: &[Biome], s: &Snapshot) -> SectionMesh {
     let mut out = SectionMesh::default();
-    let ox = s.origin[0] as f32; let oy = s.origin[1] as f32; let oz = s.origin[2] as f32;
     for y in 0..16i32 { for z in 0..16i32 { for x in 0..16i32 {
+        mesh_block(a, biomes, s, x, y, z, &mut out, None);
+    } } }
+    out
+}
+
+/// Mesh the block at section-local (x, y, z) into `out`; with `trace`, also record every quad.
+pub fn mesh_block(a: &Assets, biomes: &[Biome], s: &Snapshot, x: i32, y: i32, z: i32, out: &mut SectionMesh, mut trace: Option<&mut Vec<QuadTrace>>) {
+    let ox = s.origin[0] as f32; let oy = s.origin[1] as f32; let oz = s.origin[2] as f32;
+    {
         let state = s.blocks[sidx(x, y, z)];
-        if state == 0 { continue; }
+        if state == 0 { return; }
         let info = a.info(state);
         let biome = biomes.get(s.biomes[((y >> 2) << 4 | (z >> 2) << 2 | (x >> 2)) as usize] as usize);
         let tint = match info.tint {
@@ -97,6 +120,7 @@ pub fn mesh_section(a: &Assets, biomes: &[Biome], s: &Snapshot) -> SectionMesh {
                     light: [(sky * 17.0) as u8, (blk * 17.0) as u8, 0, 0],
                 };
             }
+            if let Some(t) = trace.as_deref_mut() { t.push(QuadTrace { src: 0, layer: q.layer, dir: q.dir, cull: q.cull, tinted: q.tinted, tint: if q.tinted { tint } else { [1.0; 3] }, shade: q.shade, verts: vs }); }
             let m = &mut out.layers[q.layer as usize];
             let b = m.verts.len() as u32;
             m.verts.extend_from_slice(&vs);
@@ -122,24 +146,26 @@ pub fn mesh_section(a: &Assets, biomes: &[Biome], s: &Snapshot) -> SectionMesh {
             let (h_nw, h_sw, h_se, h_ne) = (corner(-1, -1), corner(-1, 1), corner(1, 1), corner(1, -1));
             let l = { let up = s.light[sidx(x, y + 1, z)]; if up == 0 { own_light } else { up.max(own_light & 0xF0) } };
             let light = [if k == 2 { 255 } else { (l >> 4) * 17 }, if k == 2 { 255 } else { (l & 15) * 17 }, 0, 0];
-            let mut quad = |p: [[f32; 3]; 4], sh: f32, uv: [[f32; 2]; 4]| {
+            let mut quad = |p: [[f32; 3]; 4], sh: f32, uv: [[f32; 2]; 4], dir: u8| {
                 let m = &mut out.layers[layer as usize]; let b = m.verts.len() as u32;
+                let mut vs = [Vertex::default(); 4];
                 for i in 0..4 {
-                    m.verts.push(Vertex { pos: [base[0] + p[i][0], base[1] + p[i][1], base[2] + p[i][2]], uv: [uvr[0] + (uvr[2] - uvr[0]) * uv[i][0], uvr[1] + (uvr[3] - uvr[1]) * uv[i][1]],
-                        color: [(col[0] * sh * 255.0) as u8, (col[1] * sh * 255.0) as u8, (col[2] * sh * 255.0) as u8, if k == 1 { 200 } else { 255 }], light });
+                    vs[i] = Vertex { pos: [base[0] + p[i][0], base[1] + p[i][1], base[2] + p[i][2]], uv: [uvr[0] + (uvr[2] - uvr[0]) * uv[i][0], uvr[1] + (uvr[3] - uvr[1]) * uv[i][1]],
+                        color: [(col[0] * sh * 255.0) as u8, (col[1] * sh * 255.0) as u8, (col[2] * sh * 255.0) as u8, if k == 1 { 200 } else { 255 }], light };
                 }
+                m.verts.extend_from_slice(&vs);
+                if let Some(t) = trace.as_deref_mut() { t.push(QuadTrace { src: 1, layer, dir, cull: NO_CULL, tinted: k == 1, tint: col, shade: true, verts: vs }); }
                 m.idx.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3]);
             };
             let full_uv = [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]];
-            if !above_same { quad([[0.0, h_nw, 0.0], [0.0, h_sw, 1.0], [1.0, h_se, 1.0], [1.0, h_ne, 0.0]], 1.0, full_uv); }
+            if !above_same { quad([[0.0, h_nw, 0.0], [0.0, h_sw, 1.0], [1.0, h_se, 1.0], [1.0, h_ne, 0.0]], 1.0, full_uv, UP); }
             let nb = |dx: i32, dy: i32, dz: i32| { let ni = a.info(s.blocks[sidx(x + dx, y + dy, z + dz)]); ni.fluid == k || ni.occludes };
-            if !nb(0, -1, 0) { quad([[0.0, 0.0, 1.0], [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 1.0]], 0.5, full_uv); }
+            if !nb(0, -1, 0) { quad([[0.0, 0.0, 1.0], [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 1.0]], 0.5, full_uv, DOWN); }
             let side_uv = |h1: f32, h2: f32| [[0.0, 1.0 - h1], [0.0, 1.0], [1.0, 1.0], [1.0, 1.0 - h2]];
-            if !nb(0, 0, -1) { quad([[1.0, h_ne, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, h_nw, 0.0]], 0.8, side_uv(h_ne, h_nw)); }
-            if !nb(0, 0, 1) { quad([[0.0, h_sw, 1.0], [0.0, 0.0, 1.0], [1.0, 0.0, 1.0], [1.0, h_se, 1.0]], 0.8, side_uv(h_sw, h_se)); }
-            if !nb(-1, 0, 0) { quad([[0.0, h_nw, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, h_sw, 1.0]], 0.6, side_uv(h_nw, h_sw)); }
-            if !nb(1, 0, 0) { quad([[1.0, h_se, 1.0], [1.0, 0.0, 1.0], [1.0, 0.0, 0.0], [1.0, h_ne, 0.0]], 0.6, side_uv(h_se, h_ne)); }
+            if !nb(0, 0, -1) { quad([[1.0, h_ne, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, h_nw, 0.0]], 0.8, side_uv(h_ne, h_nw), NORTH); }
+            if !nb(0, 0, 1) { quad([[0.0, h_sw, 1.0], [0.0, 0.0, 1.0], [1.0, 0.0, 1.0], [1.0, h_se, 1.0]], 0.8, side_uv(h_sw, h_se), SOUTH); }
+            if !nb(-1, 0, 0) { quad([[0.0, h_nw, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, h_sw, 1.0]], 0.6, side_uv(h_nw, h_sw), WEST); }
+            if !nb(1, 0, 0) { quad([[1.0, h_se, 1.0], [1.0, 0.0, 1.0], [1.0, 0.0, 0.0], [1.0, h_ne, 0.0]], 0.6, side_uv(h_se, h_ne), EAST); }
         }
-    } } }
-    out
+    }
 }
