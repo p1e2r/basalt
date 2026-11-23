@@ -104,6 +104,12 @@ Read NOTES.md for verified packet formats.
 - Every new feature ships with a scenario test in the check harness (crates/check).
 - Run `tools/check-all.sh` and get a clean pass/fail table before marking anything done.
 - Prefer differential checks against vanilla (25566) over hand-written expectations.
+- Client work (M7, M14) is done only when `tools/check-all.sh --client` passes: visual parity vs the
+  vanilla client (same seed/pos/rotation/time, per-region SSIM/histogram, diff images on failure),
+  asset coverage (every block state + item renders, no missing model/texture), input parity
+  (serverbound packets diffed vs the vanilla client through the proxy), UI tests (inventory/
+  crafting clicks asserted against server state), perf benchmarks (FPS, mesh time, memory at render
+  distance 8/16/32 with regression thresholds).
 
 ## Local setup (macOS)
 1. Java 25 + Rust. `./tools/extract-data.sh` (downloads the official server jar, runs its data
