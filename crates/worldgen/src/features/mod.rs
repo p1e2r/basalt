@@ -23,10 +23,17 @@ use std::sync::{Arc, Mutex};
 
 pub type R = BitXoroshiro;
 
+thread_local! {
+    /// Generation range (min_y, height) of the noise settings being loaded: placement anchors resolve
+    /// against it (the Nether generates 0..128 inside a 0..256 dimension).
+    pub static GEN_RANGE: std::cell::Cell<(i32, i32)> = const { std::cell::Cell::new((crate::MIN_Y, crate::HEIGHT)) };
+}
+
 pub fn anchor(v: &Value) -> Result<i32> {
+    let (min_y, height) = GEN_RANGE.with(|r| r.get());
     if let Some(a) = v.get("absolute").and_then(|x| x.as_i64()) { return Ok(a as i32); }
-    if let Some(a) = v.get("above_bottom").and_then(|x| x.as_i64()) { return Ok(crate::MIN_Y + a as i32); }
-    if let Some(a) = v.get("below_top").and_then(|x| x.as_i64()) { return Ok(crate::MIN_Y + crate::HEIGHT - 1 - a as i32); }
+    if let Some(a) = v.get("above_bottom").and_then(|x| x.as_i64()) { return Ok(min_y + a as i32); }
+    if let Some(a) = v.get("below_top").and_then(|x| x.as_i64()) { return Ok(min_y + height - 1 - a as i32); }
     bail!("bad anchor {v}")
 }
 
@@ -322,7 +329,7 @@ impl Features {
             let mut bs = Vec::new();
             let mut has = HashSet::new();
             for (j, st) in l.iter().enumerate() {
-                let v: Vec<u32> = st.iter().filter_map(|f| index[j].get(f.as_str()).copied()).collect();
+                let v: Vec<u32> = match index.get(j) { Some(ix) => st.iter().filter_map(|f| ix.get(f.as_str()).copied()).collect(), None => Vec::new() };
                 for i in &v { has.insert((j as u32, *i)); }
                 bs.push(v);
             }

@@ -1,7 +1,7 @@
 //! Density-function graphs built from the worldgen JSON, and their evaluator.
 
 use crate::noise::{BlendedNoise, NoiseParams, NormalNoise};
-use crate::random::PosFactory;
+use crate::random::{JavaRandom, Positional};
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -70,7 +70,9 @@ pub struct Graph {
 
 pub struct GraphBuilder<'a> {
     root: PathBuf,
-    rand: PosFactory,
+    rand: Positional,
+    /// World seed (legacy old_blended_noise is seeded with it directly).
+    pub world_seed: i64,
     nodes: Vec<Node>,
     refs: HashMap<String, NodeId>,
     noise_idx: HashMap<String, u32>,
@@ -97,9 +99,9 @@ fn full_name(s: &str) -> String { if s.contains(':') { s.to_string() } else { fo
 
 impl<'a> GraphBuilder<'a> {
     /// `root` is data/minecraft/worldgen; `rand` is the world's positional factory.
-    pub fn new(root: &Path, rand: PosFactory) -> Self {
+    pub fn new(root: &Path, rand: Positional) -> Self {
         Self {
-            root: root.to_path_buf(), rand, nodes: Vec::new(), refs: HashMap::new(), noise_idx: HashMap::new(),
+            root: root.to_path_buf(), rand, world_seed: 0, nodes: Vec::new(), refs: HashMap::new(), noise_idx: HashMap::new(),
             noises: Vec::new(), noise_names: Vec::new(), blended: Vec::new(), n_interp: 0, n_once: 0, consts: HashMap::new(),
             _p: std::marker::PhantomData,
         }
@@ -118,8 +120,18 @@ impl<'a> GraphBuilder<'a> {
         let name = full_name(name);
         if let Some(i) = self.noise_idx.get(&name) { return Ok(*i); }
         let params = load_noise_params(&self.root, &name)?;
-        let mut r = self.rand.from_hash(&name);
-        let nn = NormalNoise::new(&mut r, &params);
+        // Legacy settings: the nether biome noises use the 1.16 construction seeded with the
+        // world seed (+1 for vegetation); measured: biomes match vanilla's saved nether 100%.
+        let legacy_biome = match name.as_str() {
+            "minecraft:nether/temperature" if self.rand.is_legacy() => Some(0),
+            "minecraft:nether/vegetation" if self.rand.is_legacy() => Some(1),
+            _ => None,
+        };
+        let nn = if let Some(k) = legacy_biome {
+            NormalNoise::new_legacy_nether_biome(&mut JavaRandom::new(self.world_seed.wrapping_add(k)), &params)
+        } else {
+            NormalNoise::new_any(&mut self.rand.from_hash(&name), &params)
+        };
         self.noises.push(nn);
         self.noise_names.push(name.clone());
         let i = (self.noises.len() - 1) as u32;
@@ -191,8 +203,9 @@ impl<'a> GraphBuilder<'a> {
                     "blend_density" => Node::BlendDensity(arg(self, "argument")?),
                     "spline" => Node::Spline(Box::new(self.spline(&o["spline"])?)),
                     "old_blended_noise" => {
-                        let mut r = self.rand.from_hash("minecraft:terrain");
-                        let b = BlendedNoise::new(&mut r, num("xz_scale")?, num("y_scale")?, num("xz_factor")?, num("y_factor")?, num("smear_scale_multiplier")?);
+                        // Legacy settings seed the old terrain noise straight from the world seed.
+                        let mut r = if self.rand.is_legacy() { crate::random::AnyRng::J(JavaRandom::new(self.world_seed)) } else { self.rand.from_hash("minecraft:terrain") };
+                        let b = BlendedNoise::new(&mut r,num("xz_scale")?, num("y_scale")?, num("xz_factor")?, num("y_factor")?, num("smear_scale_multiplier")?);
                         self.blended.push(b);
                         Node::OldBlendedNoise((self.blended.len() - 1) as u32)
                     }
