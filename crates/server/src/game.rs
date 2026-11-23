@@ -104,6 +104,8 @@ struct Player {
     seen_items: HashSet<i32>,
     /// container slots of the open container window (mirror of the block entity, for send_window)
     cont_items: Vec<Stack>,
+    /// ender chest inventory (27 slots; vanilla's EnderItems)
+    ender: Vec<Stack>,
     st: station::St,
     /// furnace properties last sent to this player (container_set_data diffing)
     data_sent: [i32; 4],
@@ -277,7 +279,8 @@ impl Game {
         let j = serde_json::json!({ "pos": p.pos, "yaw": p.yaw, "pitch": p.pitch, "gamemode": p.gamemode, "held": p.held, "inv": inv, "flying": p.flying,
             "xp": p.xp, "xp_level": p.xp_level, "xp_progress": p.xp_progress, "health": p.health, "food": p.food, "saturation": p.saturation, "dead": p.dead, "air": p.air, "fire": p.fire_ticks,
             "effects": p.effects.iter().map(|(id, (a, t))| [*id as i64, *a as i64, *t as i64]).collect::<Vec<_>>(),
-            "dimension": dim::DIMS[self.dim_of(p.eid).unwrap_or(self.cur)].id });
+            "dimension": dim::DIMS[self.dim_of(p.eid).unwrap_or(self.cur)].id,
+            "ender": self.ender_items(p).iter().enumerate().filter(|(_, s)| s.count > 0).map(|(i, s)| serde_json::json!([i, s.item, s.count, s.damage])).collect::<Vec<_>>() });
         let _ = std::fs::create_dir_all(d.join("players"));
         let _ = std::fs::write(d.join("players").join(format!("{}.json", p.uuid)), j.to_string());
         self.save_player_dat(p);
@@ -305,6 +308,11 @@ impl Game {
         p.saturation = v["saturation"].as_f64().unwrap_or(5.0) as f32; p.dead = v["dead"].as_bool().unwrap_or(false);
         p.air = v["air"].as_i64().unwrap_or(env::MAX_AIR as i64) as i32; p.fire_ticks = v["fire"].as_i64().unwrap_or(0) as i32;
         for e in v["effects"].as_array().into_iter().flatten() { if let (Some(id), Some(a), Some(t)) = (e[0].as_i64(), e[1].as_i64(), e[2].as_i64()) { p.effects.insert(id as i32, (a as u8, t as i32)); } }
+        for e in v["ender"].as_array().into_iter().flatten() {
+            if let (Some(i), Some(item), Some(count)) = (e[0].as_u64(), e[1].as_i64(), e[2].as_i64()) {
+                if (i as usize) < 27 { p.ender[i as usize] = Stack { item: item as i32, count: count as i32, damage: e[3].as_i64().unwrap_or(0) as i32, ench: NO_ENCH }; }
+            }
+        }
         for e in v["inv"].as_array().into_iter().flatten() {
             if let (Some(i), Some(item), Some(count)) = (e[0].as_u64(), e[1].as_i64(), e[2].as_i64()) { if (i as usize) < 46 { let mut ench = NO_ENCH;
                 for (k, en) in e[4].as_array().into_iter().flatten().take(stackx::MAX_ENCH).enumerate() { ench[k] = (en[0].as_u64().unwrap_or(0) as u16, en[1].as_u64().unwrap_or(0) as u8); }
@@ -508,7 +516,7 @@ impl Game {
             last_sent_pos: ([0.0; 3], 0.0, 0.0), sneaking: false,
             dead: false, health: 20.0, food: 20, saturation: 5.0, exhaustion: 0.0, fall_start: None, hurt_cooldown: 0, regen_timer: 0,
             using: None, sprinting: false, jump_held: false, dig_start: None, delayed_dig: None, cursor: Stack::default(), craft_result: Stack::default(),
-            table_grid: [Stack::default(); 9], window: inv::Window::Inventory, next_window: 0, state_id: 0, drag: (0, Vec::new()), seen_items: HashSet::new(), cont_items: Vec::new(), st: station::St::default(), data_sent: [-1; 4], xp_level: 0, xp_progress: 0.0, xp: 0,
+            table_grid: [Stack::default(); 9], window: inv::Window::Inventory, next_window: 0, state_id: 0, drag: (0, Vec::new()), seen_items: HashSet::new(), cont_items: Vec::new(), ender: vec![Stack::default(); 27], st: station::St::default(), data_sent: [-1; 4], xp_level: 0, xp_progress: 0.0, xp: 0,
             air: env::MAX_AIR, fire_ticks: 0, ticks_frozen: 0, fire_exposure: 0, effects: HashMap::new(), prev_tick_pos: [0.0; 3], seen: HashSet::new(), last_attack_tick: 0, portal_ticks: 0, portal_cooldown: 0, portal_entry: None,
         };
         self.load_player(&mut p);
@@ -851,7 +859,8 @@ impl Game {
             if p.gamemode != 3 && !(p.sneaking && p.inv[36 + p.held].count > 0) {
                 let eye = [p.pos[0], p.pos[1] + 1.62, p.pos[2]];
                 let d2: f64 = (0..3).map(|i| { let lo = b[i] as f64; let c = eye[i].clamp(lo, lo + 1.0); (eye[i] - c).powi(2) }).sum();
-                if d2 <= 5.5 * 5.5 { self.open_station(eid, b, kind); }
+                // an ender chest under a solid block stays shut, like a chest
+                if d2 <= 5.5 * 5.5 && !(kind == container::Kind::Ender && self.chest_blocked(b)) { self.open_station(eid, b, kind); }
                 return;
             }
         }

@@ -47,7 +47,7 @@ impl Kind {
     pub fn is_station(self) -> bool {
         matches!(
             self,
-            Kind::Enchant | Kind::Anvil | Kind::Grind | Kind::Smith
+            Kind::Enchant | Kind::Anvil | Kind::Grind | Kind::Smith | Kind::Ender
         )
     }
     pub fn station_of_block(name: &str) -> Option<Kind> {
@@ -56,6 +56,7 @@ impl Kind {
             "anvil" | "chipped_anvil" | "damaged_anvil" => Kind::Anvil,
             "grindstone" => Kind::Grind,
             "smithing_table" => Kind::Smith,
+            "ender_chest" => Kind::Ender,
             _ => return None,
         })
     }
@@ -226,7 +227,11 @@ impl Game {
             halves: 1,
         };
         p.window = Window::Cont(cw);
-        p.st.items = vec![Stack::default(); kind.slots()];
+        p.st.items = if kind == Kind::Ender {
+            p.ender.clone()
+        } else {
+            vec![Stack::default(); kind.slots()]
+        };
         p.st.rename = None;
         p.st.sent = [i32::MIN; 10];
         p.st.cost = 0;
@@ -248,6 +253,11 @@ impl Game {
             return;
         };
         let items = std::mem::take(&mut p.st.items);
+        if cw.kind == Kind::Ender {
+            p.ender = items;
+            p.ender.resize(27, Stack::default());
+            return;
+        }
         for (i, s) in items.into_iter().enumerate() {
             if s.count > 0 && Some(i) != cw.kind.result_slot() {
                 let left = self.give_stack(eid, s);
@@ -263,6 +273,7 @@ impl Game {
     pub(super) fn station_may_place(&self, kind: Kind, i: usize, s: &Stack) -> bool {
         let name = self.item_name(s.item);
         match kind {
+            Kind::Ender => true,
             Kind::Enchant => i == 1 && name == "lapis_lazuli" || i == 0,
             Kind::Anvil => i < 2,
             Kind::Grind => {
@@ -1019,6 +1030,7 @@ impl Game {
                 }
             }
             Kind::Anvil | Kind::Grind => Some((0, 2)),
+            Kind::Ender => Some((0, 27)),
             Kind::Smith => (0..3)
                 .find(|&i| self.station_may_place(Kind::Smith, i, s))
                 .map(|i| (i, i + 1)),

@@ -23,6 +23,7 @@ pub static ALL: &[Spec] = &[
     spec!("M6", "m6_chest_clicks", m6::chest_clicks, Flat, Both, true, "every container_click mode in a chest: state after each step identical to vanilla"),
     spec!("M6", "m6_chest_close_cursor", m6::chest_close_cursor, Flat, Both, true, "closing a chest with an item on the cursor returns it to the inventory"),
     spec!("M6", "m6_double_chest", m6::double_chest, Flat, Both, true, "chests pair by type=left/right, 54-slot window, both halves animate, breaking un-pairs"),
+    spec!("M6", "m6_ender_chest", m6::ender_chest, Flat, Both, true, "ender chest: per-player 27-slot inventory shared by all ender chests, other players separate, blocked by a solid block above"),
     spec!("M6", "m6_barrel", m6::barrel, Flat, Both, true, "barrel facing, open state + sounds, window"),
     spec!("M6", "m6_break_contents", m6::break_contents, Flat, Both, true, "breaking a container spills contents (also creative), closes viewers' windows"),
     spec!("M6", "m6_container_persistence", m6::container_persistence, FlatOnDisk, BasaltOnly, false, "chest + furnace contents/progress survive a restart"),

@@ -38,6 +38,16 @@ fn window_slot(slot: i32) -> Option<usize> {
 }
 
 impl Game {
+    /// The ender inventory as it stands (an open ender chest window holds the live copy).
+    pub(super) fn ender_items(&self, p: &Player) -> Vec<Stack> {
+        match p.window {
+            super::inv::Window::Cont(cw) if cw.kind == super::container::Kind::Ender => {
+                p.st.items.clone()
+            }
+            _ => p.ender.clone(),
+        }
+    }
+
     // stacks use the block-entity item format (container.rs), which carries every component
     fn stack_nbt(&self, s: &Stack) -> Tag {
         self.stack_to_nbt(None, s)
@@ -111,6 +121,20 @@ impl Game {
             }
         }
         ins("Inventory", Tag::List(inv));
+        let ender = self
+            .ender_items(p)
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.count > 0)
+            .filter_map(|(i, s)| match self.stack_nbt(s) {
+                Tag::Compound(mut c) => {
+                    c.insert("Slot".into(), Tag::Byte(i as i8));
+                    Some(Tag::Compound(c))
+                }
+                _ => None,
+            })
+            .collect();
+        ins("EnderItems", Tag::List(ender));
         let mut eq = Compound::new();
         for (k, w) in EQUIP {
             if p.inv[w].count > 0 {
@@ -221,6 +245,23 @@ impl Game {
             };
             if let Some(s) = self.nbt_stack(it) {
                 p.inv[w] = s;
+            }
+        }
+        for it in t
+            .get("EnderItems")
+            .and_then(|l| l.as_list())
+            .into_iter()
+            .flatten()
+        {
+            let Some(i) = it
+                .get("Slot")
+                .and_then(|s| s.as_i64())
+                .filter(|i| (0..27).contains(i))
+            else {
+                continue;
+            };
+            if let Some(s) = self.nbt_stack(it) {
+                p.ender[i as usize] = s;
             }
         }
         for (k, w) in EQUIP {

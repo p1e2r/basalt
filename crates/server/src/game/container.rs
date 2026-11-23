@@ -34,6 +34,8 @@ pub enum Kind {
     Anvil,
     Grind,
     Smith,
+    /// ender chest: the window shows the player's own ender inventory (27 slots)
+    Ender,
 }
 
 impl Kind {
@@ -62,6 +64,7 @@ impl Kind {
             Kind::Anvil => "anvil",
             Kind::Grind => "grindstone",
             Kind::Smith => "smithing_table",
+            Kind::Ender => "ender_chest",
         }
     }
     pub fn slots(self) -> usize {
@@ -106,6 +109,7 @@ impl Kind {
             Kind::Anvil => "anvil",
             Kind::Grind => "grindstone",
             Kind::Smith => "smithing",
+            Kind::Ender => "generic_9x3",
         }
     }
     pub fn menu_name(self) -> &'static str {
@@ -132,6 +136,7 @@ impl Kind {
             Kind::Anvil => "container.repair",
             Kind::Grind => "container.grindstone_title",
             Kind::Smith => "container.upgrade",
+            Kind::Ender => "container.enderchest",
         }
     }
 }
@@ -740,7 +745,7 @@ impl Game {
 
     // ------------------------------------------------------------ opening / closing
 
-    fn chest_blocked(&self, pos: [i32; 3]) -> bool {
+    pub(super) fn chest_blocked(&self, pos: [i32; 3]) -> bool {
         let a = self.world.get_block(pos[0], pos[1] + 1, pos[2]);
         let p = basalt_world::props::props(a);
         p.opacity >= 15 && !p.is_air() && !BlockState(a).name().ends_with("leaves")

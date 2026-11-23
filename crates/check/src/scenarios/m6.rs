@@ -495,6 +495,61 @@ pub fn barrel(ctx: &mut Ctx) -> Result<()> {
     Ok(())
 }
 
+/// Ender chests: generic_9x3 titled container.enderchest showing the player's own ender inventory —
+/// the same items in every ender chest, another player's is separate; a solid block above keeps it shut.
+pub fn ender_chest(ctx: &mut Ctx) -> Result<()> {
+    use cont::*;
+    let (bot, o) = arena(ctx, 10, 10)?;
+    let (a, b) = ([o[0] + 4, Y, o[2] + 2], [o[0] + 6, Y, o[2] + 2]);
+    setblock(&bot, a, "ender_chest[facing=south]")?;
+    setblock(&bot, b, "ender_chest[facing=south]")?;
+    bot.cmd_reply("clear @s")?;
+    give(&bot, "diamond", 5)?;
+    bot.wait_ticks(3);
+    open_at(&bot, a)?;
+    let (menu, title, n) = screen(&bot);
+    ctx.check(menu == "generic_9x3", format!("menu {menu}"));
+    ctx.check(title == "container.enderchest", format!("title {title}"));
+    ctx.metric("slots", n as f64, 0.0);
+    let start_items = bot.st().container[..27].iter().filter(|s| !s.is_empty()).count();
+    ctx.metric("ender_items_at_start", start_items as f64, 0.0);
+    // the diamonds sit in the first hotbar slot: window slot 27 + 27
+    bot.click(54, 0, 1);
+    bot.wait_ticks(4);
+    let moved = bot.st().container[..27].iter().find(|s| s.name() == "diamond").map(|s| s.count).unwrap_or(0);
+    ctx.metric("moved_in", moved as f64, 0.0);
+    bot.close_container();
+    bot.wait_ticks(3);
+    open_at(&bot, b)?;
+    let other = bot.st().container[..27].iter().find(|s| s.name() == "diamond").map(|s| s.count).unwrap_or(0);
+    ctx.metric("same_in_second_chest", other as f64, 0.0);
+    // take them back out so the shared vanilla player is left clean
+    let slot = bot.st().container[..27].iter().position(|s| s.name() == "diamond");
+    if let Some(i) = slot {
+        bot.click(i as i16, 0, 1);
+        bot.wait_ticks(3);
+    }
+    bot.close_container();
+    bot.wait_ticks(3);
+    // a second player sees their own (empty) inventory
+    let bot2 = ctx.bot()?;
+    bot2.tp([a[0] as f64 + 0.5, Y as f64, a[2] as f64 + 2.5])?;
+    bot2.wait_on_ground(Duration::from_secs(5));
+    open_at(&bot2, a)?;
+    let theirs = bot2.st().container[..27].iter().filter(|s| !s.is_empty()).count();
+    ctx.metric("second_player_items", theirs as f64, 0.0);
+    bot2.close_container();
+    // blocked by a solid block above
+    setblock(&bot, [a[0], Y + 1, a[2]], "stone")?;
+    bot.wait_ticks(3);
+    let opened = open_at(&bot, a).is_ok();
+    ctx.metric("opens_when_blocked", opened as u8 as f64, 0.0);
+    if opened {
+        bot.close_container();
+    }
+    Ok(())
+}
+
 /// Breaking a container spills its contents (also in creative) and removes the block entity; the chest itself drops.
 pub fn break_contents(ctx: &mut Ctx) -> Result<()> {
     use cont::*;
