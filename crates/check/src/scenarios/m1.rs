@@ -317,6 +317,8 @@ pub fn vanilla_files(ctx: &mut Ctx) -> Result<()> {
     bot.click(5, 0, 0);
     bot.wait_ticks(3);
     bot.cmd("xp add @s 5 levels");
+    bot.cmd("scoreboard objectives add kept dummy");
+    bot.cmd("scoreboard players set #k kept 42");
     bot.wait_ticks(5);
     let pos = bot.st().pos();
     bot.quit();
@@ -344,6 +346,9 @@ pub fn vanilla_files(ctx: &mut Ctx) -> Result<()> {
     drop(st);
     let k = bot.cmd_reply("xp query @s levels")?.first().map(|l| l.args.join(",")).unwrap_or_default();
     ctx.check(k.contains('5'), format!("xp levels from .dat: {k}"));
+    ctx.check(world.join("data/minecraft/scoreboard.dat").exists(), "scoreboard.dat not written");
+    let sc = bot.cmd_reply("scoreboard players get #k kept")?.first().map(|l| l.args.join(",")).unwrap_or_default();
+    ctx.check(sc.contains("42"), format!("score after restart: {sc}"));
     Ok(())
 }
 
@@ -555,6 +560,50 @@ pub fn misc_commands(ctx: &mut Ctx) -> Result<()> {
     };
     ctx.metric("rotate_yaw", y as f64, 0.01);
     ctx.metric("rotate_pitch", p as f64, 0.01);
+    ctx.note(log.join(" | "));
+    Ok(())
+}
+
+/// /scoreboard objectives + players: replies (keys and values) and the packets clients get, vs
+/// vanilla. Uses its own objective and removes it again (the vanilla world is shared).
+pub fn scoreboard(ctx: &mut Ctx) -> Result<()> {
+    let bot = ctx.bot()?;
+    let name = bot.name.clone();
+    let mut log = Vec::new();
+    let o = "bzscen";
+    let _ = bot.cmd_reply(&format!("scoreboard objectives remove {o}"));
+    let mut is = |ctx: &mut Ctx, label: &str, c: &str, want: &str| -> Result<Vec<String>> {
+        let r = bot.cmd_reply(c)?;
+        let (k, a) = r.first().map(|l| (l.key.clone().unwrap_or_default(), l.args.iter().map(|a| a.replace(&name, "BOT")).collect::<Vec<_>>())).unwrap_or_default();
+        log.push(format!("{label}: {k} {a:?}"));
+        ctx.metric(&format!("{label}_ok"), (k == want) as u8 as f64, 0.0);
+        Ok(a)
+    };
+    let count = |bot: &Bot, k: &str| bot.st().counts.get(k).copied().unwrap_or(0) as f64;
+    let c0 = ["set_objective", "set_score", "reset_score", "set_display_objective"].map(|k| count(&bot, k));
+    is(ctx, "add", &format!("scoreboard objectives add {o} dummy"), "commands.scoreboard.objectives.add.success")?;
+    is(ctx, "add_dup", &format!("scoreboard objectives add {o} dummy"), "commands.scoreboard.objectives.add.duplicate")?;
+    let a = is(ctx, "set", &format!("scoreboard players set @s {o} 5"), "commands.scoreboard.players.set.success.single")?;
+    ctx.metric("set_value", a.get(2).and_then(|v| v.parse().ok()).unwrap_or(-1.0), 0.0);
+    let a = is(ctx, "add_score", &format!("scoreboard players add @s {o} 3"), "commands.scoreboard.players.add.success.single")?;
+    ctx.metric("add_value", a.get(3).and_then(|v| v.parse().ok()).unwrap_or(-1.0), 0.0);
+    let a = is(ctx, "remove_score", &format!("scoreboard players remove @s {o} 1"), "commands.scoreboard.players.remove.success.single")?;
+    ctx.metric("remove_value", a.get(3).and_then(|v| v.parse().ok()).unwrap_or(-1.0), 0.0);
+    let a = is(ctx, "get", &format!("scoreboard players get @s {o}"), "commands.scoreboard.players.get.success")?;
+    ctx.metric("get_value", a.get(1).and_then(|v| v.parse().ok()).unwrap_or(-1.0), 0.0);
+    is(ctx, "fake_set", &format!("scoreboard players set #bz {o} 9"), "commands.scoreboard.players.set.success.single")?;
+    is(ctx, "list_self", "scoreboard players list @s", "commands.scoreboard.players.list.entity.success")?;
+    is(ctx, "display", &format!("scoreboard objectives setdisplay sidebar {o}"), "commands.scoreboard.objectives.display.set")?;
+    is(ctx, "display_again", &format!("scoreboard objectives setdisplay sidebar {o}"), "commands.scoreboard.objectives.display.alreadySet")?;
+    is(ctx, "reset", &format!("scoreboard players reset @s {o}"), "commands.scoreboard.players.reset.specific.single")?;
+    is(ctx, "get_null", &format!("scoreboard players get @s {o}"), "commands.scoreboard.players.get.null")?;
+    is(ctx, "clear_display", "scoreboard objectives setdisplay sidebar", "commands.scoreboard.objectives.display.cleared")?;
+    is(ctx, "remove", &format!("scoreboard objectives remove {o}"), "commands.scoreboard.objectives.remove.success")?;
+    is(ctx, "remove_missing", &format!("scoreboard objectives remove {o}"), "arguments.objective.notFound")?;
+    bot.wait_ticks(5);
+    for (i, k) in ["set_objective", "set_score", "reset_score", "set_display_objective"].iter().enumerate() {
+        ctx.metric(&format!("packets_{k}"), count(&bot, k) - c0[i], 0.0);
+    }
     ctx.note(log.join(" | "));
     Ok(())
 }

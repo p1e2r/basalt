@@ -149,7 +149,13 @@ Read NOTES.md for verified packet formats.
       enchantments, stored_enchantments, potion_contents). Todo: enchant result distribution statistics, anvil item-name default (rename to the item's own name), real-client
       live test of the new screens, brewing stand persistence scenario, /setblock block-entity NBT.
 - [ ] M11 villagers/raids/AI
-- [ ] M12 bosses/endgame  - [ ] M13 commands/datapacks/advancements/scoreboards
+- [ ] M12 bosses/endgame
+- [~] M13 commands/datapacks/advancements/scoreboards — commands so far (2026-11-24, scenarios m13_world_commands,
+      m13_misc_commands, m13_scoreboard all match vanilla): seed, me, msg/tell/w, setworldspawn, spawnpoint, defaultgamemode,
+      item replace entity, clone, particle (simple particles), stopsound, tag, rotate, data get entity|block, scoreboard
+      objectives (add/remove/list/setdisplay) + players (set/add/remove/get/list/reset), synced packets, scoreboard.dat.
+      Todo: scoreboard criteria other than dummy, operation/enable/modify, selector tag=/scores= filters, data merge/modify,
+      teams, bossbar, function/datapacks, advancements, client sidebar rendering.
 - [ ] M14 client polish
 - [~] M16 lossless vanilla worlds + admin files (admin done: server.properties / ops.json / whitelist.json / banned-*.json in vanilla formats, op levels from commands.json, op/deop/whitelist/ban/ban-ip/pardon/pardon-ip/banlist/kick, login refusals; no ops.json = everyone op; scenario m2_admin; level files done: vanilla overworld region path, level.dat + data/minecraft/*.dat and players/data/<uuid>.dat read and written keeping unknown tags — the official 26.2 server opens Basalt's saves (blocks, seed, player position/inventory/enchantments/XP checked), scenario m16_vanilla_files; todo: entities/ and poi/ folders, block/fluid ticks, structures in chunks)  - [ ] M17 performance  - [~] M18 tests/CI/docs/plugins
       (done: crates/check harness, check-all.sh, CI workflow; todo: --client group (visual/asset/input/UI/perf), docs, plugins)

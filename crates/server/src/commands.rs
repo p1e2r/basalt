@@ -49,6 +49,7 @@ pub const IMPLEMENTED: &[&str] = &[
     "rotate",
     "save-all",
     "say",
+    "scoreboard",
     "seed",
     "setblock",
     "setworldspawn",
