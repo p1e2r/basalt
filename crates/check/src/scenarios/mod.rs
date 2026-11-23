@@ -46,6 +46,7 @@ pub static ALL: &[Spec] = &[
     spec!("M2", "m2_admin", m1::admin, FlatOnDisk, BasaltOnly, false, "ops/whitelist/bans: op levels, refusals, kicks, ops.json kept over a restart"),
     spec!("M2", "m16_vanilla_files", m1::vanilla_files, FlatOnDisk, BasaltOnly, false, "level.dat/data files/players .dat written; a player loads from vanilla's .dat alone"),
     spec!("M2", "m2_persistence", m1::persistence, FlatOnDisk, BasaltOnly, false, "restart with same --world: block, inventory, position kept"),
+    spec!("M3", "m3_locate_structure", m3::locate, Generated, Both, true, "/locate structure (ids + a tag) from near spawn: position, distance and reply key vs vanilla (seed 12345)"),
     spec!("M3", "m3_worldgen_spawn", m3::worldgen_columns, Generated, BasaltOnly, false, "bot-observed terrain at spawn columns = vanilla region files (seed 12345)"),
     spec!("M4", "m4_dig_timing", m4::dig_timing, Flat, Both, true, "survival dig with tool timing; too-fast break rejected"),
     spec!("M4", "m4_drops_pickup", m4::drops_pickup, Flat, Both, true, "broken block drops an item entity which is picked up"),

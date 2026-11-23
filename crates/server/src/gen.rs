@@ -5,12 +5,23 @@ use std::sync::{mpsc, Arc, Mutex};
 
 pub trait Generator: Send + Sync {
     fn generate(&self, cx: i32, cz: i32) -> Chunk;
+    /// `/locate structure`: `spec` is a structure id or `#tag`. Err(()) = unknown structure,
+    /// Ok(None) = none found; Ok(Some((found id, block x, block z))).
+    fn locate_structure(&self, _spec: &str, _x: i32, _z: i32) -> Result<Option<(String, i32, i32)>, ()> { Ok(None) }
 }
 
 /// Vanilla-matching terrain of one dimension (crates/worldgen).
 pub struct Vanilla(pub basalt_worldgen::Generator);
 
 impl Generator for Vanilla {
+    fn locate_structure(&self, spec: &str, x: i32, z: i32) -> Result<Option<(String, i32, i32)>, ()> {
+        match self.0.structures() {
+            Some(_) => self.0.locate_spec(spec, x, z, 100),
+            // other dimensions: known ids are simply not found here
+            None => Ok(None),
+        }
+    }
+
     fn generate(&self, cx: i32, cz: i32) -> Chunk {
         let g = self.0.generate_chunk(cx, cz);
         // the world's chunk buffer always spans y -64..320: place the dimension's sections in it

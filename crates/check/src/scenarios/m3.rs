@@ -46,3 +46,42 @@ pub fn worldgen_columns(ctx: &mut Ctx) -> Result<()> {
     ctx.metric("terrain_match_pct", (pct * 10.0).round() / 10.0, 1.0);
     Ok(())
 }
+
+/// `/locate structure` from a fixed spot near spawn (seed 12345): found position and distance per
+/// structure (and one tag), plus the reply key. Differential: the vanilla test server runs the same
+/// read-only command. Structure types whose placement Basalt does not model yet (mansion,
+/// stronghold, desert pyramid's extra checks) are left out.
+pub fn locate(ctx: &mut Ctx) -> Result<()> {
+    let bot = ctx.bot()?;
+    ctx.gamemode(&bot, "creative")?;
+    bot.fly(true);
+    bot.tp([8.5, 150.0, 8.5])?;
+    let ids = ["minecraft:village_plains", "#minecraft:village", "minecraft:pillager_outpost", "minecraft:shipwreck", "minecraft:ruined_portal",
+        "minecraft:trial_chambers", "minecraft:ancient_city", "minecraft:ocean_ruin_cold", "minecraft:buried_treasure", "minecraft:mineshaft",
+        "minecraft:igloo", "minecraft:swamp_hut", "minecraft:jungle_pyramid"];
+    for id in ids {
+        let reply = bot.cmd_reply(&format!("locate structure {id}"))?;
+        let Some(t) = reply.iter().find(|t| t.key.as_deref().map(|k| k.starts_with("commands.locate")).unwrap_or(false)) else {
+            ctx.check(false, format!("/locate structure {id}: no locate reply ({:?})", reply.iter().map(|t| t.plain.clone()).collect::<Vec<_>>()));
+            continue;
+        };
+        let key = t.key.clone().unwrap_or_default();
+        let name = id.trim_start_matches('#').trim_start_matches("minecraft:");
+        ctx.check(key == "commands.locate.structure.success", format!("/locate structure {id}: {key} ({})", t.plain));
+        // "The nearest <id> is at [x, ~, z] (d blocks away)"
+        // (rendered either as text or as `key(args)`): the last three integers are x, z, distance
+        let nums: Vec<f64> = t.plain.split(|c: char| !(c.is_ascii_digit() || c == '-')).filter_map(|w| w.parse::<f64>().ok()).collect();
+        ctx.note(format!("{id}: {}", t.plain));
+        if nums.len() >= 3 {
+            ctx.metric(&format!("{name}_x"), nums[nums.len() - 3], 0.0);
+            ctx.metric(&format!("{name}_z"), nums[nums.len() - 2], 0.0);
+            ctx.metric(&format!("{name}_dist"), nums[nums.len() - 1], 0.0);
+        } else {
+            ctx.check(false, format!("/locate structure {id}: unparsed reply {}", t.plain));
+        }
+    }
+    let bad = bot.cmd_reply("locate structure minecraft:not_a_structure")?;
+    let k = bad.iter().filter_map(|t| t.key.clone()).next().unwrap_or_default();
+    ctx.check(k.starts_with("commands.locate.structure.invalid") || k.starts_with("argument"), format!("unknown structure: {k}"));
+    Ok(())
+}
