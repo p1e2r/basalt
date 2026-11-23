@@ -77,7 +77,7 @@ fn join(g: &mut Game) -> Result<()> {
 fn cmd(g: &mut Game, c: &str) { g.send_chat(&format!("/{c}")); }
 /// Teleport and wait until the client is there with chunks meshed.
 fn tp(g: &mut Game, p: [f64; 3], yaw: f32, pitch: f32) -> Result<()> {
-    cmd(g, &format!("tp @s {} {} {}", p[0], p[1], p[2]));
+    cmd(g, &format!("tp @s {:.4} {:.4} {:.4}", p[0], p[1], p[2]));
     if !wait_until(g, 8.0, |g| (g.player.pos[0] - p[0]).abs() < 0.01 && (g.player.pos[2] - p[2]).abs() < 0.01)? { bail!("teleport to {p:?} not applied"); }
     g.player.yaw = yaw; g.player.pitch = pitch;
     wait_until(g, 10.0, |g| g.world.chunks.contains_key(&((p[0].floor() as i32) >> 4, (p[2].floor() as i32) >> 4)) && g.dirty.is_empty() && g.in_flight.is_empty())?;
@@ -343,7 +343,7 @@ fn dig_others(c: &Ctx) -> Result<Outcome> {
     let (an, bn) = (a.name.clone(), b.name.clone());
     // drop onto the terrain in creative (no fall damage), then set up the block where A landed
     for n in [&an, &bn] { cmd(&mut a, &format!("gamemode creative {n}")); }
-    cmd(&mut a, &format!("tp {an} {} {} {}", base[0] as f64 + 0.5, base[1], base[2] as f64 + 0.5));
+    cmd(&mut a, &format!("tp {an} {:.4} {:.4} {:.4}", base[0] as f64 + 0.5, base[1], base[2] as f64 + 0.5));
     let t0 = Instant::now();
     let mut ground = 0;
     while t0.elapsed().as_secs_f32() < 20.0 && ground < 20 {
@@ -354,7 +354,7 @@ fn dig_others(c: &Ctx) -> Result<Outcome> {
     let p = [a.player.pos[0].floor() as i32, a.player.pos[1].floor() as i32, a.player.pos[2].floor() as i32];
     cmd(&mut a, &format!("fill {} {} {} {} {} {} air", p[0] - 1, p[1], p[2] + 1, p[0] + 3, p[1] + 2, p[2] + 3));
     cmd(&mut a, &format!("setblock {} {} {} stone", p[0], p[1], p[2] + 2));
-    let ay = a.player.pos[1]; cmd(&mut a, &format!("tp {bn} {} {} {}", p[0] as f64 + 2.5, ay, p[2] as f64 + 0.5));
+    let ay = a.player.pos[1]; cmd(&mut a, &format!("tp {bn} {:.4} {:.4} {:.4}", p[0] as f64 + 2.5, ay, p[2] as f64 + 0.5));
     cmd(&mut a, "give @s wooden_pickaxe");
     cmd(&mut a, &format!("gamemode survival {an}"));
     let t0 = Instant::now();
@@ -399,7 +399,7 @@ fn models(c: &Ctx) -> Result<Outcome> {
     // a second player in view
     let mut bot = c.game("bot")?;
     join(&mut bot)?;
-    cmd(&mut bot, &format!("tp @s {} {} {}", o[0] + 2.5, o[1], o[2] - 3.0));
+    cmd(&mut bot, &format!("tp @s {:.4} {:.4} {:.4}", o[0] + 2.5, o[1], o[2] - 3.0));
     for _ in 0..150 { step(&mut bot)?; step(&mut g)?; }
     wait(&mut g, 0.5)?;
     let with = capture(&mut g)?; save(&g, &with, "models");
@@ -463,7 +463,7 @@ fn interp(c: &Ctx) -> Result<Outcome> {
     join(&mut g)?; join(&mut bot)?;
     let o = [600.5, -60.0, 0.5];
     tp(&mut g, o, 0.0, 10.0)?;
-    cmd(&mut bot, &format!("tp @s {} {} {}", o[0] - 3.0, o[1], o[2] + 4.0));
+    cmd(&mut bot, &format!("tp @s {:.4} {:.4} {:.4}", o[0] - 3.0, o[1], o[2] + 4.0));
     for _ in 0..200 { step(&mut bot)?; step(&mut g)?; }
     bot.player.yaw = -90.0; // walk towards +X
     bot.keys.insert(KeyCode::KeyW);

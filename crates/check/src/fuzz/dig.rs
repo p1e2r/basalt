@@ -5,6 +5,11 @@
 //! by vanilla. Vanilla measurements are cached in `vanilla/harness-cache/dig.json` keyed by
 //! (data version, block, item, flags), so reruns are instant.
 //!
+//! "Accepts" = the block is gone within 400 ms after the stop: either the stop passed the server's
+//! 0.7-progress check or the server's delayed destroy (rejected stops are still tracked and break the block when
+//! its progress reaches 1.0) finished inside that window. `ground=false` means the bot *claims* to be airborne
+//! while standing on the floor (both servers must ignore the flag); real altitude is covered by m4_dig_accept.
+//!
 //! Tolerance: both servers count server ticks between the two packets and wall-clock jitter adds up to
 //! one tick, so thresholds may differ by `max(2, 5%)` ticks.
 use super::{arena::worker_arena, barrier, parallel, Harness, Mismatch, Rng};
@@ -70,8 +75,8 @@ fn gen(r: &mut Rng, i: usize) -> Value {
 // ------------------------------------------------------------------ vanilla measurement cache
 
 fn cache_path() -> PathBuf { PathBuf::from("vanilla/harness-cache/dig.json") }
-/// Bump when the measuring procedure changes (v2: every probe is preceded by a state reset).
-const MEASURE_VERSION: &str = "v2";
+/// Bump when the measuring procedure changes (v3: every probe starts by clearing the cell, which ends vanilla's delayed destroy).
+const MEASURE_VERSION: &str = "v3";
 
 fn key(case: &Value) -> String { format!("{MEASURE_VERSION}|{}{}|{}|{}|{}|{}/{}", case.get("scan").map(|s| format!("{s}|")).unwrap_or_default(), basalt_data::VERSION_NAME, case["block"].as_str().unwrap_or(""), case["item"].as_str().unwrap_or(""), case["ground"], case["water"], basalt_data::WORLD_VERSION) }
 
@@ -107,25 +112,19 @@ fn run(ctx: &mut Ctx, cases: &[Value]) -> Result<Vec<Value>> {
     Ok(out)
 }
 
-/// Vanilla keeps the previous attempt's dig state after a rejected stop (measured: probes at a wait just below
-/// the threshold alternate reject/accept, as if the next start did not restart the clock); a completed break
-/// clears it. So every probe is preceded by a throwaway break of a fast block that vanilla surely accepts.
-fn reset_dig_state(bot: &Bot, b: [i32; 3], rw: u32) -> Result<()> {
-    bot.cmd(&format!("setblock {} {} {} glass", b[0], b[1], b[2]));
-    if !bot.wait_until(Duration::from_millis(1500), |s| s.world.name(b[0], b[1], b[2]) == "glass") { bail!("could not place the reset block"); }
-    bot.wait_ticks(1);
-    bot.player_action(0, b, 1);
-    bot.swing();
-    bot.wait_ticks(rw);
-    bot.player_action(2, b, 1);
-    if !bot.wait_until(Duration::from_millis(600), |s| s.world.name(b[0], b[1], b[2]) != "glass") { bot.player_action(1, b, 1); bail!("reset block did not break"); }
-    bot.wait_ticks(1);
+/// A stop vanilla rejects (too early) is not forgotten: the server keeps tracking the attempt from the start tick
+/// and breaks the block at that position by itself once its progress reaches 1.0 -- even a block placed there by a
+/// later probe (measured: probes just below the threshold alternated reject/accept, and fresh blocks vanished).
+/// The tracking ends when the position is air at a server tick, so every probe starts by clearing the cell.
+fn reset_dig_state(bot: &Bot, b: [i32; 3]) -> Result<()> {
+    bot.cmd(&format!("setblock {} {} {} air", b[0], b[1], b[2]));
+    bot.wait_ticks(3);
     Ok(())
 }
 
 /// One probe: place the block, start digging, wait `w` ticks, stop; did the block break?
-fn probe(bot: &Bot, b: [i32; 3], block: &str, w: u32, rw: u32) -> Result<bool> {
-    reset_dig_state(bot, b, rw)?;
+fn probe(bot: &Bot, b: [i32; 3], block: &str, w: u32) -> Result<bool> {
+    reset_dig_state(bot, b)?;
     for attempt in 0..2 {
         bot.cmd(&format!("setblock {} {} {} {block}", b[0], b[1], b[2]));
         if bot.wait_until(Duration::from_millis(1500), |s| s.world.name(b[0], b[1], b[2]) == block) { break; }
@@ -163,8 +162,6 @@ fn measure(bot: &Bot, home: [f64; 3], case: &Value) -> Result<Value> {
     let (block, item) = (case["block"].as_str().unwrap_or("stone"), case["item"].as_str().unwrap_or("hand"));
     let (ground, water) = (case["ground"].as_bool().unwrap_or(true), case["water"].as_bool().unwrap_or(false));
     // experiment mode: dig while genuinely above the floor (`alt` blocks), not just claiming it
-    // the reset block (glass, 9 ticks on the floor) needs 5x as long in water
-    let rw = if water { 45 } else { 12 };
     let alt = case["alt"].as_f64().unwrap_or(0.0);
     if alt > 0.0 { let q = bot.st().body.pos; bot.tp([q[0], q[1] + alt, q[2]])?; }
     let pos = bot.st().body.pos;
@@ -194,7 +191,7 @@ fn measure(bot: &Bot, home: [f64; 3], case: &Value) -> Result<Value> {
             for w in scan.iter().filter_map(|w| w.as_u64()) {
                 let mut bits = String::new();
                 let gap = case["gap"].as_u64().unwrap_or(0) as u32;
-                for _ in 0..reps { bits.push(if probe(bot, target, block, w as u32, rw)? { '1' } else { '0' }); if gap > 0 { bot.wait_ticks(gap); } }
+                for _ in 0..reps { bits.push(if probe(bot, target, block, w as u32)? { '1' } else { '0' }); if gap > 0 { bot.wait_ticks(gap); } }
                 res.insert(w.to_string(), json!(bits));
             }
             return Ok(json!({ "scan": res, "reps": reps }));
@@ -203,14 +200,16 @@ fn measure(bot: &Bot, home: [f64; 3], case: &Value) -> Result<Value> {
         let Some(t_f) = t_f else { bail!("{block} is unbreakable per dig_ticks") };
         // the client-side wait (dig_ticks + 1) must be accepted
         let mut hi = t_f + 1;
-        let mut accepted = probe(bot, target, block, hi, rw)?;
-        if !accepted { hi = t_f * 2 + 10; accepted = probe(bot, target, block, hi, rw)?; }
+        // one retry per stage: a vanilla tick hiccup during a long wait made single probes fail now and then
+        // (replaying such a case with scans never reproduced a real "never breaks")
+        let mut accepted = probe(bot, target, block, hi)? || probe(bot, target, block, hi)?;
+        if !accepted { hi = t_f * 2 + 10; accepted = probe(bot, target, block, hi)? || probe(bot, target, block, hi)?; }
         if !accepted { return Ok(json!({ "never": true, "formula": t_f, "tried": hi })); }
         let mut lo = 0u32;
-        if probe(bot, target, block, 0, rw)? { return Ok(json!({ "n": 0, "formula": t_f })); }
+        if probe(bot, target, block, 0)? { return Ok(json!({ "n": 0, "formula": t_f })); }
         while hi - lo > 1 {
             let mid = (lo + hi) / 2;
-            if probe(bot, target, block, mid, rw)? { hi = mid; } else { lo = mid; }
+            if probe(bot, target, block, mid)? { hi = mid; } else { lo = mid; }
         }
         Ok(json!({ "n": hi, "formula": t_f }))
     })();

@@ -159,13 +159,12 @@ impl GameData {
     }
 
     /// Whether the server accepts a stop `ticks` server ticks after the start, for progress-per-tick `d`
-    /// (from [`GameData::dig_progress`]). Measured on vanilla 26.2 with fresh dig state (crates/check `--fuzz dig`
-    /// scans, one probe per wait): the stop is accepted when `d * (ticks + 1) >= 0.7`, or when `d * (ticks + 8) >= 1`
-    /// (the block would finish within 7 more ticks). Stone by hand (150 ticks) first accepts at 104, planks by hand
-    /// (60) at 41, wool by hand (24) at 16; the second rule decides below ~23 ticks: dirt by hand (15) accepts at
-    /// 7, glass by hand (9) at 1, stone with an iron pickaxe (7.5) at 0.
+    /// (from [`GameData::dig_progress`]): `d * (ticks + 1) >= 0.7`. Measured on vanilla 26.2 with fresh dig state
+    /// (crates/check `--fuzz dig` scans): stone by hand (150 ticks) first accepts at 104, planks by hand (60) at 41,
+    /// wool by hand (24) at 16. A rejected stop is not forgotten: the block still breaks when the progress since the
+    /// start reaches 1.0 (`d * (ticks + 1) >= 1`), which is how vanilla finishes blocks whose stop came early.
     pub fn dig_accepts(d: f32, ticks: u64) -> bool {
-        d * ((ticks + 1) as f32) >= 0.7 || d * ((ticks + 8) as f32) >= 1.0
+        d * ((ticks + 1) as f32) >= 0.7
     }
 
     /// Smallest `ticks` for which [`GameData::dig_accepts`] holds.

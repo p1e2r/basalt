@@ -76,6 +76,8 @@ struct Player {
     sprinting: bool,
     jump_held: bool,
     dig_start: Option<([i32; 3], u64)>,
+    /// a rejected stop vanilla keeps tracking: (block, start tick); the block breaks when its progress reaches 1.0
+    delayed_dig: Option<([i32; 3], u64)>,
     // containers
     cursor: Stack,
     craft_result: Stack,
@@ -399,7 +401,7 @@ impl Game {
             pending_tp: None, next_tp: 0, batch_outstanding: false, chunks_per_tick: 9.0, keepalive: None, last_keepalive: Instant::now(),
             last_sent_pos: ([0.0; 3], 0.0, 0.0), sneaking: false,
             dead: false, health: 20.0, food: 20, saturation: 5.0, exhaustion: 0.0, fall_start: None, hurt_cooldown: 0, regen_timer: 0,
-            using: None, sprinting: false, jump_held: false, dig_start: None, cursor: Stack::default(), craft_result: Stack::default(),
+            using: None, sprinting: false, jump_held: false, dig_start: None, delayed_dig: None, cursor: Stack::default(), craft_result: Stack::default(),
             table_grid: [Stack::default(); 9], window: inv::Window::Inventory, next_window: 0, state_id: 0, drag: (0, Vec::new()), seen_items: HashSet::new(),
             air: env::MAX_AIR, fire_ticks: 0, ticks_frozen: 0, fire_exposure: 0, effects: HashMap::new(), prev_tick_pos: [0.0; 3], seen: HashSet::new(), last_attack_tick: 0,
         };
@@ -636,13 +638,48 @@ impl Game {
                 (2, Some(d)) => {
                     let started = self.players.get_mut(&eid).unwrap().dig_start.take();
                     let ok = matches!(started, Some((sb, t0)) if sb == b && basalt_game::GameData::dig_accepts(d, self.tick - t0));
-                    if !ok { let st = old; self.players[&eid].send({ let mut w = Writer::with_id(cb::BLOCK_UPDATE); w.position(b[0], b[1], b[2]).varint(st as i32); w }); }
+                    if !ok {
+                        let st = old; self.players[&eid].send({ let mut w = Writer::with_id(cb::BLOCK_UPDATE); w.position(b[0], b[1], b[2]).varint(st as i32); w });
+                        // like vanilla, keep tracking the attempt: the block still breaks once its progress reaches 1.0
+                        if let Some((sb, t0)) = started { if sb == b { let p = self.players.get_mut(&eid).unwrap(); if p.delayed_dig.is_none() { p.delayed_dig = Some((b, t0)); } } }
+                    }
                     ok
                 }
                 _ => false,
             }
         };
         if !breaks { return; }
+        self.finish_dig(eid, b, old, creative, held);
+    }
+
+    /// Dig progress per tick for `eid` on `state` (server-side ground / water), plus the held item.
+    fn dig_context(&self, eid: i32, state: u32) -> Option<(Option<i32>, Option<f32>)> {
+        let p = self.players.get(&eid)?;
+        let held = { let s = p.inv[36 + p.held]; (s.count > 0).then_some(s.item) };
+        let feet = self.world.get_block(p.pos[0].floor() as i32, (p.pos[1] + 1.62).floor() as i32, p.pos[2].floor() as i32);
+        let in_water = basalt_world::props::props(feet).has_fluid();
+        Some((held, self.data.dig_progress(state, held, self.standing_on_floor(p.pos), in_water)))
+    }
+
+    /// Complete vanilla's delayed destroys: a stop the server rejected (too early) is still tracked from the
+    /// start tick and the block breaks by itself once `progress * (ticks + 1) >= 1`.
+    fn tick_delayed_dig(&mut self) {
+        let pending: Vec<(i32, [i32; 3], u64)> = self.players.values().filter_map(|p| p.delayed_dig.map(|(b, t0)| (p.eid, b, t0))).collect();
+        for (eid, b, t0) in pending {
+            let old = self.world.get_block(b[0], b[1], b[2]);
+            let done = match self.dig_context(eid, old) {
+                _ if old == 0 => true,
+                Some((held, Some(d))) if ((self.tick - t0 + 1) as f32) * d >= 1.0 => { self.finish_dig(eid, b, old, false, held); true }
+                Some((_, Some(_))) => false,
+                _ => true,
+            };
+            if done { if let Some(p) = self.players.get_mut(&eid) { p.delayed_dig = None; } }
+        }
+    }
+
+    /// Remove a block a player broke (accepted stop, instant break or a delayed destroy completing): particles,
+    /// tool wear, drops, the other half of a door.
+    fn finish_dig(&mut self, eid: i32, b: [i32; 3], old: u32, creative: bool, held: Option<i32>) {
         self.set_block(b[0], b[1], b[2], 0);
         // world event 2001: block break particles + sound for others
         self.broadcast_chunk((b[0] >> 4, b[2] >> 4), Some(eid), || { let mut w = Writer::with_id(cb::LEVEL_EVENT); w.i32(2001).position(b[0], b[1], b[2]).i32(old as i32).bool(false); w });
@@ -749,6 +786,7 @@ impl Game {
         self.broadcast_mob_moves();
         if self.tick % 10 == 5 { self.sync_viewers(); }
         self.tick_survival();
+        self.tick_delayed_dig();
         self.tick_environment();
         self.tick_weather();
         let ids: Vec<i32> = self.players.keys().copied().collect();

@@ -50,7 +50,8 @@ impl Game {
         let dt = self.damage_type(kind);
         let Some(p) = self.players.get(&eid) else { return false };
         if p.dead || amount <= 0.0 { return false; }
-        if matches!(p.gamemode, 1 | 3) && kind != "out_of_world" { return false; }
+        // creative / spectator players are invulnerable except to the void and /kill
+        if matches!(p.gamemode, 1 | 3) && !matches!(kind, "out_of_world" | "generic_kill") { return false; }
         if p.hurt_cooldown > 0 && !bypass && kind != "starve" { return false; }
         let mut amount = amount;
         if !self.bypasses_armor(kind) {
