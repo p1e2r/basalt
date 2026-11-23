@@ -86,18 +86,6 @@ pub fn item_name(item: i32) -> String {
     if r != k2 { r } else { n.to_string() }
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn formats() {
-        super::init(Some(br#"{"a":"%s was slain by %s","b":"%2$s then %1$s","c":"100%%"}"#));
-        assert_eq!(super::tr("a", &["X".into(), "Y".into()]), "X was slain by Y");
-        assert_eq!(super::tr("b", &["X".into(), "Y".into()]), "Y then X");
-        assert_eq!(super::tr("c", &[]), "100%");
-        assert_eq!(super::tr("missing", &[]), "missing");
-    }
-}
-
 /// Legacy colour code of a named text colour (`0`-`f`), or a private `x` + 6 hex digits for RGB.
 fn color_code(name: &str) -> Option<String> {
     const NAMES: [&str; 16] = ["black", "dark_blue", "dark_green", "dark_aqua", "dark_red", "dark_purple", "gold", "gray", "dark_gray", "blue", "green", "aqua", "red", "light_purple", "yellow", "white"];
@@ -121,9 +109,8 @@ pub fn styled(t: &Tag) -> String {
                         Some(Tag::List(w)) => w.iter().map(|a| { let mut o = String::new(); walk(a, &col, &mut o); o.push_str(&if col.is_empty() { "§r".to_string() } else { format!("§{col}") }); o }).collect(),
                         _ => Vec::new(),
                     };
-                    let fallback = match c.get("fallback") { Some(Tag::String(f)) => Some(f.clone()), _ => None };
                     let r = tr(k, &args);
-                    if r == *k && fallback.is_some() { out.push_str(&fallback.unwrap()); } else { out.push_str(&r); }
+                    match c.get("fallback") { Some(Tag::String(f)) if r == *k => out.push_str(f), _ => out.push_str(&r) }
                 }
                 if let Some(Tag::List(ex)) = c.get("extra") { for e in ex { walk(e, &col, out); set(out, &col); } }
                 if col != cur { set(out, cur); }
@@ -146,4 +133,16 @@ pub fn strip_codes(s: &str) -> String {
         if it.next() == Some('x') { for _ in 0..6 { it.next(); } }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn formats() {
+        super::init(Some(br#"{"a":"%s was slain by %s","b":"%2$s then %1$s","c":"100%%"}"#));
+        assert_eq!(super::tr("a", &["X".into(), "Y".into()]), "X was slain by Y");
+        assert_eq!(super::tr("b", &["X".into(), "Y".into()]), "Y then X");
+        assert_eq!(super::tr("c", &[]), "100%");
+        assert_eq!(super::tr("missing", &[]), "missing");
+    }
 }
