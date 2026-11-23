@@ -137,6 +137,8 @@ if [ $REAL = 1 ]; then
   SRV=$!
   for _ in $(seq 1 100); do grep -q "listening" "$OUT/realclient-server.log" && break; sleep 0.2; done
   LOG=vanilla/mcclient/logs/latest.log
+  # the client's game dir is shared with other tools: wait until no other client is running
+  for _ in $(seq 1 60); do pgrep -f net.minecraft.client.main.Main > /dev/null || break; sleep 2; done
   rm -f "$LOG"
   python3 tools/run-vanilla-client.py "127.0.0.1:$PORT" CheckReal > "$OUT/realclient.out" 2>&1 &
   CL=$!
@@ -145,7 +147,7 @@ if [ $REAL = 1 ]; then
   sleep 8
   swift tools/mc-window-shot.swift "$OUT/realclient.png" > /dev/null 2>&1 || true
   errs=$(grep -iE "Failed to decode|Network Protocol Error|Disconnected|Error decoding|Exception in thread|packet.*error|lost connection" "$LOG" 2>/dev/null | grep -v "profile key pair" | head -3 | tr '\n' ' ')
-  pkill -f net.minecraft.client.main.Main 2>/dev/null; kill $CL 2>/dev/null
+  pkill -P $CL 2>/dev/null; kill $CL 2>/dev/null   # only our own client
   kill -INT $SRV 2>/dev/null; wait $SRV 2>/dev/null
   srv_errs=$(grep -E "bad packet|panicked" "$OUT/realclient-server.log" | head -2 | tr '\n' ' ')
   if [ $joined = 1 ] && [ -z "$errs$srv_errs" ]; then row "Real client" "vanilla 26.2 client joins Basalt" basalt 1 "$(since $T)" "joined; screenshot $OUT/realclient.png"
