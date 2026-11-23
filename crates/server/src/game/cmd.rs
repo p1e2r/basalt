@@ -9,6 +9,9 @@ use basalt_data::{registries as reg, BlockState};
 use basalt_nbt::Tag;
 use basalt_protocol::{ids::play::clientbound as cb, text, Writer};
 
+#[path = "data.rs"]
+mod data;
+
 type R<T> = Result<T, CmdError>;
 
 fn err(key: &str, args: &[&str]) -> CmdError {
@@ -567,6 +570,7 @@ impl Game {
                 );
             }
             path if path.starts_with("time") => self.cmd_time(eid, p, path)?,
+            path if path.starts_with("data get ") => self.cmd_data_get(eid, p)?,
             path if path.starts_with("particle name") => self.cmd_particle(eid, p)?,
             path if path.starts_with("stopsound targets") => {
                 let ids = Self::players_of(&self.resolve(eid, p.arg("targets"), true)?);

@@ -484,7 +484,7 @@ impl Game {
         be
     }
 
-    fn be_to_nbt(&self, pos: [i32; 3], be: &Be) -> Tag {
+    pub(super) fn be_to_nbt(&self, pos: [i32; 3], be: &Be) -> Tag {
         let mut c = be.extra.clone();
         c.insert(
             "id".into(),

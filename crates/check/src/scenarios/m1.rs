@@ -539,6 +539,14 @@ pub fn misc_commands(ctx: &mut Ctx) -> Result<()> {
     is(ctx, "tag_remove", "tag @s remove t1", "commands.tag.remove.success.single")?;
     is(ctx, "tag_remove_again", "tag @s remove t1", "commands.tag.remove.failed")?;
     is(ctx, "tag_list_empty", "tag @s list", "commands.tag.list.single.empty")?;
+    // /data get entity: NBT values in vanilla's SNBT text
+    for (label, c, want_arg) in [("data_health", "data get entity @s Health", "20.0f"), ("data_food", "data get entity @s foodLevel", "20"), ("data_slot", "data get entity @s SelectedItemSlot", "0"), ("data_gametype", "data get entity @s playerGameType", "1")] {
+        let a = is(ctx, label, c, "commands.data.entity.query")?;
+        ctx.metric(&format!("{label}_value"), (a.get(1).map(|v| v.as_str()) == Some(want_arg)) as u8 as f64, 0.0);
+    }
+    let a = is(ctx, "data_scaled", "data get entity @s Health 2", "commands.data.entity.get")?;
+    ctx.metric("data_scaled_value", a.get(3).and_then(|v| v.parse().ok()).unwrap_or(-1.0), 0.0);
+    is(ctx, "data_missing", "data get entity @s Nope", "arguments.nbtpath.nothing_found")?;
     is(ctx, "rotate", "rotate @s 90 10", "commands.rotate.success")?;
     bot.wait_ticks(5);
     let (y, p) = {

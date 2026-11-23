@@ -21,6 +21,7 @@ pub const IMPLEMENTED: &[&str] = &[
     "clear",
     "clone",
     "damage",
+    "data",
     "defaultgamemode",
     "deop",
     "difficulty",

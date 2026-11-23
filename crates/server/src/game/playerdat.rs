@@ -50,9 +50,17 @@ impl Game {
     pub(super) fn save_player_dat(&self, p: &Player) {
         let Some(d) = &self.dir else { return };
         let file = path(d, p.uuid);
-        let mut root = crate::level::read_gz(&file)
+        let root = crate::level::read_gz(&file)
             .and_then(|t| t.as_compound().cloned())
             .unwrap_or_default();
+        let root = self.player_nbt(p, root);
+        if let Err(e) = crate::level::write_gz(&file, &Tag::Compound(root)) {
+            log::warn!("writing {}: {e}", file.display());
+        }
+    }
+
+    /// The player's entity NBT in vanilla's layout, on top of `root` (kept tags). Also used by /data.
+    pub(super) fn player_nbt(&self, p: &Player, mut root: Compound) -> Compound {
         let mut ins = |k: &str, v: Tag| {
             root.insert(k.into(), v);
         };
@@ -130,9 +138,7 @@ impl Game {
         ab.entry("walkSpeed".into()).or_insert(Tag::Float(0.1));
         ab.entry("flySpeed".into()).or_insert(Tag::Float(0.05));
         root.insert("abilities".into(), Tag::Compound(ab));
-        if let Err(e) = crate::level::write_gz(&file, &Tag::Compound(root)) {
-            log::warn!("writing {}: {e}", file.display());
-        }
+        root
     }
 
     /// Dimension saved in a vanilla player file.
