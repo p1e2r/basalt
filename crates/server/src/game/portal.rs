@@ -611,6 +611,13 @@ impl Game {
             (pos[2] * scale).floor() as i32,
         ];
         self.enter(to);
+        // the target height is kept inside the destination's height range (nether 0..127)
+        let mut target = target;
+        {
+            let l = self.world.layout;
+            let top = if to == NETHER { l.min_y() + 127 } else { l.max_y() - 1 };
+            target[1] = target[1].clamp(l.min_y(), top);
+        }
         let radius = if to == NETHER { 16 } else { 128 };
         let rect = match self.closest_portal(target, radius) {
             Some(b) => {
