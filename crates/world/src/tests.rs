@@ -352,7 +352,9 @@ fn light_incremental_matches_full() {
 // ---------------- anvil ----------------
 
 fn temp_dir(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("basalt-world-{tag}-{}-{:?}", std::process::id(), std::time::SystemTime::now()));
+    // plain digits only: SystemTime's Debug form has characters Windows rejects in paths
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let d = std::env::temp_dir().join(format!("basalt-world-{tag}-{}-{nanos}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     d
 }
