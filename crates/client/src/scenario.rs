@@ -14,7 +14,7 @@ use winit::keyboard::KeyCode;
 const W: u32 = 854;
 const H: u32 = 480;
 
-pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages"];
+pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace"];
 
 enum Outcome { Pass(String), Skip(String) }
 
@@ -40,7 +40,7 @@ pub fn run(args: &Args, assets: Arc<Assets>, name: &str) -> Result<bool> {
         let t = Instant::now();
         let r = match s {
             "edge_chunks" => edge_chunks(&ctx), "inventory" => inventory(&ctx), "crafting_table" => crafting_table(&ctx), "death" => death(&ctx),
-            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx),
+            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx),
             other => Err(anyhow!("unknown scenario {other} (known: {})", ALL.join(", "))),
         };
         let secs = t.elapsed().as_secs_f32();
@@ -722,6 +722,120 @@ fn menus(c: &Ctx) -> Result<Outcome> {
     click_at(&mut g, x, y, 0)?; click_at(&mut g, x, y, 0)?;
     if !wait_until(&mut g, 20.0, |g| g.spawned && g.screen.is_none())? { bail!("did not join from the server list"); }
     Ok(Outcome::Pass(format!("title→multiplayer→direct→join, pause→options fov {new_fov}→saved, disconnect→title, add server→join; ui clicks {clicks}+")))
+}
+
+/// Right-click the block at `b` (placed in front of the player) and wait for the screen kind.
+fn open_block(g: &mut Game, b: [i32; 3], kind: Kind) -> Result<()> {
+    look_at(g, [b[0] as f64 + 0.5, b[1] as f64 + 0.5, b[2] as f64 + 0.5]);
+    step(g)?;
+    g.mouse_button(1, true); step(g)?; g.mouse_button(1, false);
+    if !wait_until(g, 4.0, |g| container(g).map(|c| c.kind == kind && c.slots.len() == kind.slot_count()).unwrap_or(false))? { bail!("screen {kind:?} did not open"); }
+    wait(g, 0.3)
+}
+
+/// Chest window: open_screen (3 rows), contents, left/right/shift clicks with the real container_click format;
+/// the result is checked against the server by closing and reopening.
+fn chest(c: &Ctx) -> Result<Outcome> {
+    let mut g = c.game("chest")?;
+    join(&mut g)?;
+    cmd(&mut g, "gamemode survival");
+    tp(&mut g, [320.5, -60.0, 0.5], 0.0, 0.0)?;
+    cmd(&mut g, "setblock 320 -60 2 chest[facing=north]");
+    cmd(&mut g, "item replace block 320 -60 2 container.0 with diamond 5");
+    cmd(&mut g, "item replace block 320 -60 2 container.1 with iron_ore 10");
+    cmd(&mut g, "give @s cobblestone 7");
+    let (dia, iron, cobble) = (item_id("diamond"), item_id("iron_ore"), item_id("cobblestone"));
+    if !wait_until(&mut g, 5.0, |g| count_item(&g.inventory, cobble) == 7 && basalt_data::BlockState(g.world.get(320, -60, 2) as u32).name() == "chest")? { bail!("setup failed"); }
+    wait(&mut g, 0.3)?;
+    let kind = Kind::Generic(3);
+    open_block(&mut g, [320, -60, 2], kind)?;
+    let img = capture(&mut g)?; save(&g, &img, "chest");
+    {
+        let cs = &container(&g).unwrap().slots;
+        if cs[0].item != dia || cs[0].count != 5 || cs[1].item != iron || cs[1].count != 10 { bail!("chest contents on open: slot0 {:?} slot1 {:?}", cs[0], cs[1]); }
+        if count_item(&cs[27..], cobble) != 7 { bail!("inventory part has {} cobblestone", count_item(&cs[27..], cobble)); }
+        if container(&g).unwrap().title != crate::lang::tr("container.chest", &[]) { bail!("title {:?}", container(&g).unwrap().title); }
+    }
+    // pick the diamonds up and put them in slot 3
+    let p = slot_center(&g, kind, 0); click_at(&mut g, p.0, p.1, 0)?;
+    let p = slot_center(&g, kind, 3); click_at(&mut g, p.0, p.1, 0)?;
+    // shift-click the iron ore: moves into the inventory
+    g.key(KeyCode::ShiftLeft, true, None);
+    let p = slot_center(&g, kind, 1); click_at(&mut g, p.0, p.1, 0)?;
+    g.key(KeyCode::ShiftLeft, false, None);
+    // right-click takes half of the diamonds, a second right-click places them one by one
+    let p = slot_center(&g, kind, 3); click_at(&mut g, p.0, p.1, 1)?;
+    let p = slot_center(&g, kind, 5); click_at(&mut g, p.0, p.1, 0)?;
+    if !wait_until(&mut g, 3.0, |g| container(g).map(|c| c.slots[3].count == 2 && c.slots[5].count == 3 && c.slots[0].count == 0 && c.slots[1].count == 0 && count_item(&c.slots[27..], iron) == 10).unwrap_or(false))? {
+        let cs = &container(&g).unwrap().slots;
+        bail!("after clicks: slot3 {:?} slot5 {:?} slot0 {:?} slot1 {:?} iron in inventory {}", cs[3], cs[5], cs[0], cs[1], count_item(&cs[27..], iron));
+    }
+    tap(&mut g, KeyCode::Escape, None)?;
+    if g.screen.is_some() { bail!("Esc did not close the chest"); }
+    wait(&mut g, 0.5)?;
+    // reopen: the server must have the same contents
+    open_block(&mut g, [320, -60, 2], kind)?;
+    let cs = container(&g).unwrap().slots.clone();
+    if cs[3].item != dia || cs[3].count != 2 || cs[5].item != dia || cs[5].count != 3 || cs[0].count != 0 || cs[1].count != 0 { bail!("server contents after reopening: slot3 {:?} slot5 {:?}", cs[3], cs[5]); }
+    if count_item(&cs[27..], iron) != 10 || count_item(&cs[27..], cobble) != 7 { bail!("inventory after reopening: iron {} cobble {}", count_item(&cs[27..], iron), count_item(&cs[27..], cobble)); }
+    tap(&mut g, KeyCode::Escape, None)?;
+    Ok(Outcome::Pass("chest screen (3 rows): contents from the server, pickup/place/half/shift clicks, state identical after reopening".into()))
+}
+
+/// Furnace window: slots + the flame and arrow progress sprites driven by container_set_data, taking the result.
+fn furnace(c: &Ctx) -> Result<Outcome> {
+    let mut g = c.game("furn")?;
+    join(&mut g)?;
+    cmd(&mut g, "gamemode survival");
+    tp(&mut g, [340.5, -60.0, 0.5], 0.0, 0.0)?;
+    cmd(&mut g, "setblock 340 -60 2 furnace[facing=north]");
+    let (ore, coal, ingot) = (item_id("iron_ore"), item_id("coal"), item_id("iron_ingot"));
+    if !wait_until(&mut g, 5.0, |g| basalt_data::BlockState(g.world.get(340, -60, 2) as u32).name() == "furnace")? { bail!("setup failed"); }
+    let kind = Kind::Furnace(0);
+    // idle window as the reference picture
+    open_block(&mut g, [340, -60, 2], kind)?;
+    let idle = capture(&mut g)?; save(&g, &idle, "furnace_idle");
+    tap(&mut g, KeyCode::Escape, None)?;
+    wait(&mut g, 0.3)?;
+    cmd(&mut g, "item replace block 340 -60 2 container.0 with iron_ore 2");
+    cmd(&mut g, "item replace block 340 -60 2 container.1 with coal 2");
+    wait(&mut g, 1.0)?;
+    open_block(&mut g, [340, -60, 2], kind)?;
+    {
+        let cs = &container(&g).unwrap().slots;
+        if cs[0].item != ore || cs[1].item != coal { bail!("furnace slots on open: {:?} {:?}", cs[0], cs[1]); }
+    }
+    if !wait_until(&mut g, 4.0, |g| container(g).map(|c| c.props[1] == 1600 && c.props[3] == 200 && c.props[2] >= 20).unwrap_or(false))? { bail!("furnace properties {:?}", container(&g).map(|c| c.props)); }
+    let img = capture(&mut g)?; save(&g, &img, "furnace_cooking");
+    let (s, (ox, oy)) = (g.gui_scale(), g.container_origin(kind));
+    let rect = |x: f32, y: f32, w: f32, h: f32| ((ox + x * s) as i32, (oy + y * s) as i32, (ox + (x + w) * s) as i32, (oy + (y + h) * s) as i32);
+    let (f0, f1, f2, f3) = rect(56.0, 36.0, 14.0, 14.0);
+    let flame = diff_count(&idle, &img, f0, f1, f2, f3);
+    let (a0, a1, a2, a3) = rect(79.0, 34.0, 24.0, 16.0);
+    let arrow = diff_count(&idle, &img, a0, a1, a2, a3);
+    // the flame is lit (pixel count scales with the gui scale squared), the arrow partly filled
+    let (min_flame, min_arrow) = ((s * s * 20.0) as usize, (s * s * 6.0) as usize); // at ~10% progress the arrow is only a few texels wide
+    if flame < min_flame { bail!("flame sprite not drawn: {flame} differing pixels (< {min_flame})"); }
+    if arrow < min_arrow { bail!("arrow sprite not drawn: {arrow} differing pixels (< {min_arrow})"); }
+    // the arrow keeps growing
+    let p0 = container(&g).unwrap().props[2];
+    wait(&mut g, 1.0)?;
+    let p1 = container(&g).unwrap().props[2];
+    if p1 <= p0 { bail!("cook progress did not advance: {p0} -> {p1}"); }
+    let img2 = capture(&mut g)?;
+    let arrow2 = diff_count(&idle, &img2, a0, a1, a2, a3);
+    if arrow2 <= arrow { bail!("arrow did not grow: {arrow} -> {arrow2} pixels"); }
+    // wait for the first ingot and take it with a shift-click
+    if !wait_until(&mut g, 14.0, |g| container(g).map(|c| c.slots[2].item == ingot).unwrap_or(false))? { bail!("no ingot in the result slot after 14 s (props {:?})", container(&g).map(|c| c.props)); }
+    g.key(KeyCode::ShiftLeft, true, None);
+    let p = slot_center(&g, kind, 2); click_at(&mut g, p.0, p.1, 0)?;
+    g.key(KeyCode::ShiftLeft, false, None);
+    if !wait_until(&mut g, 3.0, |g| container(g).map(|c| c.slots[2].count == 0 && count_item(&c.slots[3..], ingot) == 1).unwrap_or(false))? { bail!("ingot not moved to the inventory"); }
+    // the input and fuel slots follow the server: one ore smelted, one coal burning, one left
+    let cs = container(&g).unwrap().slots.clone();
+    if cs[0].count != 1 || cs[1].count != 1 { bail!("input {:?} fuel {:?} after the first ingot (one coal was lit, one is left)", cs[0], cs[1]); }
+    tap(&mut g, KeyCode::Escape, None)?;
+    Ok(Outcome::Pass(format!("furnace screen: flame {flame} + arrow {arrow}->{arrow2} px vs idle, progress {p0}->{p1}, ingot taken by shift-click")))
 }
 
 /// Held item in first person (block model and an extruded flat item), the lower/raise animation on

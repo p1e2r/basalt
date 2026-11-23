@@ -91,6 +91,7 @@ impl Game {
             if st == 0 { continue; }
             let d = self.data.explosion_drops(st, radius, &mut self.rng);
             drops.push((*b, d));
+            self.container_broken(*b, st);
             for ch in self.world.set_block(b[0], b[1], b[2], 0) { changed_chunks.insert(ch); }
             changed_chunks.insert((b[0] >> 4, b[2] >> 4));
             let (x, y, z) = (b[0], b[1], b[2]);

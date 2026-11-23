@@ -2,6 +2,7 @@
 mod ai;
 mod arrow;
 mod combat;
+mod container;
 mod debug;
 mod env;
 mod explosion;
@@ -84,6 +85,12 @@ struct Player {
     state_id: i32,
     drag: (i8, Vec<i16>),
     seen_items: HashSet<i32>,
+    /// container slots of the open container window (mirror of the block entity, for send_window)
+    cont_items: Vec<Stack>,
+    /// furnace properties last sent to this player (container_set_data diffing)
+    data_sent: [i32; 4],
+    /// experience points (total)
+    xp: i32,
     // environment
     air: i32,
     fire_ticks: i32,
@@ -125,6 +132,8 @@ pub struct Game {
     items: HashMap<i32, items::ItemEntity>,
     mobs: HashMap<i32, mob::Mob>,
     arrows: HashMap<i32, arrow::Arrow>,
+    /// container block entities of loaded chunks (chests, barrels, furnaces)
+    bes: HashMap<[i32; 3], container::Be>,
     path_budget: u32,
     no_spawning: bool,
     rng: rand::rngs::StdRng,
@@ -176,7 +185,7 @@ impl Game {
         let world = World::new(dir.as_ref().map(|d| d.join("region")));
         let player_type = registry_id(reg::ENTITY_TYPE, "player").unwrap_or(0);
         let data = sh.data.clone();
-        let mut g = Game { sh, world, gen: GenPool::new(gen), players: HashMap::new(), tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir, data, commands_body: None, weather: Weather::default(), items: HashMap::new(), mobs: HashMap::new(), arrows: HashMap::new(), path_budget: 0, no_spawning: false, rng: rand::rngs::StdRng::from_entropy() };
+        let mut g = Game { sh, world, gen: GenPool::new(gen), players: HashMap::new(), tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir, data, commands_body: None, weather: Weather::default(), items: HashMap::new(), mobs: HashMap::new(), arrows: HashMap::new(), bes: HashMap::new(), path_budget: 0, no_spawning: false, rng: rand::rngs::StdRng::from_entropy() };
         g.no_spawning = g.sh.cfg.no_spawning;
         g.commands_body = crate::commands::build_packet(&g.sh.cfg.data_dir, crate::commands::IMPLEMENTED);
         if g.commands_body.is_none() { log::warn!("no reports/commands.json: using the built-in command tree"); }
@@ -205,7 +214,7 @@ impl Game {
         let Some(d) = &self.dir else { return };
         let inv: Vec<_> = p.inv.iter().enumerate().filter(|(_, s)| s.count > 0).map(|(i, s)| serde_json::json!([i, s.item, s.count, s.damage, s.ench.iter().filter(|e| e.1 > 0).map(|e| [e.0 as u32, e.1 as u32]).collect::<Vec<_>>()])).collect();
         let j = serde_json::json!({ "pos": p.pos, "yaw": p.yaw, "pitch": p.pitch, "gamemode": p.gamemode, "held": p.held, "inv": inv, "flying": p.flying,
-            "health": p.health, "food": p.food, "saturation": p.saturation, "dead": p.dead, "air": p.air, "fire": p.fire_ticks,
+            "xp": p.xp, "health": p.health, "food": p.food, "saturation": p.saturation, "dead": p.dead, "air": p.air, "fire": p.fire_ticks,
             "effects": p.effects.iter().map(|(id, (a, t))| [*id as i64, *a as i64, *t as i64]).collect::<Vec<_>>() });
         let _ = std::fs::create_dir_all(d.join("players"));
         let _ = std::fs::write(d.join("players").join(format!("{}.json", p.uuid)), j.to_string());
@@ -218,6 +227,7 @@ impl Game {
         p.yaw = v["yaw"].as_f64().unwrap_or(0.0) as f32; p.pitch = v["pitch"].as_f64().unwrap_or(0.0) as f32;
         p.gamemode = v["gamemode"].as_u64().unwrap_or(p.gamemode as u64) as u8; p.held = v["held"].as_u64().unwrap_or(0).min(8) as usize;
         p.flying = v["flying"].as_bool().unwrap_or(false);
+        p.xp = v["xp"].as_i64().unwrap_or(0) as i32;
         p.health = v["health"].as_f64().unwrap_or(20.0) as f32; p.food = v["food"].as_i64().unwrap_or(20) as i32;
         p.saturation = v["saturation"].as_f64().unwrap_or(5.0) as f32; p.dead = v["dead"].as_bool().unwrap_or(false);
         p.air = v["air"].as_i64().unwrap_or(env::MAX_AIR as i64) as i32; p.fire_ticks = v["fire"].as_i64().unwrap_or(0) as i32;
@@ -242,7 +252,7 @@ impl Game {
     fn chunk_ready(&mut self, cx: i32, cz: i32) -> bool {
         if self.world.chunk(cx, cz).is_some() { return true; }
         match self.world.load(cx, cz) {
-            Ok(true) => return true,
+            Ok(true) => { self.be_adopt_chunk(cx, cz); return true; }
             Ok(false) => {}
             Err(e) => log::warn!("loading chunk {cx},{cz}: {e:#}; regenerating"),
         }
@@ -253,6 +263,7 @@ impl Game {
         let (cx, cz) = (c.x, c.z);
         if self.world.chunk(cx, cz).is_some() { return; }
         self.world.insert(c);
+        self.be_adopt_chunk(cx, cz);
         // neighbours that players already have may get new light across the border
         for (nx, nz) in self.world.light_chunk_changed(cx, cz) {
             if (nx, nz) == (cx, cz) { continue; }
@@ -309,6 +320,7 @@ impl Game {
     /// Change a block, notify viewers and resend light for affected chunks.
     fn set_block(&mut self, x: i32, y: i32, z: i32, state: u32) {
         let changed = self.world.set_block(x, y, z, state);
+        self.be_block_changed([x, y, z], state);
         self.broadcast_chunk((x >> 4, z >> 4), None, || { let mut w = Writer::with_id(cb::BLOCK_UPDATE); w.position(x, y, z).varint(state as i32); w });
         for (cx, cz) in changed {
             let Some(c) = self.world.chunk(cx, cz) else { continue };
@@ -405,7 +417,7 @@ impl Game {
             last_sent_pos: ([0.0; 3], 0.0, 0.0), sneaking: false,
             dead: false, health: 20.0, food: 20, saturation: 5.0, exhaustion: 0.0, fall_start: None, hurt_cooldown: 0, regen_timer: 0,
             using: None, sprinting: false, jump_held: false, dig_start: None, cursor: Stack::default(), craft_result: Stack::default(),
-            table_grid: [Stack::default(); 9], window: inv::Window::Inventory, next_window: 0, state_id: 0, drag: (0, Vec::new()), seen_items: HashSet::new(),
+            table_grid: [Stack::default(); 9], window: inv::Window::Inventory, next_window: 0, state_id: 0, drag: (0, Vec::new()), seen_items: HashSet::new(), cont_items: Vec::new(), data_sent: [-1; 4], xp: 0,
             air: env::MAX_AIR, fire_ticks: 0, ticks_frozen: 0, fire_exposure: 0, effects: HashMap::new(), prev_tick_pos: [0.0; 3], seen: HashSet::new(), last_attack_tick: 0,
         };
         self.load_player(&mut p);
@@ -439,7 +451,7 @@ impl Game {
         let mut w = Writer::with_id(cb::TICKING_STEP); w.varint(0); p.send(w);
         Self::send_window(&mut p);
         let mut w = Writer::with_id(cb::SET_HEALTH); w.f32(p.health).varint(p.food).f32(p.saturation); p.send(w);
-        let mut w = Writer::with_id(cb::SET_EXPERIENCE); w.f32(0.0).varint(0).varint(0); p.send(w);
+        Self::send_xp(&p);
         self.broadcast(None, || Self::info_add(&p));
         let add = self.add_entity(&p);
         for o in self.players.values() { o.send(Writer { buf: add.buf.clone() }); p.send(self.add_entity(o)); }
@@ -537,7 +549,7 @@ impl Game {
             sb::PLAYER_COMMAND => { let _id = r.varint()?; let action = r.varint()?; if let Some(p) = self.players.get_mut(&eid) { match action { 1 => p.sprinting = true, 2 => p.sprinting = false, _ => {} } } }
             sb::PLAYER_INPUT => { let f = r.u8()?; if let Some(p) = self.players.get_mut(&eid) { p.sneaking = f & 32 != 0; p.jump_held = f & 16 != 0; p.sprinting = p.sprinting || f & 64 != 0 && f & 1 != 0; if f & 1 == 0 { p.sprinting = false; } } }
             sb::CONTAINER_CLICK => { self.container_click(eid, &mut r)?; }
-            sb::CONTAINER_CLOSE => { let _id = r.varint()?; self.close_window(eid); }
+            sb::CONTAINER_CLOSE => { let id = r.varint()?; if self.players.get(&eid).map(|p| p.window_id()) == Some(id) { self.close_window(eid); } }
             sb::CLIENT_COMMAND => { if r.varint()? == 0 { self.respawn(eid); } }
             sb::SET_CARRIED_ITEM => { let s = r.i16()?; if let Some(p) = self.players.get_mut(&eid) { if (0..9).contains(&s) { if p.held != s as usize { p.last_attack_tick = self.tick; } p.held = s as usize; } } }
             // attack: varint entity id; interact: varint entity id, varint hand, LpVec3 offset, bool sneaking
@@ -634,6 +646,7 @@ impl Game {
             }
         };
         if !breaks { return; }
+        self.container_broken(b, old);
         self.set_block(b[0], b[1], b[2], 0);
         // world event 2001: block break particles + sound for others
         self.broadcast_chunk((b[0] >> 4, b[2] >> 4), Some(eid), || { let mut w = Writer::with_id(cb::LEVEL_EVENT); w.i32(2001).position(b[0], b[1], b[2]).i32(old as i32).bool(false); w });
@@ -683,6 +696,13 @@ impl Game {
         if p.dead { return; }
         let clicked_name = BlockState(self.world.get_block(b[0], b[1], b[2])).name();
         if clicked_name == "crafting_table" && !p.sneaking && p.gamemode != 3 { self.open_crafting_table(eid); return; }
+        if container::Kind::of_block(clicked_name).is_some() && p.gamemode != 3 && !(p.sneaking && p.inv[36 + p.held].count > 0) {
+            // reach: distance from the eye to the block's box <= 4.5 + 1.0 (vanilla's use-on tolerance)
+            let eye = [p.pos[0], p.pos[1] + 1.62, p.pos[2]];
+            let d2: f64 = (0..3).map(|i| { let lo = b[i] as f64; let c = eye[i].clamp(lo, lo + 1.0); (eye[i] - c).powi(2) }).sum();
+            if d2 <= 5.5 * 5.5 { self.open_container(eid, b); }
+            return;
+        }
         let p = &self.players[&eid];
         if p.gamemode == 3 || p.gamemode == 2 { return; }
         let slot = 36 + p.held; let st = p.inv[slot];
@@ -702,11 +722,16 @@ impl Game {
         let blk = BlockState(state).block();
         let has = |k: &str| blk.props.iter().any(|(n, _)| *n == k);
         let look = horizontal_facing(p.yaw);
+        let sneaking = p.sneaking;
+        let nearest_look = { let (y, pi) = ((p.yaw as f64).to_radians(), (p.pitch as f64).to_radians()); let v = [-y.sin() * pi.cos(), -pi.sin(), y.cos() * pi.cos()];
+            let a = (0..3).max_by(|&i, &j| v[i].abs().partial_cmp(&v[j].abs()).unwrap_or(std::cmp::Ordering::Equal)).unwrap_or(2);
+            match (a, v[a] > 0.0) { (0, true) => "east", (0, false) => "west", (1, true) => "up", (1, false) => "down", (_, true) => "south", _ => "north" } };
         let face_dir = ["down", "up", "north", "south", "west", "east"][face];
         if has("axis") { state = with_prop(state, "axis", match face { 0 | 1 => "y", 2 | 3 => "z", _ => "x" }); }
         if has("facing") {
             let vertical_ok = blk.props.iter().find(|(n, _)| *n == "facing").map(|(_, v)| v.contains(&"up")).unwrap_or(false);
-            let f = if vertical_ok && matches!(blk.kind, "piston" | "dispenser" | "observer" | "barrel" | "end_rod" | "lightning_rod" | "amethyst_cluster") { face_dir }
+            let f = if blk.name == "barrel" { opposite(nearest_look) }
+                else if vertical_ok && matches!(blk.kind, "piston" | "dispenser" | "observer" | "barrel" | "end_rod" | "lightning_rod" | "amethyst_cluster") { face_dir }
                 else if blk.kind == "wall_torch" || blk.name.ends_with("wall_sign") || blk.kind == "ladder" { face_dir }
                 else if matches!(blk.kind, "stair" | "door" | "trapdoor" | "fence_gate" | "bed" | "button" | "lever") { look } else { opposite(look) };
             state = with_prop(state, "facing", f);
@@ -719,6 +744,7 @@ impl Game {
         }
         if face < 2 && matches!(blk.name, "torch" | "soul_torch" | "redstone_torch" | "copper_torch") && face == 0 { return; }
         if BlockState(self.world.get_block(t[0], t[1], t[2])).name() == "water" && has("waterlogged") { state = with_prop(state, "waterlogged", "true"); }
+        if matches!(blk.name, "chest" | "trapped_chest") { state = self.chest_placed(t, state, sneaking, face); }
         self.set_block(t[0], t[1], t[2], state);
         if blk.kind == "door" || blk.name.ends_with("_door") {
             if replaceable(self.world.get_block(t[0], t[1] + 1, t[2])) { self.set_block(t[0], t[1] + 1, t[2], with_prop(state, "half", "upper")); }
@@ -762,6 +788,25 @@ impl Game {
             "give" => {
                 let (item, count) = (args.get(1).copied().unwrap_or(""), args.get(2).and_then(|c| c.parse().ok()).unwrap_or(1));
                 match registry_id(reg::ITEM, item) { Some(id) => { let left = self.give_stack(eid, Stack { item: id, count, damage: 0, ench: NO_ENCH }); if left > 0 { self.throw_item(eid, Stack { item: id, count: left, damage: 0, ench: NO_ENCH }, false); } reply(self, format!("Gave {count} {item}")); } None => reply(self, format!("Unknown item {item}")) }
+            }
+            "item" => {
+                // /item replace block <x y z> container.<n> with <item> [count]
+                let ok = (|| -> Option<()> {
+                    if args.get(1) != Some(&"replace") || args.get(2) != Some(&"block") || args.get(7) != Some(&"with") { return None; }
+                    let c: Vec<i32> = args[3..6].iter().map(|a| a.parse().ok()).collect::<Option<_>>()?;
+                    let slot: usize = args.get(6)?.strip_prefix("container.")?.parse().ok()?;
+                    let id = registry_id(reg::ITEM, args.get(8)?)?;
+                    let count: i32 = args.get(9).and_then(|c| c.parse().ok()).unwrap_or(1);
+                    let pos = [c[0], c[1], c[2]];
+                    self.ensure_chunk(pos[0] >> 4, pos[2] >> 4);
+                    let kind = self.be_ensure(pos)?;
+                    if slot >= kind.slots() { return None; }
+                    let st = if count > 0 { Stack { item: id, count: count.min(self.max_stack(id)), damage: 0, ench: NO_ENCH } } else { Stack::default() };
+                    self.bes.get_mut(&pos)?.items[slot] = st;
+                    self.cont_changed(pos);
+                    Some(())
+                })();
+                reply(self, if ok.is_some() { "Replaced a slot".into() } else { "Usage: /item replace block <x y z> container.<slot> with <item> [count]".into() });
             }
             "time" => {
                 let v = match args.get(2).copied().or(args.get(1).copied()) { Some("day") => Some(1000), Some("noon") => Some(6000), Some("night") => Some(13000), Some("midnight") => Some(18000), Some(n) => n.parse().ok(), None => None };
@@ -912,6 +957,7 @@ impl Game {
         if self.tick % 10 == 5 { self.sync_viewers(); }
         self.tick_survival();
         self.tick_environment();
+        self.tick_containers();
         self.tick_weather();
         let ids: Vec<i32> = self.players.keys().copied().collect();
         for &eid in &ids { self.stream_chunks(eid); }
@@ -941,7 +987,7 @@ impl Game {
         // unload chunks nobody can see
         if self.tick % 100 == 0 {
             let seen: HashSet<(i32, i32)> = self.players.values().flat_map(|p| p.loaded.iter().copied()).collect();
-            for c in self.world.loaded_chunks() { if !seen.contains(&c) && (c.0.abs() > 2 || c.1.abs() > 2) { let _ = self.world.unload(c.0, c.1); } }
+            for c in self.world.loaded_chunks() { if !seen.contains(&c) && (c.0.abs() > 2 || c.1.abs() > 2) { let _ = self.world.unload(c.0, c.1); self.be_drop_chunk(c.0, c.1); } }
         }
     }
 

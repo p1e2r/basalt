@@ -65,6 +65,9 @@ pub struct CraftResult {
 pub struct Recipes {
     pub crafting: Vec<Recipe>,
     cooking: HashMap<(CookKind, i32), (i32, f32, u32)>,
+    /// Recipe id (file stem) of the recipe `cooking` picked for each (kind, input), and experience per recipe id.
+    cooking_ids: HashMap<(CookKind, i32), String>,
+    cooking_xp: HashMap<String, f32>,
     stonecutting: HashMap<i32, Vec<(i32, i32)>>,
 }
 
@@ -143,10 +146,12 @@ impl Recipes {
                     };
                     let xp = v["experience"].as_f64().unwrap_or(0.0) as f32;
                     let time = v["cookingtime"].as_u64().unwrap_or(default_time) as u32;
+                    out.cooking_xp.insert(id.clone(), xp);
                     if let Some(ing) = Ingredient::parse(&v["ingredient"], tags) {
                         let mut ids: Vec<i32> = ing.0.into_iter().collect();
                         ids.sort();
                         for i in ids {
+                            if !out.cooking.contains_key(&(kind, i)) { out.cooking_ids.insert((kind, i), id.clone()); }
                             out.cooking.entry((kind, i)).or_insert((result.0, xp, time));
                         }
                     }
@@ -170,6 +175,16 @@ impl Recipes {
 
     pub fn cook(&self, kind: CookKind, item: i32) -> Option<(i32, f32, u32)> {
         self.cooking.get(&(kind, item)).copied()
+    }
+
+    /// Id (file stem, no namespace) of the cooking recipe used for `item`.
+    pub fn cook_id(&self, kind: CookKind, item: i32) -> Option<&str> {
+        self.cooking_ids.get(&(kind, item)).map(|s| s.as_str())
+    }
+
+    /// Experience of a cooking recipe by id (no namespace).
+    pub fn cook_xp(&self, id: &str) -> Option<f32> {
+        self.cooking_xp.get(id).copied()
     }
 
     pub fn stonecut(&self, item: i32) -> Vec<(i32, i32)> {

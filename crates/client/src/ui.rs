@@ -10,7 +10,7 @@ pub struct UiAtlas { pub w: u32, pub h: u32, pub rgba: Vec<u8>, pub rects: HashM
 fn wanted(name: &str, img: &crate::assets::Image) -> bool {
     (name.starts_with("sprites/") && img.w <= 256 && img.h <= 256 && !name.starts_with("sprites/realm") && !name.starts_with("sprites/advancements") && !name.starts_with("sprites/recipe_book")
         && !name.starts_with("sprites/social_interactions") && !name.starts_with("sprites/spectator") && !name.starts_with("sprites/statistics"))
-        || matches!(name, "container/inventory" | "container/crafting_table" | "container/generic_54" | "title/minecraft" | "title/edition" | "menu_background" | "inworld_menu_background"
+        || matches!(name, "container/inventory" | "container/crafting_table" | "container/generic_54" | "container/furnace" | "container/blast_furnace" | "container/smoker" | "title/minecraft" | "title/edition" | "menu_background" | "inworld_menu_background"
             | "header_separator" | "footer_separator" | "menu_list_background" | "inworld_header_separator" | "inworld_footer_separator" | "inworld_menu_list_background")
 }
 

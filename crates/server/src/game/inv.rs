@@ -8,7 +8,7 @@ use anyhow::Result;
 use basalt_protocol::{ids::play::clientbound as cb, text, Reader, Writer};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub enum Window { Inventory, Crafting(i32) }
+pub enum Window { Inventory, Crafting(i32), Cont(super::container::Cw) }
 
 #[derive(Clone, Copy, PartialEq)]
 enum Loc { Result, Inv(usize), Grid(usize) }
@@ -18,10 +18,11 @@ fn loc(win: Window, slot: i16) -> Option<Loc> {
     match win {
         Window::Inventory => match s { 0 => Some(Loc::Result), 1..=45 => Some(Loc::Inv(s as usize)), _ => None },
         Window::Crafting(_) => match s { 0 => Some(Loc::Result), 1..=9 => Some(Loc::Grid(s as usize - 1)), 10..=45 => Some(Loc::Inv(s as usize - 1)), _ => None },
+        Window::Cont(_) => None, // container windows are handled by Game::cont_click
     }
 }
 
-fn slot_count(win: Window) -> i16 { match win { Window::Inventory => 46, Window::Crafting(_) => 46 } }
+fn slot_count(win: Window) -> i16 { match win { Window::Inventory => 46, Window::Crafting(_) => 46, Window::Cont(cw) => cw.total() as i16 } }
 
 impl Player {
     fn get(&self, l: Loc) -> Stack { match l { Loc::Result => self.craft_result, Loc::Inv(i) => self.inv[i], Loc::Grid(i) => self.table_grid[i] } }
@@ -29,14 +30,15 @@ impl Player {
         let s = if s.count <= 0 { Stack::default() } else { s };
         match l { Loc::Result => self.craft_result = s, Loc::Inv(i) => self.inv[i] = s, Loc::Grid(i) => self.table_grid[i] = s }
     }
-    pub(super) fn window_id(&self) -> i32 { match self.window { Window::Inventory => 0, Window::Crafting(id) => id } }
+    pub(super) fn window_id(&self) -> i32 { match self.window { Window::Inventory => 0, Window::Crafting(id) => id, Window::Cont(cw) => cw.id } }
     fn grid(&self) -> (Vec<Option<i32>>, usize) {
         match self.window {
             Window::Inventory => ((1..5).map(|i| (self.inv[i].count > 0).then_some(self.inv[i].item)).collect(), 2),
+            Window::Cont(_) => (Vec::new(), 0),
             Window::Crafting(_) => (self.table_grid.iter().map(|s| (s.count > 0).then_some(s.item)).collect(), 3),
         }
     }
-    fn grid_loc(&self, i: usize) -> Loc { match self.window { Window::Inventory => Loc::Inv(1 + i), Window::Crafting(_) => Loc::Grid(i) } }
+    fn grid_loc(&self, i: usize) -> Loc { match self.window { Window::Inventory => Loc::Inv(1 + i), _ => Loc::Grid(i) } }
 }
 
 impl Game {
@@ -83,7 +85,13 @@ impl Game {
         p.state_id = p.state_id.wrapping_add(1) & 0x7fff;
         let mut w = Writer::with_id(cb::CONTAINER_SET_CONTENT);
         w.varint(p.window_id()).varint(p.state_id).varint(slot_count(p.window) as i32);
-        for s in 0..slot_count(p.window) { super::write_slot(&mut w, p.get(loc(p.window, s).unwrap())); }
+        if let Window::Cont(cw) = p.window {
+            let n = cw.n_cont();
+            for i in 0..n { super::write_slot(&mut w, p.cont_items.get(i).copied().unwrap_or_default()); }
+            for j in 0..36 { super::write_slot(&mut w, if j < 27 { p.inv[9 + j] } else { p.inv[36 + j - 27] }); }
+        } else {
+            for s in 0..slot_count(p.window) { super::write_slot(&mut w, p.get(loc(p.window, s).unwrap())); }
+        }
         super::write_slot(&mut w, p.cursor);
         p.send(w);
     }
@@ -100,12 +108,14 @@ impl Game {
 
     /// Return grid and cursor contents to the inventory (dropping what doesn't fit).
     pub(super) fn close_window(&mut self, eid: i32) {
+        if let Some(Window::Cont(cw)) = self.players.get(&eid).map(|p| p.window) { self.cont_closed(eid, cw); }
         let Some(p) = self.players.get_mut(&eid) else { return };
         let mut back: Vec<Stack> = Vec::new();
         if p.cursor.count > 0 { back.push(p.cursor); p.cursor = Stack::default(); }
         match p.window {
             Window::Inventory => for i in 1..5 { if p.inv[i].count > 0 { back.push(p.inv[i]); p.inv[i] = Stack::default(); } },
             Window::Crafting(_) => for s in p.table_grid.iter_mut() { if s.count > 0 { back.push(*s); *s = Stack::default(); } },
+            Window::Cont(_) => {}
         }
         p.window = Window::Inventory;
         p.craft_result = Stack::default();
@@ -139,6 +149,7 @@ impl Game {
         let Some(p) = self.players.get(&eid) else { return Ok(()) };
         if window != p.window_id() || p.dead { return Ok(()); }
         let win = p.window;
+        if let Window::Cont(cw) = win { self.cont_click(eid, cw, slot, button, mode); return Ok(()); }
         let creative = p.gamemode == 1;
         let l = loc(win, slot);
         match mode {

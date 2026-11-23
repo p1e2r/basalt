@@ -10,7 +10,8 @@ use basalt_protocol::{ids::play::serverbound as sb, Writer};
 use std::time::Instant;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub enum Kind { Inventory, Crafting, Generic(u32), Other }
+/// `Furnace(0)` furnace, `Furnace(1)` blast furnace, `Furnace(2)` smoker (same layout, different background/sprites).
+pub enum Kind { Inventory, Crafting, Generic(u32), Furnace(u8), Other }
 
 pub struct Open {
     pub window: i32,
@@ -23,6 +24,8 @@ pub struct Open {
     pub drag: Option<(u8, Vec<i16>)>,
     pub last_click: Option<(i16, Instant)>,
     pub hover: Option<i16>,
+    /// container_set_data properties (furnace: 0 burn time left, 1 burn duration, 2 cook progress, 3 cook total)
+    pub props: [i16; 4],
 }
 
 impl Kind {
@@ -30,14 +33,15 @@ impl Kind {
         match basalt_data::registries::MENU.get(menu as usize).copied().unwrap_or("") {
             "crafting" => Kind::Crafting,
             "generic_9x1" => Kind::Generic(1), "generic_9x2" => Kind::Generic(2), "generic_9x3" => Kind::Generic(3),
+            "furnace" => Kind::Furnace(0), "blast_furnace" => Kind::Furnace(1), "smoker" => Kind::Furnace(2),
             "generic_9x4" => Kind::Generic(4), "generic_9x5" => Kind::Generic(5), "generic_9x6" => Kind::Generic(6),
             _ => Kind::Other,
         }
     }
     pub fn size(self) -> (f32, f32) { match self { Kind::Generic(r) => (176.0, 114.0 + r as f32 * 18.0), _ => (176.0, 166.0) } }
-    pub fn slot_count(self) -> usize { match self { Kind::Inventory | Kind::Crafting => 46, Kind::Generic(r) => r as usize * 9 + 36, Kind::Other => 36 } }
+    pub fn slot_count(self) -> usize { match self { Kind::Inventory | Kind::Crafting => 46, Kind::Generic(r) => r as usize * 9 + 36, Kind::Furnace(_) => 39, Kind::Other => 36 } }
     /// first slot index of the player's main inventory (27 slots, then 9 hotbar)
-    pub fn player_start(self) -> usize { match self { Kind::Inventory => 9, Kind::Crafting => 10, Kind::Generic(r) => r as usize * 9, Kind::Other => 0 } }
+    pub fn player_start(self) -> usize { match self { Kind::Inventory => 9, Kind::Crafting => 10, Kind::Generic(r) => r as usize * 9, Kind::Furnace(_) => 3, Kind::Other => 0 } }
     /// GUI-local top-left of slot i (16×16 item area).
     pub fn slot_pos(self, i: usize) -> Option<(f32, f32)> {
         let ps = self.player_start();
@@ -60,10 +64,12 @@ impl Kind {
                 _ => None,
             },
             Kind::Generic(_) => Some((8.0 + (i % 9) as f32 * 18.0, 18.0 + (i / 9) as f32 * 18.0)),
+            // furnace.png: input above the flame, fuel below it, result right of the arrow
+            Kind::Furnace(_) => match i { 0 => Some((56.0, 17.0)), 1 => Some((56.0, 53.0)), 2 => Some((116.0, 35.0)), _ => None },
             Kind::Other => None,
         }
     }
-    pub fn is_result(self, i: i16) -> bool { matches!(self, Kind::Inventory | Kind::Crafting) && i == 0 }
+    pub fn is_result(self, i: i16) -> bool { (matches!(self, Kind::Inventory | Kind::Crafting) && i == 0) || (matches!(self, Kind::Furnace(_)) && i == 2) }
 }
 
 /// Hashed stack as sent in container_click: present flag, item, count, component hashes.
@@ -103,7 +109,7 @@ impl Game {
 
     pub(crate) fn open_inventory(&mut self) {
         let slots = self.inventory.clone();
-        self.screen = Some(crate::menu::Screen::Container(Open { window: 0, kind: Kind::Inventory, title: crate::lang::tr("container.crafting", &[]), slots, state: self.inv_state, drag: None, last_click: None, hover: None }));
+        self.screen = Some(crate::menu::Screen::Container(Open { window: 0, kind: Kind::Inventory, title: crate::lang::tr("container.crafting", &[]), slots, state: self.inv_state, drag: None, last_click: None, hover: None, props: [0; 4] }));
     }
     pub(crate) fn close_container(&mut self, send_close: bool) {
         if let Some(crate::menu::Screen::Container(c)) = &self.screen {
@@ -290,6 +296,19 @@ impl Game {
                 crate::entity::build_model_gui(&self.entity_atlas, &me, ox + 51.0 * s, oy + 75.0 * s, 30.0 * s, ents);
             }
             Kind::Crafting => a.region(ui, "container/crafting_table", ox, oy, 0.0, 0.0, cw, ch, s),
+            Kind::Furnace(v) => {
+                let (bg, sp) = [("furnace", "furnace"), ("blast_furnace", "blast_furnace"), ("smoker", "smoker")][v as usize % 3];
+                a.region(ui, &format!("container/{bg}"), ox, oy, 0.0, 0.0, cw, ch, s);
+                // flame (14x14 at 56,36) shrinks from the top as the fuel burns down; arrow (24x16 at 79,34) fills left to right
+                let [lit, lit_total, cook, cook_total] = c.props.map(|p| p as i32);
+                if lit > 0 {
+                    let dur = if lit_total == 0 { 200 } else { lit_total };
+                    let h = ((lit as f32 * 13.0 / dur as f32).ceil() as i32 + 1).clamp(0, 14) as f32;
+                    a.region(ui, &format!("sprites/container/{sp}/lit_progress"), ox + 56.0 * s, oy + (36.0 + 14.0 - h) * s, 0.0, 14.0 - h, 14.0, h, s);
+                }
+                let w = if cook_total > 0 && cook > 0 { (cook as f32 * 24.0 / cook_total as f32).ceil().clamp(0.0, 24.0) } else { 0.0 };
+                if w > 0.0 { a.region(ui, &format!("sprites/container/{sp}/burn_progress"), ox + 79.0 * s, oy + 34.0 * s, 0.0, 0.0, w, 16.0, s); }
+            }
             Kind::Generic(r) => {
                 let top_h = r as f32 * 18.0 + 17.0;
                 a.region(ui, "container/generic_54", ox, oy, 0.0, 0.0, cw, top_h, s);

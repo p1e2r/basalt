@@ -17,6 +17,17 @@ macro_rules! spec {
 }
 
 pub static ALL: &[Spec] = &[
+    spec!("M6", "m6_chest_open_close", m6::chest_open_close, Flat, Both, true, "chest window: menu/title/contents, lid block_event(1, viewers), open/close sounds"),
+    spec!("M6", "m6_chest_clicks", m6::chest_clicks, Flat, Both, true, "every container_click mode in a chest: state after each step identical to vanilla"),
+    spec!("M6", "m6_chest_close_cursor", m6::chest_close_cursor, Flat, Both, true, "closing a chest with an item on the cursor returns it to the inventory"),
+    spec!("M6", "m6_double_chest", m6::double_chest, Flat, Both, true, "chests pair by type=left/right, 54-slot window, both halves animate, breaking un-pairs"),
+    spec!("M6", "m6_barrel", m6::barrel, Flat, Both, true, "barrel facing, open state + sounds, window"),
+    spec!("M6", "m6_break_contents", m6::break_contents, Flat, Both, true, "breaking a container spills contents (also creative), closes viewers' windows"),
+    spec!("M6", "m6_container_persistence", m6::container_persistence, FlatOnDisk, BasaltOnly, false, "chest + furnace contents/progress survive a restart"),
+    spec!("M6", "m6_furnace_smelt", m6::furnace_smelt, Flat, Both, true, "furnace: lit, container_set_data, 200 ticks per ingot, RecipesUsed, taking the result"),
+    spec!("M6", "m6_furnace_clicks", m6::furnace_clicks, Flat, Both, true, "furnace window shift-click rules and slot restrictions"),
+    spec!("M6", "m6_furnace_fuel", m6::furnace_fuel, Flat, Both, true, "fuel runs out: lit off, progress decays 2/tick"),
+    spec!("M6", "m6_blast_smoker", m6::blast_smoker, Flat, Both, true, "blast furnace 100 ticks + xp, smoker food only"),
     spec!("M6", "m6_weather", m6::weather, Flat, Both, true, "/weather rain|thunder|clear: begin/end events and 0.01/tick level changes"),
     spec!("M1", "m1_join_spawn", m1::join_spawn, Flat, Both, false, "login/configuration/play, spawn position, health"),
     spec!("M1", "m1_status_ping", m1::status_ping, Flat, Both, false, "server list ping: version 26.2/776 + pong"),
