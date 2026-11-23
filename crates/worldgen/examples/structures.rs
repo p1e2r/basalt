@@ -523,6 +523,128 @@ fn main() -> Result<()> {
                 println!("{line}");
             }
         }
+        "pcells" => {
+            // pcells REGION R SEED ID: per saved piece of structure ID (procedural: stronghold,
+            // monument, mansion) in the square, its fields and the vanilla blocks of the cells of its
+            // box inside fully generated chunks in the piece frame (x across, z along `O`; states
+            // turned into that frame) + whether Basalt's terrain without structures has the same
+            // block there. JSON lines {"id","O","BB",fields..,"cells":[[x,y,z,state,terrain]..]}
+            use basalt_worldgen::structure::place::transform_state;
+            use basalt_worldgen::structure::template::Rotation;
+            let seed: i64 = args[4].parse()?;
+            std::env::set_var("BASALT_NO_STRUCTURES", "1");
+            let g0 = basalt_worldgen::Generator::new(seed);
+            std::env::remove_var("BASALT_NO_STRUCTURES");
+            let (ox, oz) = center();
+            let (_, _, have) = vanilla_starts_ex(dir, r)?;
+            let mut cache: HashMap<(i32, i32), Option<(Vec<u16>, Vec<u16>)>> = HashMap::new();
+            for cx in ox - r..ox + r {
+                for cz in oz - r..oz + r {
+                    let Some(root) = read_nbt(dir, cx, cz)? else {
+                        continue;
+                    };
+                    let Some(Tag::Compound(starts)) =
+                        root.get("structures").and_then(|s| s.get("starts"))
+                    else {
+                        continue;
+                    };
+                    for (id, st) in starts {
+                        if id.trim_start_matches("minecraft:") != args[5] {
+                            continue;
+                        }
+                        for c in st
+                            .get("Children")
+                            .and_then(|c| c.as_list())
+                            .map(|l| l.as_slice())
+                            .unwrap_or(&[])
+                        {
+                            let Tag::Compound(m) = c else { continue };
+                            let Some(Tag::IntArray(bb)) = c.get("BB") else {
+                                continue;
+                            };
+                            let o = c.get("O").and_then(|x| x.as_i64()).unwrap_or(0) as u8;
+                            let mut obj = serde_json::Map::new();
+                            for (k, v) in m {
+                                match v {
+                                    Tag::Byte(b) => {
+                                        obj.insert(k.clone(), (*b as i64).into());
+                                    }
+                                    Tag::Int(b) => {
+                                        obj.insert(k.clone(), (*b as i64).into());
+                                    }
+                                    Tag::String(b) => {
+                                        obj.insert(k.clone(), b.clone().into());
+                                    }
+                                    Tag::IntArray(b) => {
+                                        obj.insert(k.clone(), b.clone().into());
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            let (w, d) = if o == 1 || o == 3 {
+                                (bb[5] - bb[2] + 1, bb[3] - bb[0] + 1)
+                            } else {
+                                (bb[3] - bb[0] + 1, bb[5] - bb[2] + 1)
+                            };
+                            let mut cells = Vec::new();
+                            for lx in 0..w {
+                                for lz in 0..d {
+                                    let (x, z) = match o {
+                                        0 => (bb[0] + lx, bb[2] + lz),
+                                        2 => (bb[0] + lx, bb[5] - lz),
+                                        3 => (bb[0] + lz, bb[2] + lx),
+                                        _ => (bb[3] - lz, bb[2] + lx),
+                                    };
+                                    let key = (x >> 4, z >> 4);
+                                    if !have.contains(&key) {
+                                        continue;
+                                    }
+                                    let e = cache.entry(key).or_insert_with(|| {
+                                        let v = vanilla_blocks(dir, key.0, key.1).ok()??;
+                                        let b = g0.generate_chunk(key.0, key.1);
+                                        let mut t = vec![0u16; 384 * 256];
+                                        for yy in -64..320 {
+                                            for zz in 0..16 {
+                                                for xx in 0..16 {
+                                                    t[(((yy + 64) as usize) << 8)
+                                                        | (zz << 4)
+                                                        | xx] = b.get(xx, yy, zz);
+                                                }
+                                            }
+                                        }
+                                        Some((v, t))
+                                    });
+                                    let Some((v, t)) = e else { continue };
+                                    for y in bb[1]..=bb[4] {
+                                        let i = (((y + 64) as usize) << 8)
+                                            | (((z & 15) as usize) << 4)
+                                            | (x & 15) as usize;
+                                        let vs = v[i];
+                                        let ls = match o {
+                                            0 => vs,
+                                            2 => transform_state(vs, Rotation::Cw180, true),
+                                            3 => transform_state(vs, Rotation::Ccw90, true),
+                                            _ => transform_state(vs, Rotation::Ccw90, false),
+                                        };
+                                        cells.push(serde_json::json!([
+                                            lx,
+                                            y - bb[1],
+                                            lz,
+                                            basalt_data::BlockState(ls as u32).to_string(),
+                                            (t[i] == vs) as i32
+                                        ]));
+                                    }
+                                }
+                            }
+                            obj.insert("cells".into(), cells.into());
+                            obj.insert("w".into(), w.into());
+                            obj.insert("d".into(), d.into());
+                            println!("{}", serde_json::Value::Object(obj));
+                        }
+                    }
+                }
+            }
+        }
         "shdump" => {
             // shdump STRUCT SEED CX,CZ...: Basalt's pieces of a procedural structure (stronghold /
             // monument / mansion) started in those chunks, as JSON lines like `json`'s Children

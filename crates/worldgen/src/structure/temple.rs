@@ -141,7 +141,7 @@ fn box_size(o: u8, w: i32, d: i32) -> (i32, i32) {
 }
 
 /// Local (x, z) -> box offset (measured: floors of the 12 jungle temples, draw order per `O`).
-fn to_box(o: u8, x: i32, z: i32, d: i32) -> (i32, i32) {
+pub(super) fn to_box(o: u8, x: i32, z: i32, d: i32) -> (i32, i32) {
     match o {
         0 => (x, z),
         2 => (x, d - 1 - z),
@@ -151,7 +151,7 @@ fn to_box(o: u8, x: i32, z: i32, d: i32) -> (i32, i32) {
 }
 
 /// The state transform that goes with [`to_box`].
-fn box_state(o: u8, s: u16) -> u16 {
+pub(super) fn box_state(o: u8, s: u16) -> u16 {
     match o {
         0 => s,
         2 => transform_state(s, Rotation::Cw180, true),

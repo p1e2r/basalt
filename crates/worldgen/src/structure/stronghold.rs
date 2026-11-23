@@ -3,9 +3,13 @@
 //! draw order were derived from the saved piece lists (type, box, `O`, `GD`, per-piece flags, saved
 //! order = creation order) of vanilla strongholds at the ring positions.
 
+use super::stronghold_layout::{COND, LAYOUTS, PALETTE};
 use super::template::BBox;
 use super::{Piece, PieceKind};
 use crate::random::{JavaRandom, Rng};
+use basalt_data::BlockState;
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 /// Directions as vanilla's saved `O`: 0 south, 1 west, 2 north, 3 east.
 const S: u8 = 0;
@@ -503,11 +507,135 @@ pub fn stronghold(g: &crate::Generator, cx: i32, cz: i32, r: &mut JavaRandom) ->
         .collect()
 }
 
-/// Place a stronghold piece into the region (clipped to `clip`).
-pub fn place(
-    _reg: &mut crate::region::Region,
-    _clip: BBox,
-    _p: &ShPiece,
-    _r: &mut crate::features::R,
-) {
+struct Parsed {
+    id: &'static str,
+    d: i32,
+    /// (x, y, z, palette index)
+    cells: Vec<(i32, i32, i32, u8)>,
+    /// (x, y, z) -> (field, [(value, palette index)])
+    cond: HashMap<(i32, i32, i32), (u8, Vec<(i8, u8)>)>,
+}
+
+/// Palette index of a layout char: '!'.. with '"', '\'' and '\\' skipped.
+fn pal_index(c: u8) -> u8 {
+    let mut i = 0u8;
+    for ch in 0x21u8..0x7f {
+        if ch == b'"' || ch == b'\'' || ch == b'\\' {
+            continue;
+        }
+        if ch == c {
+            return i;
+        }
+        i += 1;
+    }
+    0
+}
+
+fn layouts() -> &'static (Vec<Parsed>, Vec<u16>) {
+    static L: OnceLock<(Vec<Parsed>, Vec<u16>)> = OnceLock::new();
+    L.get_or_init(|| {
+        let pal: Vec<u16> = PALETTE
+            .iter()
+            .map(|n| BlockState::parse(n).map(|b| b.0 as u16).unwrap_or(0))
+            .collect();
+        let mut out: Vec<Parsed> = LAYOUTS
+            .iter()
+            .map(|(id, _w, _h, d, layers)| {
+                let mut cells = Vec::new();
+                for (y, layer) in layers.iter().enumerate() {
+                    for (z, row) in layer.split('/').enumerate() {
+                        for (x, c) in row.bytes().enumerate() {
+                            if c != b' ' {
+                                cells.push((x as i32, y as i32, z as i32, pal_index(c)));
+                            }
+                        }
+                    }
+                }
+                Parsed {
+                    id,
+                    d: *d,
+                    cells,
+                    cond: HashMap::new(),
+                }
+            })
+            .collect();
+        for (li, x, y, z, f, vals) in COND {
+            out[*li as usize].cond.insert(
+                (*x as i32, *y as i32, *z as i32),
+                (*f, vals.iter().map(|(v, c)| (*v, pal_index(*c))).collect()),
+            );
+        }
+        (out, pal)
+    })
+}
+
+impl ShPiece {
+    /// Field value for a [`COND`] field index.
+    fn field(&self, f: u8) -> i8 {
+        let b = |v: bool| v as i8;
+        match (f, &self.kind) {
+            (0, _) => self.door as i8,
+            (1, ShKind::Straight { left, .. }) => b(*left),
+            (2, ShKind::Straight { right, .. }) => b(*right),
+            (3, ShKind::FiveCrossing { ll, .. }) => b(*ll),
+            (4, ShKind::FiveCrossing { lh, .. }) => b(*lh),
+            (5, ShKind::FiveCrossing { rl, .. }) => b(*rl),
+            (6, ShKind::FiveCrossing { rh, .. }) => b(*rh),
+            (7, ShKind::RoomCrossing { ty }) => *ty as i8,
+            (8, ShKind::Library { tall }) => b(*tall),
+            (9, _) => b(self.o == 2 || self.o == 3),
+            (10, ShKind::Filler { steps }) => *steps as i8,
+            _ => 0,
+        }
+    }
+}
+
+/// Place a stronghold piece into the region (clipped to `clip`): the measured layout of its type
+/// (stronghold_layout.rs) in the piece frame. Random stone bricks are drawn from the placement
+/// random with the measured shares (plain 48.6 %, mossy 28.3 %, cracked 18.5 %, infested 4.6 %;
+/// statistical, not vanilla's draw order).
+pub fn place(reg: &mut crate::region::Region, clip: BBox, p: &ShPiece, r: &mut crate::features::R) {
+    let (ls, pal) = layouts();
+    let Some(l) = ls.iter().find(|l| l.id == p.kind.id()) else {
+        return;
+    };
+    let st = |n: &str| BlockState::parse(n).map(|b| b.0 as u16).unwrap_or(0);
+    let bricks = [
+        st("stone_bricks"),
+        st("mossy_stone_bricks"),
+        st("cracked_stone_bricks"),
+        st("infested_stone_bricks"),
+    ];
+    let cave_air = st("cave_air");
+    for &(x, y, z, pi) in &l.cells {
+        let mut pi = pi;
+        if let Some((f, vals)) = l.cond.get(&(x, y, z)) {
+            let v = p.field(*f);
+            if let Some((_, c)) = vals.iter().find(|(a, _)| *a == v) {
+                pi = *c;
+            }
+        }
+        let (bx, bz) = super::temple::to_box(p.o, x, z, l.d);
+        let w = [p.bb.min[0] + bx, p.bb.min[1] + y, p.bb.min[2] + bz];
+        if !clip.contains(w) || w[1] > p.bb.max[1] {
+            continue;
+        }
+        let s = match pi {
+            0 => {
+                let f = r.next_float();
+                bricks[if f < 0.486 {
+                    0
+                } else if f < 0.769 {
+                    1
+                } else if f < 0.954 {
+                    2
+                } else {
+                    3
+                }]
+            }
+            1 => cave_air,
+            _ => super::temple::box_state(p.o, pal[pi as usize]),
+        };
+        reg.set(w[0], w[1], w[2], s);
+    }
 }

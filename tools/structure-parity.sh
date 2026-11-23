@@ -37,10 +37,11 @@ TEMPLES_12345="-223,-312 -237,-312 -319,-303 -94,3 -105,12 -113,-20 -110,-55 -11
 TEMPLES_42="-85,-109 197,149 -126,-232 -115,246 -140,-234 244,148 -84,181 9,-209 82,228"
 TEMPLES_1="5,112 -150,19 -153,49"
 MESA_12345="-168,110"
+SHBLOCKS_12345="-35,-103 110,23 293,-3"
 SITES=("12345 32 0 0" "42 32 0 0" "1 32 0 0" "12345 8 10 55" "12345 8 -146 37" "12345 8 -66 -98" "12345 8 91 75" "12345 8 75 -23" "12345 8 17 -60" "12345 2 171 6" "42 2 144 -51"
   "12345 2 -223 -312 temples" "42 2 -115 246 temples" "42 2 -140 -234 temples" "42 2 -85 -109 temples"
   "12345 2 -110 -55 temples" "12345 2 -113 72 temples" "42 2 82 228 temples" "1 2 -150 19 temples"
-  "12345 6 -168 110 mesa")
+  "12345 6 -168 110 mesa" "12345 8 -35 -103 shblocks" "12345 8 110 23 shblocks" "12345 8 293 -3 shblocks")
 [ $QUICK = 1 ] && SITES=("12345 8 10 55" "42 32 0 0")
 KNOWN=${CHECK_KNOWN:-crates/check/known-divergences.txt}
 cargo build --release -q -p basalt-worldgen --example structures 2>&1 | tail -5
@@ -53,7 +54,11 @@ for site in "${SITES[@]}"; do
   [ "$CX" != 0 ] || [ "$CZ" != 0 ] && dir=vanilla/structures/${seed}_${CX}_${CZ}
   if [ -n "$multi" ]; then
     dir=vanilla/structures/${seed}_$multi
-    if [ "$multi" = mesa ]; then eval "list=\$MESA_$seed"; else eval "list=\$TEMPLES_$seed"; fi
+    case $multi in
+      mesa) eval "list=\$MESA_$seed" ;;
+      shblocks) eval "list=\$SHBLOCKS_$seed" ;;
+      *) eval "list=\$TEMPLES_$seed" ;;
+    esac
     gen=(tools/structure-sites.sh "$seed" "$multi" "$R" $list)
   else
     gen=(tools/structure-world.sh "$seed" "$R" "$CX" "$CZ")
@@ -73,6 +78,12 @@ for site in "${SITES[@]}"; do
       ./target/release/examples/structures compare "$dir/world/dimensions/minecraft/overworld/region" "$R" "$seed" 2>&1 \
       | grep "^BLOCKS" >> "$log"
   fi
+  # Strongholds: their own pass over the whole square (one stronghold per shblocks site).
+  if [ "$multi" = shblocks ]; then
+    CENTER=$CX,$CZ ONLY=stronghold BLOCK_TYPES=stronghold MAX_CHUNKS=1000 \
+      ./target/release/examples/structures compare "$dir/world/dimensions/minecraft/overworld/region" "$R" "$seed" 2>&1 \
+      | grep "^BLOCKS" >> "$log"
+  fi
   grep -E "^(STRUCT|BLOCKS)" "$log" | sed "s/^/  [$seed $CX,$CZ] /"
   verdict=$(python3 - "$log" "$KNOWN" <<'EOF'
 import sys, re
@@ -88,14 +99,15 @@ for l in open(log):
     if not m: continue
     t, v, b, mt, a, n = m.group(1), *map(int, m.groups()[1:])
     sv += v; sm += mt; sx += b - mt
-    jig = t.startswith(("village", "pillager", "trail", "trial", "ancient"))
+    jig = t.startswith(("village", "pillager", "trail", "trial", "ancient", "stronghold", "monument", "mansion"))
     if jig: pm += a; pn += n
     ok = mt == v and b == mt and (not jig or a == n)
     if not ok:
         bad.append(t)
         if t not in kn: new.append(t)
 FLOOR = {"village": 98.5, "pillager": 98.5, "ancient": 95.0, "trial": 99.0, "igloo": 97.0, "swamp": 97.0,
-         "desert": 75.0, "jungle": 85.0, "mineshaft_mesa": 10.0, "mineshaft": 86.0}
+         "desert": 75.0, "jungle": 85.0, "mineshaft_mesa": 10.0, "mineshaft": 86.0,
+         "stronghold": 58.0}
 for l in open(log):
     m = re.match(r"BLOCKS (\S+)\s+([\d.]+)% of (\d+)", l)
     if not m or int(m.group(3)) < 200: continue

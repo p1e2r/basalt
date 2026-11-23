@@ -16,6 +16,7 @@ pub mod jigsaw;
 pub mod mineshaft;
 pub mod place;
 pub mod stronghold;
+mod stronghold_layout;
 pub mod template;
 pub mod temple;
 
