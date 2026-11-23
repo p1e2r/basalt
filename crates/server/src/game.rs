@@ -1,6 +1,7 @@
 //! Game thread: owns the world and all players; runs at 20 TPS.
 mod ai;
 mod arrow;
+mod breed;
 mod cmd;
 mod combat;
 mod container;

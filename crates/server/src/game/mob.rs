@@ -122,6 +122,8 @@ pub struct Mob {
     pub last_player_hit: Option<(i32, u64)>,
     pub ai: Ai,
     pub egg_timer: u32,
+    /// breeding: love ticks left, ticks spent near the partner, cooldown, who fed it, baby growth
+    pub love: u32, pub love_with: u32, pub breed_cooldown: u32, pub lover: Option<i32>, pub grow: i32,
     pub ambient_timer: i32,
     pub step_dist: f64,
     // what viewers last saw
@@ -138,7 +140,7 @@ pub fn angle(deg: f32) -> u8 { ((deg / 360.0 * 256.0).round() as i32 & 0xFF) as 
 impl Mob {
     pub fn new(eid: i32, kind: MobKind, pos: [f64; 3], yaw: f32) -> Mob {
         Mob { eid, uuid: Uuid::new_v4(), kind, pos, vel: [0.0; 3], yaw, pitch: 0.0, head_yaw: yaw, health: kind.stats().health, on_ground: false,
-            h_collision: false, in_water: false, baby: false, sheep_color: 0, sheared: false, no_ai: false, persistent: false, age: 0, hurt_cooldown: 0,
+            h_collision: false, in_water: false, baby: false, sheep_color: 0, sheared: false, no_ai: false, persistent: false, age: 0, hurt_cooldown: 0, love: 0, love_with: 0, breed_cooldown: 0, lover: None, grow: 0,
             fire_ticks: 0, fall_distance: 0.0, dead: None, last_player_hit: None, ai: Ai { swell_dir: -1, ..Default::default() },
             egg_timer: 6000, ambient_timer: 0, step_dist: 0.0, sent_pos: pos, sent_rot: (angle(yaw), 0, angle(yaw)), sent_fire: false, since_sync: 0 }
     }
@@ -210,7 +212,7 @@ impl Mob {
 
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::json!({ "kind": self.kind.name(), "uuid": self.uuid.to_string(), "pos": self.pos, "yaw": self.yaw, "health": self.health,
-            "baby": self.baby, "color": self.sheep_color, "sheared": self.sheared, "persistent": self.persistent, "no_ai": self.no_ai, "age": self.age })
+            "baby": self.baby, "color": self.sheep_color, "sheared": self.sheared, "persistent": self.persistent, "no_ai": self.no_ai, "age": self.age, "grow": self.grow, "breed_cooldown": self.breed_cooldown })
     }
     pub fn from_json(eid: i32, v: &serde_json::Value) -> Option<Mob> {
         let kind = MobKind::from_name(v["kind"].as_str()?)?;
@@ -220,6 +222,8 @@ impl Mob {
         if let Some(u) = v["uuid"].as_str().and_then(|u| Uuid::parse_str(u).ok()) { m.uuid = u; }
         m.health = v["health"].as_f64().map(|h| h as f32).unwrap_or(m.health).clamp(1.0, m.max_health());
         m.baby = v["baby"].as_bool().unwrap_or(false);
+        m.grow = v["grow"].as_i64().unwrap_or(0) as i32;
+        m.breed_cooldown = v["breed_cooldown"].as_u64().unwrap_or(0) as u32;
         m.sheep_color = v["color"].as_u64().unwrap_or(0) as u8 & 15;
         m.sheared = v["sheared"].as_bool().unwrap_or(false);
         m.persistent = v["persistent"].as_bool().unwrap_or(false);

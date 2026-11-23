@@ -378,6 +378,11 @@ impl Bot {
     pub fn attack(&self, eid: i32) {
         let mut w = Writer::with_id(sb::ATTACK); w.varint(eid); self.send(w); self.swing();
     }
+    /// Use (right-click) an entity with the main hand: interact = varint id, varint hand,
+    /// LpVec3 target offset (zero = one 0 byte), bool sneaking.
+    pub fn interact(&self, eid: i32) {
+        let mut w = Writer::with_id(sb::INTERACT); w.varint(eid).varint(0).u8(0).bool(false); self.send(w); self.swing();
+    }
     pub fn swing(&self) { let mut w = Writer::with_id(sb::SWING); w.varint(0); self.send(w); }
 
     /// Break a block like a client: start digging, wait the survival dig time for the held

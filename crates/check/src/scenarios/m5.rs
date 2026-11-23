@@ -294,3 +294,40 @@ fn difficulty_inner(ctx: &mut Ctx) -> Result<()> {
     ctx.metric("peaceful_summon_refused", s.starts_with("commands.summon.failed.peaceful") as u8 as f64, 0.0);
     Ok(())
 }
+
+/// Breeding: two adult cows fed wheat (survival: one wheat each) enter love mode (entity event
+/// 18), find each other and make a baby cow; the breeder gets 1-7 XP as orbs.
+pub fn breeding(ctx: &mut Ctx) -> Result<()> {
+    let (bot, o) = roofed(ctx, 10, 5)?;
+    bot.cmd_reply("xp set @s 0 points")?;
+    give(&bot, "wheat", 2)?;
+    hold(&bot, "wheat")?;
+    let me = bot.st().pos();
+    let (a, _) = summon(&bot, "cow", [me[0] + 2.0, Y as f64, me[2]], "{}")?;
+    let (b, _) = summon(&bot, "cow", [me[0] + 2.0, Y as f64, me[2] + 1.5], "{}")?;
+    let t0 = Instant::now();
+    let xp0 = bot.st().xp_total;
+    for e in [a, b] {
+        let p = bot.st().entities.get(&e).map(|e| e.pos).unwrap_or(me);
+        bot.look_at([p[0], p[1] + 0.8, p[2]]);
+        bot.wait_ticks(2);
+        bot.interact(e);
+        bot.wait_ticks(3);
+    }
+    let wheat_left = bot.st().inv.iter().filter(|s| s.count > 0 && s.name() == "wheat").map(|s| s.count).sum::<i32>();
+    let love = bot.wait_until(Duration::from_secs(2), |s| s.entity_events.iter().filter(|ev| ev.2 == 18).count() >= 2);
+    let baby = bot.wait_until(Duration::from_secs(20), |s| s.entities.iter().any(|(id, e)| *id != a && *id != b && e.kind == "cow" && e.added >= t0));
+    let secs = t0.elapsed().as_secs_f32();
+    let p = bot.st().pos();
+    bot.tp([p[0] + 2.0, p[1], p[2] + 0.75])?;
+    bot.wait_until(Duration::from_secs(5), |s| s.xp_total > xp0);
+    let gained = bot.st().xp_total - xp0;
+    ctx.note(format!("wheat left {wheat_left}, love events {love}, baby {baby} after {secs:.1}s, xp {gained}"));
+    ctx.check(baby, "no baby cow");
+    ctx.metric("wheat_used", (2 - wheat_left) as f64, 0.0);
+    ctx.metric("love_events", love as u8 as f64, 0.0);
+    ctx.metric("baby", baby as u8 as f64, 0.0);
+    ctx.metric("xp_1_to_7", (1..=7).contains(&gained) as u8 as f64, 0.0);
+    let _ = o;
+    Ok(())
+}

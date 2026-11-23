@@ -135,6 +135,8 @@ impl Game {
         if !m.alive() { return; }
         let item = reg::ITEM.get(held.item as usize).copied().unwrap_or("air");
         if held.count <= 0 { return; }
+        if self.try_feed(eid, target, slot) { return; }
+        let Some(m) = self.mobs.get(&target) else { return };
         match (m.kind, item) {
             (MobKind::Sheep, "shears") if !m.sheared && !m.baby => {
                 let (pos, col) = (m.pos, m.sheep_color);
