@@ -775,6 +775,16 @@ impl Game {
                     _ => reply(self, "Usage: /summon <type> [x y z]".into()),
                 }
             }
+            "mobs" => {
+                // debug: mobs near the sender — kind, eid, position, health, AI state
+                let r: f64 = args.get(1).and_then(|a| a.parse().ok()).unwrap_or(32.0);
+                let me = self.players[&eid].pos;
+                let mut v: Vec<&mob::Mob> = self.mobs.values().filter(|m| (m.pos[0] - me[0]).powi(2) + (m.pos[2] - me[2]).powi(2) <= r * r).collect();
+                v.sort_by_key(|m| m.eid);
+                let lines: Vec<String> = v.iter().map(|m| format!("{} #{} {:.1} {:.1} {:.1} hp {:.1}{}{}{}{}", m.kind.name(), m.eid, m.pos[0], m.pos[1], m.pos[2], m.health,
+                    m.ai.target.map(|t| format!(" target {t}")).unwrap_or_default(), if m.fire_ticks > 0 { " burning" } else { "" }, if m.baby { " baby" } else { "" }, if m.dead.is_some() { " dying" } else { "" })).collect();
+                reply(self, format!("{} mobs within {r}: {}", lines.len(), lines.join("; ")));
+            }
             "kill" if args.get(1).map(|a| a.starts_with("@e")).unwrap_or(false) => {
                 let filter = args[1].split("type=").nth(1).map(|t| t.trim_end_matches(']').trim_start_matches("minecraft:").to_string());
                 let ids: Vec<i32> = self.mobs.values().filter(|m| m.alive() && filter.as_deref().map(|f| f == m.kind.name()).unwrap_or(true)).map(|m| m.eid).collect();
@@ -788,7 +798,7 @@ impl Game {
             "list" => { let names: Vec<_> = self.players.values().map(|p| p.name.clone()).collect(); reply(self, format!("{} online: {}", names.len(), names.join(", "))); }
             "spawn" => { let s = self.spawn; let p = self.players.get_mut(&eid).unwrap(); p.pos = s; Self::teleport(p); self.stream_chunks(eid); }
             "save" | "save-all" => { self.save_level(); reply(self, "Saved the world".into()); }
-            "help" | "" => reply(self, "Commands: /gamemode /tp /give /time /say /list /spawn /save /effect /enchant /setblock /fill /kill [@e[type=..]] /summon".into()),
+            "help" | "" => reply(self, "Commands: /gamemode /tp /give /time /say /list /spawn /save /effect /enchant /setblock /fill /kill [@e[type=..]] /summon /mobs".into()),
             other => reply(self, format!("Unknown command: {other}")),
         }
     }
@@ -923,7 +933,7 @@ fn block_for_item(item: &str) -> Option<u32> {
 
 /// Minimal brigadier tree: each command is a literal with an optional greedy string argument.
 fn commands_packet() -> Writer {
-    let cmds = ["gamemode", "gm", "tp", "teleport", "give", "time", "say", "list", "spawn", "save", "save-all", "help", "effect", "enchant", "setblock", "fill", "kill", "summon"];
+    let cmds = ["gamemode", "gm", "tp", "teleport", "give", "time", "say", "list", "spawn", "save", "save-all", "help", "effect", "enchant", "setblock", "fill", "kill", "summon", "mobs"];
     let greedy = registry_id(reg::COMMAND_ARGUMENT_TYPE, "brigadier:string").unwrap_or(5);
     let n = 1 + cmds.len() * 2;
     let mut w = Writer::with_id(cb::COMMANDS); w.varint(n as i32);
