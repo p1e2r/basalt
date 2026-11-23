@@ -6,6 +6,7 @@ pub mod env;
 pub mod m1;
 pub mod m3;
 pub mod m4;
+pub mod m5;
 pub mod util;
 
 macro_rules! spec {
@@ -37,6 +38,12 @@ pub static ALL: &[Spec] = &[
     spec!("M4", "m4_exhaustion", m4::exhaustion, Flat, Both, true, "sprinting ~40 blocks costs ~1 saturation"),
     spec!("M4", "m4_eating", m4::eating, Flat, Both, true, "hunger effect drains food; eating bread restores 5 food"),
     spec!("M4", "m4_death_respawn", m4::death_respawn, Flat, Both, true, "/kill drops inventory as items; respawn restores health"),
+    spec!("M5", "m5_zombie_hit", m5::zombie_hit, Flat, Both, true, "zombie melee 2.5 on easy; 2.025 with an iron chestplate"),
+    spec!("M5", "m5_skeleton_arrow", m5::skeleton_arrow, Flat, Both, true, "skeleton arrow from 10 blocks ~3 damage"),
+    spec!("M5", "m5_creeper", m5::creeper, Flat, Both, true, "creeper Fuse:0 at 4.36 blocks: 5.157 damage, knockback 0.274"),
+    spec!("M5", "m5_cow_loot", m5::cow_loot, Flat, Both, true, "cow killed by player: 1-3 beef, 0-2 leather"),
+    spec!("M5", "m5_sheep_loot", m5::sheep_loot, Flat, Both, true, "red sheep drops 1 red wool; sheared sheep none"),
+    spec!("M5", "m5_undead_sun", m5::undead_sun, Flat, Both, true, "zombie under noon sky catches fire and takes damage"),
     spec!("Env", "env_drowning", env::drowning, Flat, Both, true, "air drains 1/tick, 2 damage at -20, then every 20 ticks; refill +4/tick"),
     spec!("Env", "env_respiration", env::respiration, Flat, Both, true, "Respiration III slows air loss"),
     spec!("Env", "env_water_breathing", env::water_breathing, Flat, Both, true, "Water Breathing keeps air at 300"),

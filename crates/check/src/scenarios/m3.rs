@@ -19,7 +19,7 @@ pub fn worldgen_columns(ctx: &mut Ctx) -> Result<()> {
     let bot = ctx.bot()?;
     ctx.gamemode(&bot, "creative")?; bot.fly(true);
     // chunks near the vanilla spawn that vanilla has generated (arenas sit at y >= 200, skipped)
-    let sites = [(5, 5), (-6, 3), (2, -7), (-4, -4), (8, -2)];
+    let sites = [(2, 2), (-3, 1), (1, -3), (-2, -2), (3, -1)];
     let (mut same, mut total, mut chunks) = (0u64, 0u64, 0);
     for (cx, cz) in sites {
         if !vw.load(cx, cz).unwrap_or(false) { ctx.note(format!("vanilla chunk {cx},{cz} not generated; skipped")); continue; }

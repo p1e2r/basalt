@@ -170,7 +170,8 @@ pub fn creative_break_place(ctx: &mut Ctx) -> Result<()> {
     ctx.check(bot.wait_until(Duration::from_secs(3), |s| s.world.name(t[0], t[1], t[2]) == "air"), "creative break not seen");
     ctx.check(ctx.block_is(&bot, t, "air")?, "server still has the block");
     bot.wait_ticks(10);
-    ctx.check(bot.st().items_near(bot.st().pos(), 6.0).is_empty(), "creative break dropped an item");
+    let near = { let s = bot.st(); s.items_near(s.pos(), 6.0).len() };
+    ctx.check(near == 0, "creative break dropped an item");
     Ok(())
 }
 
@@ -237,7 +238,8 @@ pub fn persistence(ctx: &mut Ctx) -> Result<()> {
     bot.wait_chunks(1, Duration::from_secs(10))?;
     let p = bot.st().pos();
     ctx.check((0..3).all(|i| (p[i] - pos[i]).abs() < 0.1), format!("position after restart {p:?}, was {pos:?}"));
-    ctx.check(bot.st().count("diamond") == 5, format!("diamonds after restart: {}", bot.st().count("diamond")));
+    let dia = bot.st().count("diamond");
+    ctx.check(dia == 5, format!("diamonds after restart: {dia}"));
     let dmg = bot.st().inv.iter().find(|s| s.name() == "wooden_pickaxe").map(|s| s.damage);
     ctx.check(dmg == Some(1), format!("pickaxe damage after restart {dmg:?}"));
     ctx.check(ctx.block_is(&bot, b, "oak_log[axis=x]")?, format!("placed log after restart: {}", crate::query::basalt_block(&bot, b)?));

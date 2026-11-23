@@ -44,7 +44,15 @@ pub struct Entity {
     pub item: Option<Stack>,
     pub on_ground: bool,
     pub added: Instant,
+    /// Shared flags (index 0: 0x01 burning) and living health (index 9) when sent.
+    pub flags: u8,
+    pub health: Option<f32>,
+    pub meta: HashMap<u8, Meta>,
 }
+
+/// An explode packet: centre, radius, affected block count, knockback sent to us.
+#[derive(Clone, Debug)]
+pub struct Explosion { pub at: Instant, pub pos: [f64; 3], pub radius: f32, pub blocks: i32, pub knockback: Option<[f64; 3]> }
 
 /// One logged entity-related packet (for tracking-cadence checks).
 #[derive(Clone, Debug)]
@@ -93,6 +101,9 @@ pub struct State {
     pub damage: Vec<(Instant, String)>,
     pub health_log: Vec<(Instant, f32)>,
     pub taken: Vec<(i32, i32, i32)>,
+    pub explosions: Vec<Explosion>,
+    /// entity events (eid, status) e.g. 3 = death
+    pub entity_events: Vec<(Instant, i32, u8)>,
     pub registries: HashMap<String, Vec<String>>,
     pub block_updates: u32,
     out: UnboundedSender<Vec<u8>>,
@@ -187,7 +198,7 @@ impl Bot {
             spawned: false, loaded_sent: false, dead: false, death_msg: None, health: 20.0, food: 20, saturation: 5.0, air: 300, ticks_frozen: 0, flags: 0,
             effects: HashMap::new(), inv: vec![Stack::default(); 46], cursor: Stack::default(), held: 0, state_id: 0, screen: None, container: Vec::new(),
             chat: Vec::new(), entities: HashMap::new(), players: HashMap::new(), world: World::default(), teleports: Vec::new(), plog: Vec::new(),
-            counts: HashMap::new(), ticks: 0, disconnected: None, damage: Vec::new(), health_log: Vec::new(), taken: Vec::new(), registries: HashMap::new(), block_updates: 0,
+            counts: HashMap::new(), ticks: 0, disconnected: None, damage: Vec::new(), health_log: Vec::new(), taken: Vec::new(), explosions: Vec::new(), entity_events: Vec::new(), registries: HashMap::new(), block_updates: 0,
             out: otx, last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input: 0, seq: 0,
         }));
         let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -268,7 +279,7 @@ impl Bot {
     /// Run setup commands in order, waiting for each reply.
     pub fn cmds(&self, cmds: &[String]) -> Result<()> { for c in cmds { self.cmd_reply(c)?; } Ok(()) }
 
-    pub fn chat_since(&self, mark: usize) -> Vec<Text> { self.st().chat[mark.min(self.st().chat.len())..].iter().map(|l| l.text.clone()).collect() }
+    pub fn chat_since(&self, mark: usize) -> Vec<Text> { let s = self.st(); s.chat[mark.min(s.chat.len())..].iter().map(|l| l.text.clone()).collect() }
     pub fn chat_mark(&self) -> usize { self.st().chat.len() }
 
     // ------------------------------------------------------------ movement
@@ -276,7 +287,7 @@ impl Bot {
     /// Teleport via /tp and wait until the server's position packet arrives and the chunk is loaded.
     pub fn tp(&self, p: [f64; 3]) -> Result<()> {
         let n = self.st().teleports.len();
-        self.cmd(&format!("tp @s {} {} {}", p[0], p[1], p[2]));
+        self.cmd(&format!("tp @s {:.4} {:.4} {:.4}", p[0], p[1], p[2])); // explicit decimals: vanilla centres integer x/z
         let ok = self.wait_until(Duration::from_secs(10), |s| s.teleports[n.min(s.teleports.len())..].iter().any(|(_, q)| (0..3).all(|i| (q[i] - p[i]).abs() < 0.01)));
         if !ok { bail!("teleport to {p:?} not confirmed"); }
         self.wait_chunks(1, Duration::from_secs(30))?;
@@ -342,6 +353,10 @@ impl Bot {
         let seq = self.next_seq();
         let mut w = Writer::with_id(sb::PLAYER_ACTION); w.varint(status).position(b[0], b[1], b[2]).u8(face).varint(seq); self.send(w);
     }
+    /// Attack (left-click) an entity.
+    pub fn attack(&self, eid: i32) {
+        let mut w = Writer::with_id(sb::ATTACK); w.varint(eid); self.send(w); self.swing();
+    }
     pub fn swing(&self) { let mut w = Writer::with_id(sb::SWING); w.varint(0); self.send(w); }
 
     /// Break a block like a client: start digging, wait the survival dig time for the held
@@ -386,7 +401,11 @@ impl Bot {
     }
     pub fn release_use(&self) { self.player_action(5, [0, 0, 0], 0); }
     /// Q (one item) or ctrl-Q (whole stack).
-    pub fn drop_held(&self, whole: bool) { self.player_action(if whole { 3 } else { 4 }, [0, 0, 0], 0); }
+    pub fn drop_held(&self, whole: bool) {
+        // like the real client, predict the removal (vanilla doesn't resend the slot)
+        { let mut s = self.st(); let i = 36 + s.held as usize; let n = if whole { s.inv[i].count } else { 1 }; s.inv[i].count -= n; if s.inv[i].count <= 0 { s.inv[i] = Stack::default(); } }
+        self.player_action(if whole { 3 } else { 4 }, [0, 0, 0], 0);
+    }
     pub fn set_held(&self, slot: u8) { self.st().held = slot; let mut w = Writer::with_id(sb::SET_CARRIED_ITEM); w.i16(slot as i16); self.send(w); }
     pub fn respawn(&self) { let mut w = Writer::with_id(sb::CLIENT_COMMAND); w.varint(0); self.send(w); }
 
@@ -584,7 +603,15 @@ fn handle(s: &mut State, id: i32, data: &[u8]) -> Result<()> {
                     match (i, m) { (0, Meta::Byte(b)) => s.flags = b, (1, Meta::Int(v)) => s.air = v, (7, Meta::Int(v)) => s.ticks_frozen = v, _ => {} }
                 }
             } else if let Some(ent) = s.entities.get_mut(&e) {
-                for (i, m) in meta { if let (8, Meta::Item(st)) = (i, m) { if ent.kind == "item" { ent.item = Some(st); } } }
+                for (i, m) in meta {
+                    match (i, &m) {
+                        (8, Meta::Item(st)) if ent.kind == "item" => ent.item = Some(st.clone()),
+                        (0, Meta::Byte(b)) => ent.flags = *b,
+                        (9, Meta::Float(h)) => ent.health = Some(*h),
+                        _ => {}
+                    }
+                    ent.meta.insert(i, m);
+                }
             }
             s.plog.push(PacketLog { at: Instant::now(), id, eid: e });
         }
@@ -617,7 +644,7 @@ fn handle(s: &mut State, id: i32, data: &[u8]) -> Result<()> {
             let pos = [r.f64()?, r.f64()?, r.f64()?];
             let vel = proto::read_lpvec3(&mut r)?;
             let kind = basalt_data::registries::ENTITY_TYPE.get(kind as usize).copied().unwrap_or("?");
-            s.entities.insert(e, Entity { uuid, kind, pos, spawn_pos: pos, spawn_vel: vel, vel, item: None, on_ground: false, added: Instant::now() });
+            s.entities.insert(e, Entity { uuid, kind, pos, spawn_pos: pos, spawn_vel: vel, vel, item: None, on_ground: false, added: Instant::now(), flags: 0, health: None, meta: HashMap::new() });
             s.plog.push(PacketLog { at: Instant::now(), id, eid: e });
         }
         cb::MOVE_ENTITY_POS | cb::MOVE_ENTITY_POS_ROT => {
@@ -642,6 +669,13 @@ fn handle(s: &mut State, id: i32, data: &[u8]) -> Result<()> {
             let n = r.varint()?;
             for _ in 0..n { let e = r.varint()?; s.entities.remove(&e); s.plog.push(PacketLog { at: Instant::now(), id, eid: e }); }
         }
+        cb::EXPLODE => {
+            let pos = [r.f64()?, r.f64()?, r.f64()?]; let radius = r.f32()?; let blocks = r.i32()?;
+            let knockback = if r.bool()? { Some([r.f64()?, r.f64()?, r.f64()?]) } else { None };
+            if let Some(k) = knockback { for i in 0..3 { s.body.vel[i] += k[i]; } }
+            s.explosions.push(Explosion { at: Instant::now(), pos, radius, blocks, knockback });
+        }
+        cb::ENTITY_EVENT => { let e = r.i32()?; let st = r.u8()?; s.entity_events.push((Instant::now(), e, st)); }
         cb::TAKE_ITEM_ENTITY => { let item = r.varint()?; let by = r.varint()?; let n = r.varint()?; s.taken.push((item, by, n)); }
         _ => {}
     }

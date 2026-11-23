@@ -134,7 +134,7 @@ impl Ctx {
     pub fn stand(&mut self, bot: &Bot, x: i32, z: i32, gm: &str) -> Result<()> {
         bot.tp([x as f64 + 0.5, (ARENA_Y + 1) as f64, z as f64 + 0.5])?;
         self.gamemode(bot, gm)?;
-        if gm != "creative" { bot.fly(false); }
+        bot.fly(false);
         if !bot.wait_on_ground(Duration::from_secs(5)) { bail!("bot not standing at {x},{z}: {:?}", bot.st().body.pos); }
         Ok(())
     }
@@ -165,9 +165,9 @@ pub fn run_spec(spec: &'static Spec, idx: usize, kind: Kind, opts: &RunOpts) -> 
                 let _ = std::fs::remove_dir_all(&world_dir);
                 let wd = world_dir.to_string_lossy().to_string();
                 let args: Vec<&str> = match spec.world {
-                    WorldKind::Flat => vec!["--memory", "--flat", "--view", "6"],
-                    WorldKind::Generated => vec!["--memory", "--seed", "12345", "--view", "6"],
-                    WorldKind::FlatOnDisk => vec!["--world", &wd, "--flat", "--view", "6"],
+                    WorldKind::Flat => vec!["--memory", "--flat", "--view", "6", "--no-spawning"],
+                    WorldKind::Generated => vec!["--memory", "--seed", "12345", "--view", "6", "--no-spawning"],
+                    WorldKind::FlatOnDisk => vec!["--world", &wd, "--flat", "--view", "6", "--no-spawning"],
                 };
                 ctx.basalt = Some(BasaltServer::start(&args, &log)?);
             }

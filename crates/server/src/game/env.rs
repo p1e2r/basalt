@@ -179,8 +179,11 @@ impl Game {
             if turtle && !eyes_wet { self.add_effect(eid, "water_breathing", 0, 200, false); }
 
             // --- air supply
+            let hunger = effect_id("hunger").and_then(|id| self.players[&eid].effects.get(&id).map(|e| e.0));
             let p = self.players.get_mut(&eid).unwrap();
             p.prev_tick_pos = p.pos;
+            // Hunger effect: 0.005 exhaustion per tick per level
+            if let Some(amp) = hunger { if vulnerable { p.exhaustion += 0.005 * (amp as f32 + 1.0); } }
             let old_air = p.air;
             let mut drown = false;
             if eyes_wet && vulnerable {

@@ -10,6 +10,8 @@ const Y: i32 = ARENA_Y + 1;
 fn setup(ctx: &mut Ctx) -> Result<(Bot, [i32; 3])> {
     let bot = ctx.bot()?;
     let o = ctx.arena(&bot, 12, 12, 6)?;
+    // roofed: rain on the vanilla server would put out fires and refill nothing else
+    fill(&bot, [o[0] - 1, Y + 5, o[2] - 1], [o[0] + 12, Y + 5, o[2] + 12], "stone")?;
     ctx.stand(&bot, o[0] + 1, o[2] + 1, "survival")?;
     Ok((bot, o))
 }
@@ -18,6 +20,8 @@ fn setup(ctx: &mut Ctx) -> Result<(Bot, [i32; 3])> {
 fn column(bot: &Bot, x: i32, z: i32, h: i32, block: &str) -> Result<()> {
     fill(bot, [x - 1, Y, z - 1], [x + 1, Y + h, z + 1], "stone")?;
     fill(bot, [x, Y, z], [x, Y + h - 1, z], block)?;
+    // open above (a block over the head would make the player crawl)
+    fill(bot, [x, Y + h, z], [x, Y + h + 1, z], "air")?;
     Ok(())
 }
 
@@ -34,7 +38,8 @@ pub fn drowning(ctx: &mut Ctx) -> Result<()> {
     let air100 = { bot.wait_ticks(100); bot.st().air };
     ctx.approx("air after 100 ticks submerged", air100 as f64, 200.0, 6.0);
     ctx.metric("air_after_100", air100 as f64, 4.0);
-    let first = ticks_until(&bot, 300, |s| s.damage.iter().any(|d| d.0 >= t0 && d.1 == "drown"))?;
+    ticks_until(&bot, 300, |s| s.damage.iter().any(|d| d.0 >= t0 && d.1 == "drown"))?;
+    let first = hit_ticks(&bot, t0, "drown")[0];
     ctx.approx("ticks until first drowning damage", first, 320.0, 8.0);
     ctx.metric("first_drown_tick", first.round(), 6.0);
     bot.wait_until(Duration::from_secs(3), |s| s.damage.iter().filter(|d| d.0 >= t0 && d.1 == "drown").count() >= 2);
@@ -152,7 +157,8 @@ pub fn suffocation(ctx: &mut Ctx) -> Result<()> {
     let (bot, o) = setup(ctx)?;
     let (x, z) = (o[0] + 6, o[2] + 6);
     enter(&bot, x, z)?;
-    setblock(&bot, [x, Y + 1, z], "stone")?;
+    // fully enclosed (feet and head): 1 damage per 10 ticks
+    fill(&bot, [x, Y, z], [x, Y + 1, z], "sand")?;
     let t0 = Instant::now();
     bot.wait_ticks(40);
     let dm = hits(&bot, t0, "in_wall");
@@ -160,6 +166,15 @@ pub fn suffocation(ctx: &mut Ctx) -> Result<()> {
     ctx.check(dm.iter().all(|d| *d == 1.0), format!("in_wall damage {dm:?}"));
     ctx.metric("in_wall_hits_40t", dm.len() as f64, 1.0);
     ctx.metric("in_wall_damage", dm.first().copied().unwrap_or(0.0) as f64, 0.0);
+    // only the head block solid: vanilla switches the player to the crawling pose (eyes at 0.4) — no damage
+    let (x2, z2) = (o[0] + 3, o[2] + 8);
+    enter(&bot, x2, z2)?;
+    setblock(&bot, [x2, Y + 1, z2], "stone")?;
+    let t1 = Instant::now();
+    bot.wait_ticks(40);
+    let crawl = hits(&bot, t1, "in_wall");
+    ctx.note(format!("head-only block: {} in_wall hits", crawl.len()));
+    ctx.metric("head_only_in_wall_hits_40t", crawl.len() as f64, 0.0);
     Ok(())
 }
 
@@ -169,9 +184,11 @@ pub fn lava(ctx: &mut Ctx) -> Result<()> {
     column(&bot, x, z, 1, "lava")?;
     column(&bot, o[0] + 2, o[2] + 9, 2, "water")?;
     let t0 = enter(&bot, x, z)?;
-    bot.wait_ticks(25);
-    let burning = bot.st().flags & 1 != 0;
+    let flags = sample(&bot, 25, |s| s.flags);
+    let burning = flags.iter().any(|f| f & 1 != 0);
     let dm = hits(&bot, t0, "lava");
+    let fire_ticks = ctx.state(&bot)?.fire_ticks;
+    ctx.note(format!("server fire ticks after 25+ ticks in lava: {fire_ticks}; flags seen {:?}", { let mut f = flags.clone(); f.dedup(); f }));
     let kinds = damage_kinds(&bot, t0);
     ctx.check(burning, "not burning in lava");
     ctx.check(dm.len() >= 2 && dm.len() <= 4, format!("lava hits in 25 ticks: {dm:?}"));
@@ -193,12 +210,15 @@ pub fn fire(ctx: &mut Ctx) -> Result<()> {
     let (x, z) = (o[0] + 6, o[2] + 6);
     setblock(&bot, [x, Y, z], "fire")?;
     let t0 = enter(&bot, x, z)?;
-    bot.wait_ticks(20);
-    let burning = bot.st().flags & 1 != 0;
+    // vanilla players start at Fire -20: standing in fire ignites after ~20 ticks
+    let flags = sample(&bot, 40, |s| s.flags);
+    let burning = flags.iter().any(|f| f & 1 != 0);
+    let ignite_tick = flags.iter().position(|f| f & 1 != 0).map(|t| t as f64).unwrap_or(-1.0);
+    ctx.metric("ignite_tick_in_fire", (ignite_tick / 5.0).round() * 5.0, 10.0);
     let infire = hits(&bot, t0, "in_fire");
     ctx.check(burning, "fire block didn't set the player on fire");
     ctx.check(!infire.is_empty(), "no in_fire damage");
-    ctx.metric("in_fire_hits_20t", infire.len() as f64, 1.0);
+    ctx.metric("in_fire_hits_40t", infire.len() as f64, 1.0);
     ctx.metric("in_fire_damage", infire.first().copied().unwrap_or(0.0) as f64, 0.0);
     let t1 = Instant::now();
     bot.tp([o[0] as f64 + 2.5, Y as f64, o[2] as f64 + 2.5])?;

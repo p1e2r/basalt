@@ -48,6 +48,16 @@ pub fn flatten(t: &Tag) -> String {
 }
 
 pub fn text_of(t: &Tag) -> Text {
+    // errors arrive wrapped ({"text": "", "extra": [{"translate": ...}], "color": "red"}): use the first translation
+    if let Tag::Compound(c) = t {
+        if c.get("translate").is_none() {
+            if let Some(Tag::List(ex)) = c.get("extra") {
+                if let Some(inner) = ex.iter().find(|e| matches!(e, Tag::Compound(x) if x.contains_key("translate"))) {
+                    let mut x = text_of(inner); x.plain = flatten(t); return x;
+                }
+            }
+        }
+    }
     let (key, args) = match t {
         Tag::Compound(c) => match c.get("translate") {
             Some(Tag::String(k)) => (Some(k.clone()), match c.get("with") { Some(Tag::List(l)) => l.iter().map(flatten).collect(), _ => Vec::new() }),

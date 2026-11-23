@@ -110,14 +110,20 @@ impl Vanilla {
         loop {
             let s = self.log_since(off);
             if expect.iter().any(|e| s.contains(e)) { return Ok(s); }
-            if t0.elapsed() > Duration::from_secs(10) { bail!("vanilla console: no reply to `{cmd}`"); }
+            if t0.elapsed() > Duration::from_secs(4) { bail!("vanilla console: no reply to `{cmd}`"); }
             std::thread::sleep(Duration::from_millis(50));
         }
     }
 
     /// Fresh player: op the name and delete its saved data (it must be offline).
     pub fn prepare_player(&self, name: &str) -> Result<()> {
-        self.console(&format!("op {name}"), &["a server operator", "already is an operator"])?;
+        // other tools share this console: match our own reply, retry if the line got lost
+        let made = format!("Made {name} a server operator");
+        let mut ok = false;
+        for _ in 0..3 {
+            if self.console(&format!("op {name}"), &[&made, "already is an operator"]).is_ok() { ok = true; break; }
+        }
+        if !ok { anyhow::bail!("could not op {name} via the vanilla console"); }
         let uuid = crate::bot::offline_uuid(name);
         for ext in ["dat", "dat_old"] {
             let _ = std::fs::remove_file(self.dir.join("world/players/data").join(format!("{uuid}.{ext}")));

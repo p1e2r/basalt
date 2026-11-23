@@ -31,8 +31,16 @@ fn main() {
             "--probe" => {
                 // debug: join ADDR as NAME and print what the bot knows each second
                 let addr = it.next().unwrap_or("127.0.0.1:25566".into()); let name = it.next().unwrap_or("Probe".into());
+                if addr.ends_with(":25566") { if let Err(e) = basalt_check::server::Vanilla::new(std::path::Path::new(&vdir), &addr).prepare_player(&name) { eprintln!("prepare: {e:#}"); } }
                 let bot = basalt_check::bot::Bot::connect(&addr, &name).unwrap_or_else(|e| { eprintln!("{e:#}"); std::process::exit(1) });
-                for c in it.by_ref() { for l in bot.cmd_reply(&c).unwrap_or_default() { println!("reply: {:?} {:?} {:?}", l.plain, l.key, l.args); } }
+                for c in it.by_ref() {
+                    if let Some(t) = c.strip_prefix("wait:") { bot.wait_ticks(t.parse().unwrap_or(20)); continue; }
+                    if let Some(a) = c.strip_prefix("action:") { let v: Vec<i32> = a.split(',').filter_map(|x| x.parse().ok()).collect(); bot.player_action(v[0], [v.get(1).copied().unwrap_or(0), v.get(2).copied().unwrap_or(0), v.get(3).copied().unwrap_or(0)], 0); continue; }
+                    if let Some(a) = c.strip_prefix("held:") { bot.set_held(a.parse().unwrap_or(0)); continue; }
+                    if let Some(a) = c.strip_prefix("tp:") { let v: Vec<f64> = a.split(',').filter_map(|x| x.parse().ok()).collect(); if let Err(e) = bot.tp([v[0], v[1], v[2]]) { println!("tp: {e}"); } continue; }
+                    for l in bot.cmd_reply(&c).unwrap_or_default() { println!("reply: {:?} {:?} {:?}", l.plain, l.key, l.args); }
+                }
+                { let s = bot.st(); let t0 = s.damage.first().map(|d| d.0).unwrap_or_else(std::time::Instant::now); println!("teleports {:?} items {:?}", s.teleports.iter().map(|t| t.1).collect::<Vec<_>>(), s.entities.values().filter(|e| e.kind == "item").map(|e| (e.pos, e.item.as_ref().map(|i| (i.name(), i.count)))).collect::<Vec<_>>()); println!("damage {:?} flags {} inv {:?}", s.damage.iter().map(|d| (d.1.clone(), (d.0 - t0).as_millis() / 50)).collect::<Vec<_>>(), s.flags, s.inv.iter().enumerate().filter(|(_, i)| i.count > 0).map(|(k, i)| (k, i.name(), i.count)).collect::<Vec<_>>()); }
                 for _ in 0..5 { { let s = bot.st(); println!("pos {:?} vel {:?} ground {} hp {} food {} air {} chunks {} ticks {} gm {}", s.body.pos, s.body.vel, s.body.on_ground, s.health, s.food, s.air, s.world.chunks.len(), s.ticks, s.gamemode); } std::thread::sleep(std::time::Duration::from_secs(1)); }
                 return;
             }
@@ -83,7 +91,7 @@ fn main() {
         }
     }
     // table grouped by milestone
-    let order = ["M1", "M2", "M3", "M4", "Env", "Items", "Diff"];
+    let order = ["M1", "M2", "M3", "M4", "M5", "Env", "Items", "Diff"];
     let mut groups: BTreeMap<usize, Vec<&Outcome>> = BTreeMap::new();
     for o in &results { groups.entry(order.iter().position(|g| *g == o.group).unwrap_or(99)).or_default().push(o); }
     println!("\n{:6} {:30} {:8} {:7} {:>7}  details", "group", "scenario", "server", "result", "time");

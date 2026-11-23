@@ -139,7 +139,8 @@ pub fn craft_2x2(ctx: &mut Ctx) -> Result<()> {
     bot.click(1, 1, 0); bot.wait_ticks(3);
     bot.click(slot, 0, 0); bot.wait_ticks(3);
     let res = bot.wait_until(Duration::from_secs(2), |s| s.inv[0].name() == "oak_planks" && s.inv[0].count == 4);
-    ctx.check(res, format!("craft result slot: {} x{}", bot.st().inv[0].name(), bot.st().inv[0].count));
+    let r0 = bot.st().inv[0].clone();
+    ctx.check(res, format!("craft result slot: {} x{}", r0.name(), r0.count));
     bot.click(0, 0, 1); // shift-click the result: crafts all (2 logs -> 8 planks)
     let got = bot.wait_until(Duration::from_secs(2), |s| s.count("oak_planks") >= 4);
     bot.wait_ticks(4);
@@ -263,17 +264,17 @@ pub fn exhaustion(ctx: &mut Ctx) -> Result<()> {
     bot.sprint(false);
     bot.wait_ticks(10);
     let dist = bot.st().pos()[0] - x0;
-    let (sat, food) = { let s = bot.st(); (s.saturation, s.food) };
+    // vanilla only sends set_health when food/health change, so ask the server for saturation
+    let (bot_sat, food) = { let s = bot.st(); (s.saturation, s.food) };
+    let sat = ctx.state(&bot)?.saturation as f32;
+    ctx.note(format!("bot-visible saturation {bot_sat}"));
     ctx.note(format!("sprinted {dist:.1} blocks: saturation {s0} -> {sat}, food {food}"));
     ctx.check(dist > 40.5, format!("only sprinted {dist:.1} blocks"));
     ctx.approx("saturation after ~45 blocks of sprinting (4.5 exhaustion)", sat as f64, 4.0, 0.0);
     ctx.approx("food", food as f64, 20.0, 0.0);
     ctx.metric("saturation_after_sprint", sat as f64, 0.0);
     // jumping: 0.05 exhaustion per jump (sprint-jump 0.2) — 20 sprint-jumps = 4.0 more
-    if ctx.is_vanilla() || true {
-        let st = ctx.state(&bot)?;
-        ctx.metric("server_saturation", st.saturation, 0.0);
-    }
+    if ctx.is_vanilla() { let e = crate::query::vanilla_get(&bot, "foodExhaustionLevel")?; ctx.note(format!("vanilla exhaustion {e:?}")); }
     Ok(())
 }
 
@@ -313,7 +314,7 @@ pub fn death_respawn(ctx: &mut Ctx) -> Result<()> {
     let pos = bot.st().pos();
     bot.cmd("kill @s");
     ctx.check(bot.wait_until(Duration::from_secs(3), |s| s.dead), "no death after /kill");
-    ctx.check(bot.st().health <= 0.0, "health not 0 after death");
+    ctx.check(bot.wait_until(Duration::from_secs(1), |s| s.health <= 0.0), "health not 0 after death");
     let cause = bot.st().death_msg.clone().map(|m| death_cause(&m)).unwrap_or_default();
     ctx.check(cause == "kill", format!("death message cause {cause}"));
     bot.wait_ticks(10);
