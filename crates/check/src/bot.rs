@@ -565,6 +565,13 @@ fn handle(s: &mut State, id: i32, data: &[u8]) -> Result<()> {
                 s.block_updates += 1;
             }
         }
+        cb::PLAYER_ROTATION => {
+            // yaw, relative?, pitch, relative? (vanilla 26.2 /rotate, measured with basalt-probe 2026-11-24)
+            let (yaw, ry, pitch, rp) = (r.f32()?, r.bool()?, r.f32()?, r.bool()?);
+            let b = &mut s.body;
+            b.yaw = if ry { b.yaw + yaw } else { yaw };
+            b.pitch = if rp { b.pitch + pitch } else { pitch };
+        }
         cb::PLAYER_POSITION => {
             let tid = r.varint()?;
             let pos = [r.f64()?, r.f64()?, r.f64()?]; let vel = [r.f64()?, r.f64()?, r.f64()?];

@@ -63,6 +63,8 @@ struct Player {
     gamemode: u8,
     /// /spawnpoint: block position and dimension index
     spawn_point: Option<([i32; 3], usize)>,
+    /// /tag
+    tags: std::collections::BTreeSet<String>,
     flying: bool,
     inv: [Stack; 46],
     held: usize,
@@ -497,7 +499,7 @@ impl Game {
         }
         let mut p = Player {
             eid, uuid, name: name.clone(), out, view: (view as i32).min(self.sh.cfg.view_distance as i32), pos: self.spawn, yaw: 0.0, pitch: 0.0, on_ground: false,
-            gamemode: self.default_gamemode, spawn_point: None, flying: false, inv: [Stack::default(); 46], held: 0, loaded: HashSet::new(), center: (i32::MAX, i32::MAX),
+            gamemode: self.default_gamemode, spawn_point: None, tags: Default::default(), flying: false, inv: [Stack::default(); 46], held: 0, loaded: HashSet::new(), center: (i32::MAX, i32::MAX),
             pending_tp: None, next_tp: 0, batch_outstanding: false, chunks_per_tick: 9.0, keepalive: None, last_keepalive: Instant::now(),
             last_sent_pos: ([0.0; 3], 0.0, 0.0), sneaking: false,
             dead: false, health: 20.0, food: 20, saturation: 5.0, exhaustion: 0.0, fall_start: None, hurt_cooldown: 0, regen_timer: 0,

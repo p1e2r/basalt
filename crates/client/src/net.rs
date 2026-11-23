@@ -36,6 +36,8 @@ pub enum Event {
     Unload { cx: i32, cz: i32 },
     Block { x: i32, y: i32, z: i32, state: u16 },
     Teleport { id: i32, pos: [f64; 3], vel: [f64; 3], yaw: f32, pitch: f32, flags: i32 },
+    /// player_rotation (/rotate): yaw, yaw relative, pitch, pitch relative
+    Rotate { yaw: f32, ry: bool, pitch: f32, rp: bool },
     Chat(String),
     Health { hp: f32, food: i32 },
     GameMode(u8),
@@ -277,6 +279,7 @@ fn handle_play(id: i32, data: &[u8], tx: &Sender<Event>, players: &mut HashMap<U
             let yaw = r.f32()?; let pitch = r.f32()?; let flags = r.i32()?;
             Event::Teleport { id, pos, vel, yaw, pitch, flags }
         }
+        cb::PLAYER_ROTATION => Event::Rotate { yaw: r.f32()?, ry: r.bool()?, pitch: r.f32()?, rp: r.bool()? },
         cb::SYSTEM_CHAT => { let t = r.nbt()?; let overlay = r.bool().unwrap_or(false); if overlay { Event::Title { kind: 2, text: crate::lang::styled(&t) } } else { Event::Chat(crate::lang::styled(&t)) } }
         cb::SET_TITLE_TEXT => Event::Title { kind: 0, text: crate::lang::styled(&r.nbt()?) },
         cb::SET_SUBTITLE_TEXT => Event::Title { kind: 1, text: crate::lang::styled(&r.nbt()?) },

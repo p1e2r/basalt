@@ -419,6 +419,11 @@ impl Game {
                 for sy in 0..self.world.nsections() as i32 { self.gpu.sections.remove(&(cx, sy, cz)); self.dirty.remove(&(cx, sy, cz)); }
             }
             Event::Block { x, y, z, state } => { if self.world.set(x, y, z, state) { self.mark_block(x, y, z); } }
+            Event::Rotate { yaw, ry, pitch, rp } => {
+                let p = &mut self.player;
+                p.yaw = if ry { p.yaw + yaw } else { yaw };
+                p.pitch = (if rp { p.pitch + pitch } else { pitch }).clamp(-90.0, 90.0);
+            }
             Event::Teleport { id, pos, vel, yaw, pitch, flags } => {
                 let p = &mut self.player;
                 for i in 0..3 { p.pos[i] = if flags >> i & 1 == 1 { p.pos[i] + pos[i] } else { pos[i] }; }

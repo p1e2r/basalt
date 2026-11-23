@@ -567,6 +567,153 @@ impl Game {
                 );
             }
             path if path.starts_with("time") => self.cmd_time(eid, p, path)?,
+            path if path.starts_with("particle name") => self.cmd_particle(eid, p)?,
+            path if path.starts_with("stopsound targets") => {
+                let ids = Self::players_of(&self.resolve(eid, p.arg("targets"), true)?);
+                let src = p.path.get(2).filter(|s| s.as_str() != "sound").cloned();
+                let sound = p.has("sound").then(|| p.arg("sound").to_string());
+                // stop_sound (measured on vanilla 26.2 with basalt-probe, 2026-11-24): flags (1 = source,
+                // 2 = sound), varint source category, identifier
+                const SOURCES: [&str; 11] = [
+                    "master", "music", "record", "weather", "block", "hostile", "neutral",
+                    "player", "ambient", "voice", "ui",
+                ];
+                let src_id = src
+                    .as_deref()
+                    .and_then(|c| SOURCES.iter().position(|x| *x == c));
+                let mut w = Writer::with_id(cb::STOP_SOUND);
+                w.u8(src_id.is_some() as u8 | (sound.is_some() as u8) << 1);
+                if let Some(i) = src_id {
+                    w.varint(i as i32);
+                }
+                if let Some(snd) = &sound {
+                    w.str(&cmdparse::read_id(snd, 0)?.0);
+                }
+                for e in &ids {
+                    if let Some(pl) = self.players.get(e) {
+                        pl.send(Writer { buf: w.buf.clone() });
+                    }
+                }
+                let (key, args) = match (src.as_deref(), &sound) {
+                    (None | Some("*"), None) => {
+                        ("commands.stopsound.success.sourceless.any", vec![])
+                    }
+                    (None | Some("*"), Some(snd)) => (
+                        "commands.stopsound.success.sourceless.sound",
+                        vec![s(cmdparse::read_id(snd, 0)?.0)],
+                    ),
+                    (Some(c), None) => ("commands.stopsound.success.source.any", vec![s(c)]),
+                    (Some(c), Some(snd)) => (
+                        "commands.stopsound.success.source.sound",
+                        vec![s(cmdparse::read_id(snd, 0)?.0), s(c)],
+                    ),
+                };
+                self.ok(eid, key, args);
+            }
+            "tag targets add name" | "tag targets remove name" | "tag targets list" => {
+                let ids = Self::players_of(&self.resolve(eid, p.arg("targets"), false)?);
+                let op = p.path[2].as_str();
+                if op == "list" {
+                    let mut all: Vec<String> = ids
+                        .iter()
+                        .filter_map(|e| self.players.get(e))
+                        .flat_map(|pl| pl.tags.iter().cloned())
+                        .collect();
+                    all.sort();
+                    all.dedup();
+                    let list = s(all.join(", "));
+                    if ids.len() == 1 {
+                        let who = text::plain(&self.players[&ids[0]].name);
+                        let key = if all.is_empty() {
+                            "commands.tag.list.single.empty"
+                        } else {
+                            "commands.tag.list.single.success"
+                        };
+                        let args = if all.is_empty() {
+                            vec![who]
+                        } else {
+                            vec![who, s(all.len()), list]
+                        };
+                        self.ok(eid, key, args);
+                    } else {
+                        let key = if all.is_empty() {
+                            "commands.tag.list.multiple.empty"
+                        } else {
+                            "commands.tag.list.multiple.success"
+                        };
+                        let args = if all.is_empty() {
+                            vec![s(ids.len())]
+                        } else {
+                            vec![s(ids.len()), s(all.len()), list]
+                        };
+                        self.ok(eid, key, args);
+                    }
+                } else {
+                    let name = p.arg("name").to_string();
+                    let mut changed = Vec::new();
+                    for e in &ids {
+                        if let Some(pl) = self.players.get_mut(e) {
+                            let did = if op == "add" {
+                                pl.tags.len() < 1024 && pl.tags.insert(name.clone())
+                            } else {
+                                pl.tags.remove(&name)
+                            };
+                            if did {
+                                changed.push(*e);
+                            }
+                        }
+                    }
+                    if changed.is_empty() {
+                        return Err(err(&format!("commands.tag.{op}.failed"), &[]));
+                    }
+                    let who = if changed.len() == 1 {
+                        text::plain(&self.players[&changed[0]].name)
+                    } else {
+                        s(changed.len())
+                    };
+                    self.ok(
+                        eid,
+                        &plural(&format!("commands.tag.{op}.success"), changed.len()),
+                        vec![s(&name), who],
+                    );
+                }
+            }
+            "rotate target rotation" | "rotate target facing facingLocation" => {
+                let t = self.resolve(eid, p.arg("target"), false)?;
+                let Some(Target::Player(e)) = t.first().copied() else {
+                    return Err(err("argument.entity.notfound.entity", &[]));
+                };
+                let (cy, cp, pos) = {
+                    let pl = &self.players[&e];
+                    (pl.yaw as f64, pl.pitch as f64, pl.pos)
+                };
+                let (yaw, pitch) = if p.has("rotation") {
+                    let (r, _) = cmdparse::parse_pos(p.arg("rotation"), 0, PosKind::Rot)?;
+                    let y = if r[0].rel { cy + r[0].v } else { r[0].v };
+                    let pi = if r[1].rel { cp + r[1].v } else { r[1].v };
+                    (
+                        ((y + 180.0).rem_euclid(360.0) - 180.0) as f32,
+                        pi.clamp(-90.0, 90.0) as f32,
+                    )
+                } else {
+                    let (c, _) = cmdparse::parse_pos(p.arg("facingLocation"), 0, PosKind::Vec3)?;
+                    let f = self.pos_from(eid, &c, true);
+                    let eye = [pos[0], pos[1] + 1.62, pos[2]];
+                    let (y, pi) = look_angles(eye, f);
+                    (y.unwrap_or(cy as f32), pi.unwrap_or(cp as f32))
+                };
+                let name = text::plain(&self.players[&e].name);
+                if let Some(pl) = self.players.get_mut(&e) {
+                    pl.yaw = yaw;
+                    pl.pitch = pitch;
+                    // vanilla sends player_rotation (f32 yaw, bool relative, f32 pitch, bool relative),
+                    // not a teleport (measured with basalt-probe, 2026-11-24)
+                    let mut w = Writer::with_id(cb::PLAYER_ROTATION);
+                    w.f32(yaw).bool(false).f32(pitch).bool(false);
+                    pl.send(w);
+                }
+                self.ok(eid, "commands.rotate.success", vec![name]);
+            }
             "seed" => {
                 let seed = tr("chat.square_brackets", vec![s(self.sh.cfg.seed)]);
                 self.ok(eid, "commands.seed.success", vec![seed]);
@@ -1425,6 +1572,105 @@ impl Game {
     }
 
     // ------------------------------------------------------------ /fill
+
+    /// `/particle <name> [<pos> [<delta> <speed> <count> [force|normal [<viewers>]]]]`. Particles
+    /// with options (dust, block, item, ...) are accepted but not sent (their encodings aren't
+    /// measured yet). level_particles layout measured on vanilla 26.2 with basalt-probe
+    /// (2026-11-24): bool force, bool always-visible, f64 x y z, f32 dx dy dz, f32 speed, i32 count,
+    /// varint particle type.
+    fn cmd_particle(&mut self, eid: i32, p: &Parsed) -> R<()> {
+        let (name, _) = cmdparse::read_id(p.arg("name"), 0)?;
+        let types = self.sh.registries.entries("minecraft:particle_type");
+        let id = types.iter().position(|t| *t == name);
+        let id = match id {
+            Some(i) => i as i32,
+            None => {
+                basalt_data::registry_id(reg::PARTICLE_TYPE, name.trim_start_matches("minecraft:"))
+                    .ok_or_else(|| err("particle.notFound", &[&name]))?
+            }
+        };
+        let pos = if p.has("pos") {
+            let (c, _) = cmdparse::parse_pos(p.arg("pos"), 0, PosKind::Vec3)?;
+            self.pos_from(eid, &c, true)
+        } else {
+            self.players
+                .get(&eid)
+                .map(|pl| pl.pos)
+                .unwrap_or(self.spawn)
+        };
+        let delta = if p.has("delta") {
+            let (c, _) = cmdparse::parse_pos(p.arg("delta"), 0, PosKind::Vec3)?;
+            [c[0].v as f32, c[1].v as f32, c[2].v as f32]
+        } else {
+            [0.0; 3]
+        };
+        let speed: f32 = if p.has("speed") {
+            p.arg("speed").parse().unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        let count: i32 = if p.has("count") {
+            p.arg("count").parse().unwrap_or(0)
+        } else {
+            0
+        };
+        let force = p.path.iter().any(|n| n == "force");
+        let viewers = if p.has("viewers") {
+            Self::players_of(&self.resolve(eid, p.arg("viewers"), true)?)
+        } else {
+            self.players.keys().copied().collect()
+        };
+        const WITH_OPTIONS: &[&str] = &[
+            "dust",
+            "dust_color_transition",
+            "block",
+            "block_marker",
+            "falling_dust",
+            "dust_pillar",
+            "block_crumble",
+            "item",
+            "entity_effect",
+            "vibration",
+            "sculk_charge",
+            "shriek",
+            "trail",
+            "tinted_leaves",
+            "dragon_breath",
+            "effect",
+            "instant_effect",
+            "flash",
+        ];
+        let short = name.trim_start_matches("minecraft:");
+        let mut sent = 0;
+        if !WITH_OPTIONS.contains(&short) {
+            for v in viewers {
+                let Some(pl) = self.players.get(&v) else {
+                    continue;
+                };
+                let d2: f64 = (0..3).map(|i| (pl.pos[i] - pos[i]).powi(2)).sum();
+                if d2 > if force { 512.0 * 512.0 } else { 32.0 * 32.0 } {
+                    continue;
+                }
+                let mut w = Writer::with_id(cb::LEVEL_PARTICLES);
+                w.bool(force)
+                    .bool(false)
+                    .f64(pos[0])
+                    .f64(pos[1])
+                    .f64(pos[2])
+                    .f32(delta[0])
+                    .f32(delta[1])
+                    .f32(delta[2])
+                    .f32(speed)
+                    .i32(count)
+                    .varint(id);
+                pl.send(w);
+                sent += 1;
+            }
+        }
+        let _ = sent;
+        self.ok(eid, "commands.particle.success", vec![s(&name)]);
+        Ok(())
+    }
 
     /// `/clone begin end destination [replace|masked [force|move|normal]]` (also `filtered <filter>`).
     /// Vanilla counts every block copied (identical blocks included); overlap needs `force`.

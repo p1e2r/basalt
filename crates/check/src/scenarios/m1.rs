@@ -507,6 +507,50 @@ pub fn world_commands(ctx: &mut Ctx) -> Result<()> {
     Ok(())
 }
 
+/// /particle /stopsound /tag /rotate: replies and the packets / effects they cause, vs vanilla.
+pub fn misc_commands(ctx: &mut Ctx) -> Result<()> {
+    let bot = ctx.bot()?;
+    let name = bot.name.clone();
+    ctx.gamemode(&bot, "creative")?;
+    let mut log = Vec::new();
+    let mut is = |ctx: &mut Ctx, label: &str, c: &str, want: &str| -> Result<Vec<String>> {
+        let r = bot.cmd_reply(c)?;
+        let (k, a) = r.first().map(|l| (l.key.clone().unwrap_or_default(), l.args.iter().map(|a| a.replace(&name, "BOT")).collect::<Vec<_>>())).unwrap_or_default();
+        log.push(format!("{label}: {k} {a:?}"));
+        ctx.metric(&format!("{label}_ok"), (k == want) as u8 as f64, 0.0);
+        Ok(a)
+    };
+    let count = |bot: &Bot, k: &str| bot.st().counts.get(k).copied().unwrap_or(0);
+    let p0 = count(&bot, "level_particles");
+    is(ctx, "particle", "particle minecraft:flame ~ ~1 ~ 0.5 0.25 0.125 0.01 7 force @s", "commands.particle.success")?;
+    is(ctx, "particle_short", "particle minecraft:heart", "commands.particle.success")?;
+    bot.wait_ticks(5);
+    ctx.metric("particle_packets", (count(&bot, "level_particles") - p0) as f64, 0.0);
+    let s0 = count(&bot, "stop_sound");
+    is(ctx, "stopsound_all", "stopsound @s", "commands.stopsound.success.sourceless.any")?;
+    is(ctx, "stopsound_src", "stopsound @s master", "commands.stopsound.success.source.any")?;
+    is(ctx, "stopsound_sound", "stopsound @s master minecraft:entity.cow.ambient", "commands.stopsound.success.source.sound")?;
+    bot.wait_ticks(5);
+    ctx.metric("stopsound_packets", (count(&bot, "stop_sound") - s0) as f64, 0.0);
+    is(ctx, "tag_add", "tag @s add t1", "commands.tag.add.success.single")?;
+    is(ctx, "tag_add_again", "tag @s add t1", "commands.tag.add.failed")?;
+    let a = is(ctx, "tag_list", "tag @s list", "commands.tag.list.single.success")?;
+    ctx.metric("tag_list_count", a.get(1).and_then(|v| v.parse().ok()).unwrap_or(-1.0), 0.0);
+    is(ctx, "tag_remove", "tag @s remove t1", "commands.tag.remove.success.single")?;
+    is(ctx, "tag_remove_again", "tag @s remove t1", "commands.tag.remove.failed")?;
+    is(ctx, "tag_list_empty", "tag @s list", "commands.tag.list.single.empty")?;
+    is(ctx, "rotate", "rotate @s 90 10", "commands.rotate.success")?;
+    bot.wait_ticks(5);
+    let (y, p) = {
+        let st = bot.st();
+        (st.body.yaw, st.body.pitch)
+    };
+    ctx.metric("rotate_yaw", y as f64, 0.01);
+    ctx.metric("rotate_pitch", p as f64, 0.01);
+    ctx.note(log.join(" | "));
+    Ok(())
+}
+
 /// Admin files (Basalt only: changes ops/bans): without ops.json everyone is an operator; /op
 /// creates ops.json and from then on a non-op is refused op commands; ops survive a restart;
 /// /ban kicks and refuses the player, /pardon lets them back in; /whitelist on refuses others.
