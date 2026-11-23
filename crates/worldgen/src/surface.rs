@@ -3,7 +3,7 @@
 
 use crate::density::load_noise_params;
 use crate::noise::{lerp2, NormalNoise, PerlinSimplexNoise};
-use crate::random::{lcg_next, JavaRandom, PosFactory, Rng};
+use crate::random::{lcg_next, JavaRandom, Positional, Rng};
 use crate::state_from_json;
 use anyhow::{anyhow, bail, Result};
 use basalt_data::BlockState;
@@ -26,11 +26,11 @@ impl Anchor {
         if let Some(a) = v.get("below_top").and_then(|x| x.as_i64()) { return Ok(Anchor::BelowTop(a as i32)); }
         bail!("bad vertical anchor {v}")
     }
-    fn resolve(&self) -> i32 {
+    fn resolve(&self, min_y: i32, height: i32) -> i32 {
         match *self {
             Anchor::Absolute(y) => y,
-            Anchor::AboveBottom(n) => crate::MIN_Y + n,
-            Anchor::BelowTop(n) => crate::MIN_Y + crate::HEIGHT - 1 - n,
+            Anchor::AboveBottom(n) => min_y + n,
+            Anchor::BelowTop(n) => min_y + height - 1 - n,
         }
     }
 }
@@ -39,7 +39,7 @@ impl Anchor {
 pub enum Cond {
     Biome(Vec<bool>),
     Noise { noise: usize, min: f64, max: f64, is_3d: bool },
-    VerticalGradient { rand: PosFactory, true_at: Anchor, false_at: Anchor },
+    VerticalGradient { rand: Positional, true_at: Anchor, false_at: Anchor },
     YAbove { anchor: Anchor, mult: i32, add_stone: bool },
     Water { offset: i32, mult: i32, add_stone: bool },
     Temperature,
@@ -78,7 +78,10 @@ pub struct SurfaceSystem {
     surface: usize,
     secondary: usize,
     band_offset: usize,
-    root: PosFactory,
+    root: Positional,
+    /// Generation range of the noise settings (anchors resolve against it).
+    pub min_y: i32,
+    pub height: i32,
     bands: Vec<u16>,
     climate: Vec<BiomeClimate>,
     temperature_noise: PerlinSimplexNoise,
@@ -124,7 +127,7 @@ struct Ctx<'a> {
 }
 
 impl SurfaceSystem {
-    pub fn load(wg: &Path, settings: &Value, root: PosFactory, biome_names: &[String], default_block: u16, sea_level: i32, zoom_seed: i64) -> Result<SurfaceSystem> {
+    pub fn load(wg: &Path, settings: &Value, root: Positional, biome_names: &[String], default_block: u16, sea_level: i32, zoom_seed: i64) -> Result<SurfaceSystem> {
         let mut climate = Vec::new();
         for n in biome_names {
             let p = wg.join("biome").join(format!("{n}.json"));
@@ -148,6 +151,8 @@ impl SurfaceSystem {
             secondary: 0,
             band_offset: 0,
             root,
+            min_y: settings["noise"]["min_y"].as_i64().unwrap_or(crate::MIN_Y as i64) as i32,
+            height: settings["noise"]["height"].as_i64().unwrap_or(crate::HEIGHT as i64) as i32,
             bands: Vec::new(),
             climate,
             temperature_noise: PerlinSimplexNoise::new(&mut JavaRandom::new(1234), &[0]),
@@ -176,7 +181,7 @@ impl SurfaceSystem {
         let name = if name.contains(':') { name.to_string() } else { format!("minecraft:{name}") };
         if let Some(i) = self.noise_names.iter().position(|n| *n == name) { return Ok(i); }
         let p = load_noise_params(&self.wg_root, &name)?;
-        self.noises.push(NormalNoise::new(&mut self.root.from_hash(&name), &p));
+        self.noises.push(NormalNoise::new_any(&mut self.root.from_hash(&name), &p));
         self.noise_names.push(name);
         Ok(self.noises.len() - 1)
     }
@@ -315,8 +320,8 @@ impl SurfaceSystem {
                 v >= *min && v <= *max
             }
             Cond::VerticalGradient { rand, true_at, false_at } => {
-                let i = true_at.resolve();
-                let j = false_at.resolve();
+                let i = true_at.resolve(self.min_y, self.height);
+                let j = false_at.resolve(self.min_y, self.height);
                 let k = ctx.y;
                 if k <= i { return true; }
                 if k >= j { return false; }
@@ -324,7 +329,7 @@ impl SurfaceSystem {
                 (rand.at(ctx.x, k, ctx.z).next_float() as f64) < d
             }
             Cond::YAbove { anchor, mult, add_stone } => {
-                ctx.y + if *add_stone { ctx.stone_above } else { 0 } >= anchor.resolve() + ctx.surface_depth * mult
+                ctx.y + if *add_stone { ctx.stone_above } else { 0 } >= anchor.resolve(self.min_y, self.height) + ctx.surface_depth * mult
             }
             Cond::Water { offset, mult, add_stone } => {
                 ctx.water_height == i32::MIN

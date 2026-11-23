@@ -59,10 +59,10 @@ impl FloatProvider {
     }
 }
 
-fn anchor(v: &Value) -> Result<i32> {
+fn anchor(v: &Value, min_y: i32, height: i32) -> Result<i32> {
     if let Some(a) = v.get("absolute").and_then(|x| x.as_i64()) { return Ok(a as i32); }
-    if let Some(a) = v.get("above_bottom").and_then(|x| x.as_i64()) { return Ok(crate::MIN_Y + a as i32); }
-    if let Some(a) = v.get("below_top").and_then(|x| x.as_i64()) { return Ok(crate::MIN_Y + crate::HEIGHT - 1 - a as i32); }
+    if let Some(a) = v.get("above_bottom").and_then(|x| x.as_i64()) { return Ok(min_y + a as i32); }
+    if let Some(a) = v.get("below_top").and_then(|x| x.as_i64()) { return Ok(min_y + height - 1 - a as i32); }
     bail!("bad anchor {v}")
 }
 
@@ -73,9 +73,9 @@ pub struct UniformHeight {
 }
 
 impl UniformHeight {
-    fn parse(v: &Value) -> Result<Self> {
+    fn parse(v: &Value, min_y: i32, height: i32) -> Result<Self> {
         match v["type"].as_str().unwrap_or("").trim_start_matches("minecraft:") {
-            "uniform" => Ok(UniformHeight { min: anchor(&v["min_inclusive"])?, max: anchor(&v["max_inclusive"])? }),
+            "uniform" => Ok(UniformHeight { min: anchor(&v["min_inclusive"], min_y, height)?, max: anchor(&v["max_inclusive"], min_y, height)? }),
             t => bail!("unsupported height provider {t}"),
         }
     }
@@ -87,7 +87,9 @@ impl UniformHeight {
 
 #[derive(Debug)]
 pub enum Kind {
-    Cave { horizontal: FloatProvider, vertical: FloatProvider, floor: FloatProvider },
+    /// `nether`: the nether_cave carver (cave bound 10, thicker tunnels, y scale 5, lava up to
+    /// min_y + 31, cave_air elsewhere, no aquifer).
+    Cave { horizontal: FloatProvider, vertical: FloatProvider, floor: FloatProvider, nether: bool },
     Canyon {
         vertical_rotation: FloatProvider,
         distance_factor: FloatProvider,
@@ -105,6 +107,8 @@ pub struct Carver {
     y: UniformHeight,
     y_scale: FloatProvider,
     lava_level: i32,
+    min_y: i32,
+    height: i32,
     replaceable: Vec<bool>,
     kind: Kind,
 }
@@ -122,7 +126,8 @@ pub fn resolve_tag(tags: &Path, name: &str, out: &mut HashSet<String>) -> Result
 }
 
 impl Carver {
-    pub fn load(data: &Path, name: &str) -> Result<Carver> {
+    /// `min_y`, `height`: generation range of the noise settings (anchors resolve against it).
+    pub fn load(data: &Path, name: &str, min_y: i32, height: i32) -> Result<Carver> {
         let n = name.trim_start_matches("minecraft:");
         let p = data.join("worldgen/configured_carver").join(format!("{n}.json"));
         let v: Value = serde_json::from_str(&std::fs::read_to_string(&p)?)?;
@@ -132,7 +137,8 @@ impl Carver {
         if rep.starts_with('#') { resolve_tag(&data.join("tags/block"), rep, &mut set)?; } else { set.insert(rep.trim_start_matches("minecraft:").to_string()); }
         let replaceable = (0..basalt_data::blocks::STATE_COUNT as u32).map(|i| set.contains(BlockState(i).name())).collect();
         let kind = match v["type"].as_str().unwrap_or("").trim_start_matches("minecraft:") {
-            "cave" => Kind::Cave {
+            t @ ("cave" | "nether_cave") => Kind::Cave {
+                nether: t == "nether_cave",
                 horizontal: FloatProvider::parse(&c["horizontal_radius_multiplier"])?,
                 vertical: FloatProvider::parse(&c["vertical_radius_multiplier"])?,
                 floor: FloatProvider::parse(&c["floor_level"])?,
@@ -153,9 +159,9 @@ impl Carver {
         };
         Ok(Carver {
             probability: c["probability"].as_f64().unwrap_or(0.0) as f32,
-            y: UniformHeight::parse(&c["y"])?,
+            y: UniformHeight::parse(&c["y"], min_y, height)?,
             y_scale: FloatProvider::parse(&c["yScale"])?,
-            lava_level: anchor(&c["lava_level"])?,
+            lava_level: anchor(&c["lava_level"], min_y, height)?, min_y, height,
             replaceable,
             kind,
         })
@@ -182,6 +188,7 @@ pub struct CarveCtx<'a> {
     pub mycelium: u16,
     pub dirt: u16,
     pub lava: u16,
+    pub cave_air: u16,
 }
 
 #[derive(Clone, Copy)]
@@ -208,8 +215,8 @@ impl CarveCtx<'_> {
         let j = self.cz * 16;
         let k = ((x - hr).floor() as i32 - i - 1).max(0);
         let l = ((x + hr).floor() as i32 - i).min(15);
-        let m = ((y - vr).floor() as i32 - 1).max(crate::MIN_Y + 1);
-        let o = ((y + vr).floor() as i32 + 1).min(crate::MIN_Y + crate::HEIGHT - 1 - 7);
+        let m = ((y - vr).floor() as i32 - 1).max(c.min_y + 1);
+        let o = ((y + vr).floor() as i32 + 1).min(c.min_y + c.height - 1 - 7);
         let p = ((z - hr).floor() as i32 - j - 1).max(0);
         let q = ((z + hr).floor() as i32 - j).min(15);
         for r in k..=l {
@@ -240,6 +247,10 @@ impl CarveCtx<'_> {
         let st = t.get(lx, y, lz);
         if st == self.grass || st == self.mycelium { *surface = true; }
         if !c.replaceable[st as usize] { return; }
+        if let Kind::Cave { nether: true, .. } = c.kind {
+            t.set(lx, y, lz, if y <= c.min_y + 31 { self.lava } else { self.cave_air });
+            return;
+        }
         let wx = self.cx * 16 + lx;
         let wz = self.cz * 16 + lz;
         let ns = if y <= c.lava_level { Some(self.lava) } else { t.carve_state(wx, y, wz) };
@@ -263,8 +274,8 @@ impl CarveCtx<'_> {
     pub fn carve(&mut self, c: &Carver, t: &mut dyn CarveTarget, r: &mut JavaRandom, sx: i32, sz: i32) {
         let range = (4 * 2 - 1) * 16;
         match &c.kind {
-            Kind::Cave { horizontal, vertical, floor } => {
-                let bound = r.next_int_bounded(15) + 1;
+            Kind::Cave { horizontal, vertical, floor, nether } => {
+                let bound = r.next_int_bounded(if *nether { 10 } else { 15 }) + 1;
                 let b2 = r.next_int_bounded(bound) + 1;
                 let n = r.next_int_bounded(b2);
                 for _ in 0..n {
@@ -287,10 +298,10 @@ impl CarveCtx<'_> {
                     for _ in 0..m {
                         let yaw = r.next_float() * (std::f64::consts::PI * 2.0) as f32;
                         let pitch = (r.next_float() - 0.5) / 4.0;
-                        let thick = cave_thickness(r);
+                        let thick = if *nether { (r.next_float() * 2.0 + r.next_float()) * 2.0 } else { cave_thickness(r) };
                         let count = range - r.next_int_bounded(range / 4);
                         let seed = r.next_long();
-                        self.tunnel(c, t, seed, x, y, z, hm, vm, thick, yaw, pitch, 0, count, 1.0, skip);
+                        self.tunnel(c, t, seed, x, y, z, hm, vm, thick, yaw, pitch, 0, count, if *nether { 5.0 } else { 1.0 }, skip);
                     }
                 }
             }

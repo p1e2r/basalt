@@ -16,14 +16,22 @@
 use anyhow::{bail, Context, Result};
 use basalt_data::BlockState;
 use basalt_nbt::Tag;
-use basalt_worldgen::{GeneratedChunk, Generator, MIN_Y};
+use basalt_worldgen::{Dimension, GeneratedChunk, Generator};
+use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
+
+// Dimension layout of the compared world (set from the region path: `.../the_nether/region` = nether).
+static DIM_MIN_Y: AtomicI32 = AtomicI32::new(-64);
+static DIM_SECTIONS: AtomicUsize = AtomicUsize::new(24);
+#[allow(non_snake_case)]
+fn MIN_Y() -> i32 { DIM_MIN_Y.load(Ordering::Relaxed) }
+fn nsec() -> usize { DIM_SECTIONS.load(Ordering::Relaxed) }
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
 use std::time::Instant;
 
 struct VanillaChunk {
-    blocks: Vec<u16>, // 98304, index (y-MIN_Y)<<8 | z<<4 | x
+    blocks: Vec<u16>, // 98304, index (y-MIN_Y())<<8 | z<<4 | x
     biomes: Vec<String>, // 24*64
     /// The chunk references or starts a structure.
     structure: bool,
@@ -68,13 +76,13 @@ fn read_chunk(dir: &Path, cx: i32, cz: i32) -> Result<Option<VanillaChunk>> {
     let Some(root) = read_nbt(dir, cx, cz)? else { return Ok(None) };
     let status = root.get("Status").and_then(|s| s.as_str()).unwrap_or("");
     if status != "minecraft:full" { return Ok(None); }
-    let mut blocks = vec![0u16; 98304];
-    let mut biomes = vec![String::new(); 24 * 64];
+    let mut blocks = vec![0u16; nsec() * 4096];
+    let mut biomes = vec![String::new(); nsec() * 64];
     let sections = root.get("sections").and_then(|s| s.as_list()).context("sections")?;
     for s in sections {
         let sy = s.get("Y").and_then(|y| y.as_i64()).context("Y")? as i32;
-        let si = sy - MIN_Y / 16;
-        if !(0..24).contains(&si) { continue; }
+        let si = sy - MIN_Y() / 16;
+        if !(0..nsec() as i32).contains(&si) { continue; }
         let base = si as usize * 4096;
         if let Some(bs) = s.get("block_states") {
             let pal: Vec<u16> = bs.get("palette").and_then(|p| p.as_list()).context("palette")?.iter().map(|e| {
@@ -135,7 +143,9 @@ fn terrain(id: u16) -> bool {
         | "red_terracotta" | "light_gray_terracotta" | "water" | "lava" | "air" | "cave_air" | "granite" | "tuff" | "copper_ore"
         | "deepslate_iron_ore" | "raw_copper_block" | "raw_iron_block" | "diorite" | "andesite" | "coal_ore" | "deepslate_coal_ore"
         | "iron_ore" | "deepslate_copper_ore" | "gold_ore" | "deepslate_gold_ore" | "redstone_ore" | "deepslate_redstone_ore"
-        | "diamond_ore" | "deepslate_diamond_ore" | "lapis_ore" | "deepslate_lapis_ore" | "emerald_ore" | "deepslate_emerald_ore")
+        | "diamond_ore" | "deepslate_diamond_ore" | "lapis_ore" | "deepslate_lapis_ore" | "emerald_ore" | "deepslate_emerald_ore"
+        // nether noise + surface rules
+        | "netherrack" | "soul_sand" | "soul_soil" | "basalt" | "blackstone" | "crimson_nylium" | "warped_nylium")
 }
 
 fn main() -> Result<()> {
@@ -146,7 +156,10 @@ fn main() -> Result<()> {
     let seed: i64 = a.get(5).map(|s| s.parse()).transpose()?.unwrap_or(12345);
     let detail = std::env::var("DETAIL").is_ok();
     let t = Instant::now();
-    let g = Generator::new(seed);
+    let dim = if dir.to_string_lossy().contains("the_nether") { Dimension::Nether } else { Dimension::Overworld };
+    DIM_MIN_Y.store(dim.min_y(), Ordering::Relaxed);
+    DIM_SECTIONS.store(dim.sections(), Ordering::Relaxed);
+    let g = Generator::new_dim(seed, dim);
     eprintln!("loaded generator in {:?}", t.elapsed());
     let biome_names = basalt_worldgen::biome_names(&basalt_worldgen::default_data_dir()).unwrap_or_default();
     let (mut shape_ok, mut shape_n, mut bio_ok, mut bio_n, mut blk_ok, mut blk_n) = (0u64, 0u64, 0u64, 0u64, 0u64, 0u64);
@@ -176,7 +189,7 @@ fn main() -> Result<()> {
             let cboxes: Vec<[i32; 6]> = boxes.iter().filter(|b| b[3] >= bx0 - 1 && b[0] <= bx0 + 16 && b[5] >= bz0 - 1 && b[2] <= bz0 + 16).copied().collect();
             if v.structure { struct_chunks += 1; }
             let (mut cok, mut cn) = (0, 0);
-            for si in 0..24 {
+            for si in 0..nsec() {
                 for i in 0..4096 {
                     let ours = c.blocks[si][i];
                     let theirs = v.blocks[si * 4096 + i];
@@ -191,7 +204,7 @@ fn main() -> Result<()> {
                         shape_n += 1; cn += 1;
                         if a == b { shape_ok += 1; cok += 1; } else { *confusion.entry((a, b)).or_default() += 1; }
                     }
-                    let (wx, wy, wz) = (cx * 16 + (i & 15) as i32, (si * 16 + (i >> 8)) as i32 + MIN_Y, cz * 16 + ((i >> 4) & 15) as i32);
+                    let (wx, wy, wz) = (cx * 16 + (i & 15) as i32, (si * 16 + (i >> 8)) as i32 + MIN_Y(), cz * 16 + ((i >> 4) & 15) as i32);
                     let in_structure = cboxes.iter().any(|b| wx >= b[0] - 1 && wx <= b[3] + 1 && wy >= b[1] - 1 && wy <= b[4] + 1 && wz >= b[2] - 1 && wz <= b[5] + 1);
                     if !in_structure {
                         feat_n += 1;
@@ -216,7 +229,7 @@ fn main() -> Result<()> {
                                 if BlockState(ours as u32).name() == pa && BlockState(theirs as u32).name() == pb && pair_count < 30 {
                                     pair_count += 1;
                                     let bi = &v.biomes[si * 64 + (((i >> 8) & 15) >> 2 << 4) + ((i >> 4 & 15) >> 2 << 2) + ((i & 15) >> 2)];
-                                    println!("  {pair} at {} {} {} ({bi})", cx * 16 + (i & 15) as i32, (si * 16 + (i >> 8)) as i32 + MIN_Y, cz * 16 + ((i >> 4) & 15) as i32);
+                                    println!("  {pair} at {} {} {} ({bi})", cx * 16 + (i & 15) as i32, (si * 16 + (i >> 8)) as i32 + MIN_Y(), cz * 16 + ((i >> 4) & 15) as i32);
                                 }
                             }
                             *blk_conf.entry((BlockState(ours as u32).name().to_string(), BlockState(theirs as u32).name().to_string())).or_default() += 1;
@@ -236,9 +249,9 @@ fn main() -> Result<()> {
                 let is_log = |id: u16| { let n = BlockState(id as u32).name(); n.ends_with("_log") || n.ends_with("mushroom_stem") };
                 for (label, get) in [("ours", &(|i: usize| c.blocks[i >> 12][i & 4095]) as &dyn Fn(usize) -> u16), ("vanilla", &|i: usize| v.blocks[i])] {
                     let mut out = Vec::new();
-                    for i in 4096..98304 {
+                    for i in 4096..nsec() * 4096 {
                         if is_log(get(i)) && !is_log(get(i - 256)) {
-                            out.push(format!("({},{},{} {})", cx * 16 + (i & 15) as i32, (i >> 8) as i32 + MIN_Y, cz * 16 + ((i >> 4) & 15) as i32, BlockState(get(i) as u32).name()));
+                            out.push(format!("({},{},{} {})", cx * 16 + (i & 15) as i32, (i >> 8) as i32 + MIN_Y(), cz * 16 + ((i >> 4) & 15) as i32, BlockState(get(i) as u32).name()));
                         }
                     }
                     println!("{label} log bases: {}", out.join(" "));
@@ -259,7 +272,7 @@ fn main() -> Result<()> {
                             let mut l1 = String::new();
                             let mut l2 = String::new();
                             for x in 0..16usize {
-                                let i = (((y - MIN_Y) as usize) << 8) | (z << 4) | x;
+                                let i = (((y - MIN_Y()) as usize) << 8) | (z << 4) | x;
                                 l1.push(ch(c.blocks[i >> 12][i & 4095]));
                                 l2.push(ch(v.blocks[i]));
                             }
@@ -277,7 +290,7 @@ fn main() -> Result<()> {
                             match cat(id) { Cat::Air => '.', Cat::Fluid => '~', Cat::Solid => if terrain(id) { '#' } else { 'f' } }
                         }
                     };
-                    for yy in (0..384).rev() {
+                    for yy in (0..nsec() * 16).rev() {
                         let mut l1 = String::new();
                         let mut l2 = String::new();
                         for z in 0..16 {
@@ -285,7 +298,7 @@ fn main() -> Result<()> {
                             l1.push(ch(c.blocks[i >> 12][i & 4095]));
                             l2.push(ch(v.blocks[i]));
                         }
-                        if l1 != l2 || yy % 16 == 0 { println!("{:4} {l1}  {l2}", yy as i32 + MIN_Y); }
+                        if l1 != l2 || yy % 16 == 0 { println!("{:4} {l1}  {l2}", yy as i32 + MIN_Y()); }
                     }
                 }
             }

@@ -221,6 +221,26 @@ pub fn java_hash(s: &str) -> i32 {
 }
 
 impl NormalNoise {
+    /// `NormalNoise.create` over a random of either flavour (legacy: octaves seeded by
+    /// `String.hashCode("octave_N") ^ nextLong()`).
+    pub fn new_any(r: &mut crate::random::AnyRng, p: &NoiseParams) -> Self {
+        match r {
+            crate::random::AnyRng::X(x) => Self::new(x, p),
+            crate::random::AnyRng::J(j) => {
+                let first = PerlinNoise::new_legacy_positional(j, p.first_octave, &p.amplitudes);
+                let second = PerlinNoise::new_legacy_positional(j, p.first_octave, &p.amplitudes);
+                Self::from_parts(first, second, &p.amplitudes)
+            }
+        }
+    }
+
+    /// The 1.16 nether biome noise: both halves built with the legacy octave order.
+    pub fn new_legacy_nether_biome(r: &mut crate::random::JavaRandom, p: &NoiseParams) -> Self {
+        let first = PerlinNoise::new_legacy(r, p.first_octave, &p.amplitudes);
+        let second = PerlinNoise::new_legacy(r, p.first_octave, &p.amplitudes);
+        Self::from_parts(first, second, &p.amplitudes)
+    }
+
     /// Normal noise seeded the way block-state providers do (legacy random with a seed).
     pub fn new_seeded_legacy(seed: i64, p: &NoiseParams) -> Self {
         let mut r = crate::random::JavaRandom::new(seed);

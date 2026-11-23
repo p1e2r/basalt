@@ -133,8 +133,11 @@ fn node_dist(n: &TreeNode, t: &[i64; 7]) -> i64 {
 pub type Target = [i64; 6];
 
 impl BiomeSource {
-    pub fn load(data_dir: &Path, biome_names: &[String]) -> Result<BiomeSource> {
-        let p = data_dir.join("reports/biome_parameters/minecraft/overworld.json");
+    pub fn load(data_dir: &Path, biome_names: &[String]) -> Result<BiomeSource> { Self::load_preset(data_dir, biome_names, "overworld") }
+
+    /// Parameter list of a multi-noise preset (`overworld`, `nether`) from the data reports.
+    pub fn load_preset(data_dir: &Path, biome_names: &[String], preset: &str) -> Result<BiomeSource> {
+        let p = data_dir.join(format!("reports/biome_parameters/minecraft/{preset}.json"));
         let v: Value = serde_json::from_str(&std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?)?;
         let mut entries = Vec::new();
         for b in v["biomes"].as_array().ok_or_else(|| anyhow!("biomes"))? {
