@@ -1,0 +1,16 @@
+[package]
+name = "basalt-worldgen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Overworld terrain generation driven by the data-generator worldgen JSON"
+
+[dependencies]
+anyhow.workspace = true
+serde_json.workspace = true
+md-5.workspace = true
+basalt-data = { path = "../data" }
+
+[dev-dependencies]
+basalt-nbt = { path = "../nbt" }
+flate2.workspace = true
