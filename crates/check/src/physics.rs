@@ -157,7 +157,8 @@ impl Body {
         let slip = match BlockState(below).name() { "ice" | "packed_ice" | "frosted_ice" => 0.98, "blue_ice" => 0.989, "slime_block" => 0.8, _ => 0.6 };
         let friction = if self.on_ground { slip * 0.91 } else { 0.91 };
         let speed = 0.1 * if sprint { 1.3 } else { 1.0 };
-        let acc = if self.on_ground { speed * (0.21600002 / (friction * friction * friction)) } else if sprint { 0.026 } else { 0.02 };
+        // vanilla: the cube is of the block's own friction (0.6 → acceleration exactly `speed`), not ×0.91
+        let acc = if self.on_ground { speed * (0.21600002 / (slip * slip * slip)) } else if sprint { 0.026 } else { 0.02 };
         accel(acc, &mut self.vel);
         let mut v = self.vel;
         // blocks that slow movement while inside them (vanilla "stuck in block")

@@ -115,19 +115,24 @@ impl Vanilla {
         }
     }
 
-    /// Fresh player: op the name and delete its saved data (it must be offline).
-    pub fn prepare_player(&self, name: &str) -> Result<()> {
-        // other tools share this console: match our own reply, retry if the line got lost
-        let made = format!("Made {name} a server operator");
-        let mut ok = false;
-        for _ in 0..3 {
-            if self.console(&format!("op {name}"), &[&made, "already is an operator"]).is_ok() { ok = true; break; }
-        }
-        if !ok { anyhow::bail!("could not op {name} via the vanilla console"); }
+    /// Fresh player: delete its saved data (it must be offline).
+    pub fn reset_player(&self, name: &str) {
         let uuid = crate::bot::offline_uuid(name);
         for ext in ["dat", "dat_old"] {
             let _ = std::fs::remove_file(self.dir.join("world/players/data").join(format!("{uuid}.{ext}")));
         }
-        Ok(())
     }
+
+    /// Op a player who is online (resolved from the player list — no profile lookup, which in
+    /// offline mode may fail or lower-case the name). Retries if the console line got lost.
+    pub fn op_online(&self, name: &str) -> Result<()> {
+        let made = format!("Made {name} a server operator");
+        for _ in 0..3 {
+            if self.console(&format!("op {name}"), &[&made, "already is an operator"]).is_ok() { return Ok(()); }
+        }
+        bail!("could not op {name} via the vanilla console")
+    }
+
+    /// Old name kept for the probe: reset data + op (works only for names the server can resolve).
+    pub fn prepare_player(&self, name: &str) -> Result<()> { self.reset_player(name); self.op_online(name) }
 }

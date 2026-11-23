@@ -102,6 +102,8 @@ pub struct State {
     pub health_log: Vec<(Instant, f32)>,
     pub taken: Vec<(i32, i32, i32)>,
     pub explosions: Vec<Explosion>,
+    /// Permission level from entity events 24..28.
+    pub op_level: u8,
     /// entity events (eid, status) e.g. 3 = death
     pub entity_events: Vec<(Instant, i32, u8)>,
     pub registries: HashMap<String, Vec<String>>,
@@ -198,7 +200,7 @@ impl Bot {
             spawned: false, loaded_sent: false, dead: false, death_msg: None, health: 20.0, food: 20, saturation: 5.0, air: 300, ticks_frozen: 0, flags: 0,
             effects: HashMap::new(), inv: vec![Stack::default(); 46], cursor: Stack::default(), held: 0, state_id: 0, screen: None, container: Vec::new(),
             chat: Vec::new(), entities: HashMap::new(), players: HashMap::new(), world: World::default(), teleports: Vec::new(), plog: Vec::new(),
-            counts: HashMap::new(), ticks: 0, disconnected: None, damage: Vec::new(), health_log: Vec::new(), taken: Vec::new(), explosions: Vec::new(), entity_events: Vec::new(), registries: HashMap::new(), block_updates: 0,
+            counts: HashMap::new(), ticks: 0, disconnected: None, damage: Vec::new(), health_log: Vec::new(), taken: Vec::new(), explosions: Vec::new(), op_level: 0, entity_events: Vec::new(), registries: HashMap::new(), block_updates: 0,
             out: otx, last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input: 0, seq: 0,
         }));
         let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -675,7 +677,7 @@ fn handle(s: &mut State, id: i32, data: &[u8]) -> Result<()> {
             if let Some(k) = knockback { for i in 0..3 { s.body.vel[i] += k[i]; } }
             s.explosions.push(Explosion { at: Instant::now(), pos, radius, blocks, knockback });
         }
-        cb::ENTITY_EVENT => { let e = r.i32()?; let st = r.u8()?; s.entity_events.push((Instant::now(), e, st)); }
+        cb::ENTITY_EVENT => { let e = r.i32()?; let st = r.u8()?; if e == s.eid && (24..=28).contains(&st) { s.op_level = st - 24; } s.entity_events.push((Instant::now(), e, st)); }
         cb::TAKE_ITEM_ENTITY => { let item = r.varint()?; let by = r.varint()?; let n = r.varint()?; s.taken.push((item, by, n)); }
         _ => {}
     }

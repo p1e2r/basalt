@@ -31,8 +31,8 @@ fn main() {
             "--probe" => {
                 // debug: join ADDR as NAME and print what the bot knows each second
                 let addr = it.next().unwrap_or("127.0.0.1:25566".into()); let name = it.next().unwrap_or("Probe".into());
-                if addr.ends_with(":25566") { if let Err(e) = basalt_check::server::Vanilla::new(std::path::Path::new(&vdir), &addr).prepare_player(&name) { eprintln!("prepare: {e:#}"); } }
                 let bot = basalt_check::bot::Bot::connect(&addr, &name).unwrap_or_else(|e| { eprintln!("{e:#}"); std::process::exit(1) });
+                if addr.ends_with(":25566") { if let Err(e) = basalt_check::server::Vanilla::new(std::path::Path::new(&vdir), &addr).op_online(&name) { eprintln!("op: {e:#}"); } bot.wait_until(std::time::Duration::from_secs(5), |s| s.op_level >= 2); }
                 for c in it.by_ref() {
                     if let Some(t) = c.strip_prefix("wait:") { bot.wait_ticks(t.parse().unwrap_or(20)); continue; }
                     if let Some(a) = c.strip_prefix("action:") { let v: Vec<i32> = a.split(',').filter_map(|x| x.parse().ok()).collect(); bot.player_action(v[0], [v.get(1).copied().unwrap_or(0), v.get(2).copied().unwrap_or(0), v.get(3).copied().unwrap_or(0)], 0); continue; }

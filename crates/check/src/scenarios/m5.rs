@@ -110,9 +110,18 @@ fn kill_with_sword(bot: &Bot, eid: i32) -> Result<()> {
     if bot.st().entity_events.iter().any(|e| e.1 == eid && e.2 == 3) { Ok(()) } else { bail!("mob {eid} not dead after 10 hits") }
 }
 
-fn drops_since(bot: &Bot, t0: Instant) -> Vec<(String, i32)> {
+/// Inventory snapshot (item name -> count), to add drops the bot already picked up.
+fn inv_counts(bot: &Bot) -> std::collections::HashMap<String, i32> {
+    let s = bot.st(); let mut m = std::collections::HashMap::new();
+    for i in s.inv.iter().filter(|i| i.count > 0) { *m.entry(i.name().to_string()).or_insert(0) += i.count; }
+    m
+}
+
+/// Item entities added since `t0` plus whatever reached the inventory since `before`.
+fn drops_since(bot: &Bot, t0: Instant, before: &std::collections::HashMap<String, i32>) -> Vec<(String, i32)> {
+    let now = inv_counts(bot);
     let s = bot.st();
-    let mut v: Vec<(String, i32)> = Vec::new();
+    let mut v: Vec<(String, i32)> = now.iter().filter_map(|(k, n)| { let d = n - before.get(k).copied().unwrap_or(0); (d > 0).then(|| (k.clone(), d)) }).collect();
     for e in s.entities.values().filter(|e| e.kind == "item" && e.added >= t0) {
         if let Some(i) = &e.item { match v.iter_mut().find(|x| x.0 == i.name()) { Some(x) => x.1 += i.count, None => v.push((i.name().to_string(), i.count)) } }
     }
@@ -125,10 +134,10 @@ pub fn cow_loot(ctx: &mut Ctx) -> Result<()> {
     hold(&bot, "diamond_sword")?;
     let me = bot.st().pos();
     let (eid, _) = summon(&bot, "cow", [me[0] + 2.0, Y as f64, me[2]], "{NoAI:1b}")?;
-    let t0 = Instant::now();
+    let (t0, before) = (Instant::now(), inv_counts(&bot));
     kill_with_sword(&bot, eid)?;
     bot.wait_ticks(10);
-    let d = drops_since(&bot, t0);
+    let d = drops_since(&bot, t0, &before);
     let get = |n: &str| d.iter().find(|x| x.0 == n).map(|x| x.1).unwrap_or(0);
     ctx.note(format!("cow drops {d:?}"));
     ctx.check((1..=3).contains(&get("beef")), format!("beef {}", get("beef")));
@@ -145,19 +154,19 @@ pub fn sheep_loot(ctx: &mut Ctx) -> Result<()> {
     hold(&bot, "diamond_sword")?;
     let me = bot.st().pos();
     let (eid, _) = summon(&bot, "sheep", [me[0] + 2.0, Y as f64, me[2]], "{NoAI:1b,Color:14}")?;
-    let t0 = Instant::now();
+    let (t0, before) = (Instant::now(), inv_counts(&bot));
     kill_with_sword(&bot, eid)?;
     bot.wait_ticks(10);
-    let d = drops_since(&bot, t0);
+    let d = drops_since(&bot, t0, &before);
     ctx.note(format!("red sheep drops {d:?}"));
     let wool = d.iter().find(|x| x.0 == "red_wool").map(|x| x.1).unwrap_or(0);
     ctx.check(wool == 1, format!("red wool {wool} ({d:?})"));
     ctx.metric("red_wool", wool as f64, 0.0);
     let (eid2, _) = summon(&bot, "sheep", [me[0] + 2.0, Y as f64, me[2] + 1.5], "{NoAI:1b,Color:14,Sheared:1b}")?;
-    let t1 = Instant::now();
+    let (t1, before) = (Instant::now(), inv_counts(&bot));
     kill_with_sword(&bot, eid2)?;
     bot.wait_ticks(10);
-    let d2 = drops_since(&bot, t1);
+    let d2 = drops_since(&bot, t1, &before);
     ctx.note(format!("sheared sheep drops {d2:?}"));
     let wool2 = d2.iter().filter(|x| x.0.ends_with("_wool")).map(|x| x.1).sum::<i32>();
     ctx.check(wool2 == 0, format!("sheared sheep dropped wool: {d2:?}"));

@@ -78,9 +78,14 @@ impl Ctx {
         let short: String = self.spec.id.chars().filter(|c| c.is_ascii_alphanumeric()).take(11).collect();
         let name = format!("c{:02}{}{}", self.idx, self.bots, short);
         let name: String = name.chars().take(16).collect();
-        if let Some(v) = &self.vanilla { v.prepare_player(&name)?; }
+        if let Some(v) = &self.vanilla { v.reset_player(&name); }
         self.names.push(name.clone());
-        Bot::connect(&self.addr(), &name)
+        let bot = Bot::connect(&self.addr(), &name)?;
+        if let Some(v) = &self.vanilla {
+            v.op_online(&name)?;
+            if !bot.wait_until(Duration::from_secs(5), |s| s.op_level >= 2) { bail!("{name}: op permission level never arrived"); }
+        }
+        Ok(bot)
     }
 
     pub fn check(&mut self, cond: bool, msg: impl Into<String>) -> bool {
