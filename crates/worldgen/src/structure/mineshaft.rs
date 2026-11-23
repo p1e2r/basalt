@@ -1,8 +1,8 @@
 //! Mineshafts (procedural in vanilla). The piece generator was fitted against the pieces saved by
 //! the official 26.2 server (2026-11-24): 53 mineshafts of seeds 12345 / 42 / 1 (64 x 64 chunks
-//! around the origin) and one mesa mineshaft (seed 12345, chunk -168,110) are reproduced exactly
-//! (6943 / 6943 pieces: type, box, orientation, sections, rails, spider flag, two floors, depth, in
-//! saved order). The draw order below is the fitted one; NOTES.md "Mineshafts" lists the rules.
+//! around the origin) plus 10 mesa and 2 more normal ones (seeds 12345 / 42 / 2) are reproduced
+//! exactly (65 starts, 8274 / 8274 pieces: type, box, orientation, sections, rails, spider flag,
+//! two floors, depth, in saved order). The draw order below is the fitted one; NOTES.md "Mineshafts" lists the rules.
 //!
 //! Block placement (carving, supports, rails, cobwebs, bridges) was measured from the same worlds
 //! (per-cell statistics in the piece frames); the per-block random elements are drawn from the

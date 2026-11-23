@@ -45,7 +45,9 @@ Read NOTES.md for verified packet formats.
   generated with and without structures (NOTES.md "Terrain adaptation"). `/locate structure <id|#tag>` in the server =
   vanilla (m3_locate_structure, 13 ids + tag). Block-exact inside vanilla piece boxes: trial chambers 99.5-99.8 %,
   villages 98.95-99.75 % (was 90-97.5), outposts 99.7 % (was 90.5), ancient cities 96.6 % (was 13.5; rest is sculk),
-  igloos 95.7-100 %, swamp huts 97.7-100 %, ruined portals 67-94 %, shipwrecks 74-90 %, cold ocean ruins ~89.5 %. Parity: `tools/structure-parity.sh` (harness
+  igloos 95.7-100 %, swamp huts 97.7-100 %, desert pyramids 98.4-99.9 % (3/9 vanilla boxes sit 1-2 lower: 72-82 %),
+  jungle temples 86-98 % (mossy draw order fitted), mineshafts 88.5-90.1 % (piece generator fitted: 65/65 vanilla
+  mineshafts, 8274 pieces exact; per-block randoms statistical; mesa y not fitted), ruined portals 67-94 %, shipwrecks 74-90 %, cold ocean ruins ~89.5 %. Parity: `tools/structure-parity.sh` (harness
   worldgen_structures; vanilla worlds via tools/structure-world.sh in vanilla/structures/), `examples/structures`.
 - crates/worldgen: **terrain + most decoration done** (M3b: exact 5x5 neighbour decoration,
   trees/huge mushrooms/vegetation, lakes, springs, geodes, monster rooms; seed 12345 r3: biomes
@@ -93,8 +95,11 @@ Read NOTES.md for verified packet formats.
 - [x] M3b features: trees + vegetation, lakes, springs, geodes, monster rooms; exact neighbour mode
       — done: tools/check-all.sh green 2026-11-23 (M3 4/4, parity seeds 12345/42/1)
 - [~] M3c structures (overworld) — placement + jigsaw + template structures done, see crates/worldgen status;
-      done 2026-11-24: terrain adaptation (beard_thin/beard_box), igloos, swamp huts (south orientation unverified);
-      todo: encapsulate/bury adaptation, procedural pieces (mineshaft/stronghold/monument/desert+jungle temples/mansion),
+      done 2026-11-24: terrain adaptation (beard_thin/beard_box), igloos, swamp huts (south orientation unverified),
+      desert pyramids + jungle temples (measured layouts, structure/temple.rs), mineshafts (structure/mineshaft.rs,
+      pieces exact incl. mesa; NOTES.md "Mineshafts"); multi-site vanilla worlds: tools/structure-sites.sh;
+      todo: encapsulate/bury adaptation, procedural pieces (stronghold/monument/mansion), desert sinking rule, mesa
+      mineshaft y, mineshaft per-block random order,
       ancient-city sculk, ocean-ruin clusters, portal processors, chest loot + template entities, stronghold rings
 - [x] M4 survival gameplay — done, check-all M4 22/22 + Env 26/26 + Items 2/2 (2026-11-23) (crates/game rules; server game/{items,inv,health}.rs):
       hardness/tool dig times (server validates), loot-table drops as item entities + pickup/merge/
