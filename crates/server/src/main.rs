@@ -8,6 +8,7 @@ mod conn;
 mod game;
 mod gen;
 mod registry;
+mod snbt;
 
 use anyhow::{Context, Result};
 use std::path::PathBuf;

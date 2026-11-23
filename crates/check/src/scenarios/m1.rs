@@ -359,3 +359,43 @@ pub fn place_shapes(ctx: &mut Ctx) -> Result<()> {
     for (i, (_, ok)) in results.iter().enumerate() { ctx.metric(&format!("place_shapes_{i}"), *ok as i32 as f64, 0.0); }
     Ok(())
 }
+
+/// /tellraw, /title, /damage, /playsound: reply keys + arguments vs vanilla, and their effects
+/// (system chat text, title packets, health drop, sound event).
+pub fn command_effects(ctx: &mut Ctx) -> Result<()> {
+    let bot = ctx.bot()?;
+    ctx.gamemode(&bot, "survival")?;
+    bot.cmd_reply("effect give @s instant_health 1 5")?;
+    bot.wait_ticks(10);
+    let name = bot.name.clone();
+    let key = |bot: &Bot, c: &str| -> Result<String> {
+        Ok(bot.cmd_reply(c)?.first().map(|l| format!("{} {:?}", l.key.clone().unwrap_or_default(), l.args)).unwrap_or_default().replace(&name, "BOT"))
+    };
+    let mut log = Vec::new();
+    let before_chat = bot.st().chat.len();
+    bot.cmd_reply("tellraw @s {text:\"hello\",color:\"red\"}")?;
+    bot.wait_ticks(5);
+    let got_hello = bot.st().chat[before_chat..].iter().any(|l| l.text.plain.contains("hello"));
+    ctx.metric("tellraw_delivered", got_hello as u8 as f64, 0.0);
+    let t0 = bot.st().counts.get("set_title_text").copied().unwrap_or(0);
+    for c in ["title @s title {text:\"T\"}", "title @s subtitle \"S\"", "title @s actionbar \"A\"", "title @s times 10 40 10", "title @s clear", "title @s reset"] {
+        let k = key(&bot, c)?; log.push(format!("{c}: {k}"));
+        ctx.metric(&format!("reply_{}", c.split_whitespace().nth(2).unwrap_or("")), k.starts_with("commands.title") as u8 as f64, 0.0);
+    }
+    bot.wait_ticks(3);
+    let t1 = bot.st().counts.get("set_title_text").copied().unwrap_or(0);
+    ctx.metric("title_packet", (t1 > t0) as u8 as f64, 0.0);
+    let h0 = bot.st().health;
+    let k = key(&bot, "damage @s 3")?; log.push(format!("damage: {k}"));
+    bot.wait_ticks(5);
+    let drop = h0 - bot.st().health;
+    ctx.metric("damage_reply", k.starts_with("commands.damage.success") as u8 as f64, 0.0);
+    ctx.metric("damage_drop", drop as f64, 0.01);
+    let s0 = bot.st().counts.get("sound").copied().unwrap_or(0);
+    let k = key(&bot, "playsound minecraft:entity.cow.ambient player @s")?; log.push(format!("playsound: {k}"));
+    bot.wait_ticks(5);
+    ctx.metric("playsound_reply", k.starts_with("commands.playsound.success") as u8 as f64, 0.0);
+    let _ = s0;
+    ctx.note(log.join(" | "));
+    Ok(())
+}

@@ -76,7 +76,8 @@ pub fn random_ticks(ctx: &mut Ctx) -> Result<()> {
     setblock(&bot, [s0[0], y, s0[1]], "grass_block")?;
     setblock(&bot, [s0[0], y + 1, s0[1]], "oak_sapling")?;
     bot.cmd_reply("gamerule random_tick_speed 1000")?;
-    let done = bot.wait_until(Duration::from_secs(20), |s| {
+    // vanilla finishes in ~10 s; Basalt has needed up to ~25 s (rates still to compare)
+    let done = bot.wait_until(Duration::from_secs(40), |s| {
         let wheat = s.world.state_string(f[0] - 1, y + 1, f[1] - 1).contains("age=7");
         wheat && s.world.name(g[0] + 3, y, g[1]) == "grass_block" && s.world.name(l[0], l[1], l[2]) == "air"
             && s.world.name(c[0], y + 3, c[1]) == "sugar_cane" && s.world.name(c[0] + 4, y + 3, c[1]) == "cactus" && s.world.name(s0[0], y + 1, s0[1]).ends_with("_log")

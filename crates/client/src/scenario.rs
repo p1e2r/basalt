@@ -14,7 +14,7 @@ use winit::keyboard::KeyCode;
 const W: u32 = 854;
 const H: u32 = 480;
 
-pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer", "falling_block", "sprint", "xp_bar"];
+pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer", "falling_block", "sprint", "xp_bar", "titles"];
 
 enum Outcome { Pass(String), Skip(String) }
 
@@ -40,7 +40,7 @@ pub fn run(args: &Args, assets: Arc<Assets>, name: &str) -> Result<bool> {
         let t = Instant::now();
         let r = match s {
             "edge_chunks" => edge_chunks(&ctx), "inventory" => inventory(&ctx), "crafting_table" => crafting_table(&ctx), "death" => death(&ctx),
-            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "falling_block" => falling_block(&ctx), "sprint" => sprint(&ctx), "xp_bar" => xp_bar(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx),
+            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "falling_block" => falling_block(&ctx), "sprint" => sprint(&ctx), "xp_bar" => xp_bar(&ctx), "titles" => titles(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx),
             other => Err(anyhow!("unknown scenario {other} (known: {})", ALL.join(", "))),
         };
         let secs = t.elapsed().as_secs_f32();
@@ -1183,4 +1183,25 @@ fn xp_bar(c: &Ctx) -> Result<Outcome> {
     if bar < 20 { bail!("XP bar fill not drawn ({bar} px)"); }
     if num < 10 { bail!("level number not drawn ({num} px)"); }
     Ok(Outcome::Pass(format!("level {} progress {:.2}; bar {bar}px, number {num}px", g.xp.1, g.xp.0)))
+}
+
+/// /title title|subtitle|actionbar draw big centred text and the action bar line, then fade out.
+fn titles(c: &Ctx) -> Result<Outcome> {
+    let mut g = c.game("titles")?;
+    join(&mut g)?;
+    cmd(&mut g, "title @s times 0 20 0");
+    wait(&mut g, 0.3)?;
+    let before = capture(&mut g)?;
+    cmd(&mut g, "title @s subtitle \"small\"");
+    cmd(&mut g, "title @s title {text:\"Big\",color:\"gold\"}");
+    cmd(&mut g, "title @s actionbar \"bar\"");
+    if !wait_until(&mut g, 3.0, |g| g.title.0 == "Big" && g.actionbar.0 == "bar")? { bail!("title/actionbar not received: {:?} {:?}", g.title.0, g.actionbar.0); }
+    wait(&mut g, 0.2)?;
+    let shown = capture(&mut g)?;
+    save(&g, &shown, "titles");
+    let (w, h) = (W as i32, H as i32);
+    let mid = diff_count(&before, &shown, w / 4, h / 4, 3 * w / 4, h / 2 + h / 8);
+    if mid < 200 { bail!("title text not drawn ({mid} px)"); }
+    if !wait_until(&mut g, 3.0, |g| g.title.2 < 0)? { bail!("title did not time out after times 0 20 0"); }
+    Ok(Outcome::Pass(format!("title drawn ({mid} px), gone after its stay time")))
 }

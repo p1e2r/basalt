@@ -48,6 +48,10 @@ pub enum Event {
     CloseScreen(i32),
     ContainerData { window: i32, id: i16, value: i16 },
     Experience { progress: f32, level: i32, total: i32 },
+    /// kind 0 title, 1 subtitle, 2 action bar
+    Title { kind: u8, text: String },
+    TitleTimes([i32; 3]),
+    ClearTitles { reset: bool },
     AddEntity { id: i32, uuid: Uuid, kind: i32, pos: [f64; 3], vel: [f64; 3], yaw: f32, pitch: f32, head_yaw: f32, data: i32 },
     MoveEntity { id: i32, delta: [f64; 3], rot: Option<(f32, f32)>, on_ground: bool },
     TeleportEntity { id: i32, pos: [f64; 3], yaw: f32, pitch: f32, on_ground: bool },
@@ -273,7 +277,12 @@ fn handle_play(id: i32, data: &[u8], tx: &Sender<Event>, players: &mut HashMap<U
             let yaw = r.f32()?; let pitch = r.f32()?; let flags = r.i32()?;
             Event::Teleport { id, pos, vel, yaw, pitch, flags }
         }
-        cb::SYSTEM_CHAT => { let t = r.nbt()?; let overlay = r.bool().unwrap_or(false); if overlay { return Ok(()); } Event::Chat(crate::lang::text(&t)) }
+        cb::SYSTEM_CHAT => { let t = r.nbt()?; let overlay = r.bool().unwrap_or(false); if overlay { Event::Title { kind: 2, text: crate::lang::text(&t) } } else { Event::Chat(crate::lang::text(&t)) } }
+        cb::SET_TITLE_TEXT => Event::Title { kind: 0, text: crate::lang::text(&r.nbt()?) },
+        cb::SET_SUBTITLE_TEXT => Event::Title { kind: 1, text: crate::lang::text(&r.nbt()?) },
+        cb::SET_ACTION_BAR_TEXT => Event::Title { kind: 2, text: crate::lang::text(&r.nbt()?) },
+        cb::SET_TITLES_ANIMATION => Event::TitleTimes([r.i32()?, r.i32()?, r.i32()?]),
+        cb::CLEAR_TITLES => Event::ClearTitles { reset: r.bool()? },
         cb::PLAYER_CHAT => {
             let _global = r.varint()?; let sender = r.uuid()?; let _idx = r.varint()?;
             if r.bool()? { r.take(256)?; }

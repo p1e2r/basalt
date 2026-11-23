@@ -690,6 +690,22 @@ impl Game {
                 self.set_difficulty(d as u8);
                 self.ok(eid, "commands.difficulty.success", vec![tr(&name)]);
             }
+            path if path.starts_with("tellraw ") => {
+                let msg = crate::snbt::parse(p.arg("message"))
+                    .ok_or_else(|| err("argument.component.invalid", &[p.arg("message")]))?;
+                for t in self.resolve(eid, p.arg("targets"), false)? {
+                    if let Target::Player(e) = t {
+                        if let Some(pl) = self.players.get(&e) {
+                            let mut w = Writer::with_id(cb::SYSTEM_CHAT);
+                            w.nbt(&msg).bool(false);
+                            pl.send(w);
+                        }
+                    }
+                }
+            }
+            path if path.starts_with("title ") => self.cmd_title(eid, p)?,
+            path if path.starts_with("damage ") => self.cmd_damage(eid, p)?,
+            path if path.starts_with("playsound ") => self.cmd_playsound(eid, p)?,
             path if path.starts_with("gamerule ") => {
                 // only the rules Basalt acts on; others are reported as unsupported
                 let rule = p.path[1].trim_start_matches("minecraft:").to_string();
@@ -1486,6 +1502,169 @@ impl Game {
                 self.untrack(e);
             }
         }
+    }
+
+    fn sel_players(&mut self, eid: i32, sel: &str) -> R<Vec<i32>> {
+        Ok(self
+            .resolve(eid, sel, false)?
+            .into_iter()
+            .filter_map(|t| {
+                if let Target::Player(e) = t {
+                    Some(e)
+                } else {
+                    None
+                }
+            })
+            .collect())
+    }
+
+    /// Reply `<key>.single` with the one player's name or `<key>.multiple` with the count.
+    fn ok_players(&mut self, eid: i32, key: &str, mut pre: Vec<Tag>, ps: &[i32]) {
+        if ps.len() == 1 {
+            let n = self.display_name(Target::Player(ps[0]));
+            pre.push(n);
+            self.ok(eid, &format!("{key}.single"), pre);
+        } else {
+            pre.push(s(ps.len()));
+            self.ok(eid, &format!("{key}.multiple"), pre);
+        }
+    }
+
+    /// /title targets title|subtitle|actionbar <component> | times a b c | clear | reset.
+    fn cmd_title(&mut self, eid: i32, p: &Parsed) -> R<()> {
+        let ps = self.sel_players(eid, p.arg("targets"))?;
+        let what = p.path[2].as_str();
+        let send = |g: &Game, w: &Writer| {
+            for e in &ps {
+                if let Some(pl) = g.players.get(e) {
+                    pl.send(Writer { buf: w.buf.clone() });
+                }
+            }
+        };
+        match what {
+            "title" | "subtitle" | "actionbar" => {
+                let msg = crate::snbt::parse(p.arg("title"))
+                    .ok_or_else(|| err("argument.component.invalid", &[p.arg("title")]))?;
+                let id = match what {
+                    "title" => cb::SET_TITLE_TEXT,
+                    "subtitle" => cb::SET_SUBTITLE_TEXT,
+                    _ => cb::SET_ACTION_BAR_TEXT,
+                };
+                let mut w = Writer::with_id(id);
+                w.nbt(&msg);
+                send(self, &w);
+                self.ok_players(eid, &format!("commands.title.show.{what}"), vec![], &ps);
+            }
+            "times" => {
+                let v = |k: &str| {
+                    cmdparse::parse_time(p.arg(k), 0, 1)
+                        .map(|t| t.0 as i32)
+                        .unwrap_or(0)
+                };
+                let mut w = Writer::with_id(cb::SET_TITLES_ANIMATION);
+                w.i32(v("fadeIn")).i32(v("stay")).i32(v("fadeOut"));
+                send(self, &w);
+                self.ok_players(eid, "commands.title.times", vec![], &ps);
+            }
+            "clear" | "reset" => {
+                let mut w = Writer::with_id(cb::CLEAR_TITLES);
+                w.bool(what == "reset");
+                send(self, &w);
+                self.ok_players(
+                    eid,
+                    &format!(
+                        "commands.title.{}",
+                        if what == "clear" { "cleared" } else { "reset" }
+                    ),
+                    vec![],
+                    &ps,
+                );
+            }
+            _ => return Err(err("command.unknown.argument", &[])),
+        }
+        Ok(())
+    }
+
+    /// /damage target amount [damageType] (by/at variants accepted; the cause is ignored).
+    fn cmd_damage(&mut self, eid: i32, p: &Parsed) -> R<()> {
+        let targets = self.resolve(eid, p.arg("target"), false)?;
+        let Some(&t) = targets.first() else {
+            return Err(err("argument.entity.notfound.entity", &[]));
+        };
+        let amount: f32 = p.arg("amount").parse().unwrap_or(0.0);
+        let kind = if p.has("damageType") {
+            p.arg("damageType")
+                .trim_start_matches("minecraft:")
+                .to_string()
+        } else {
+            "generic".into()
+        };
+        // applied when health actually went down
+        let hit = match t {
+            Target::Player(e) => {
+                let h0 = self.players.get(&e).map(|p| p.health).unwrap_or(0.0);
+                self.hurt(e, amount, &kind);
+                self.players
+                    .get(&e)
+                    .map(|p| p.health < h0 || p.dead)
+                    .unwrap_or(false)
+            }
+            Target::Mob(e) => {
+                let h0 = self.mobs.get(&e).map(|m| m.health).unwrap_or(0.0);
+                self.damage_mob(e, amount, &kind, None, None, None);
+                self.mobs.get(&e).map(|m| m.health < h0).unwrap_or(true)
+            }
+            _ => false,
+        };
+        if !hit {
+            return Err(err("commands.damage.invulnerable", &[]));
+        }
+        let n = self.display_name(t);
+        self.ok(eid, "commands.damage.success", vec![s(amount), n]);
+        Ok(())
+    }
+
+    /// /playsound sound [source] [targets] [pos] [volume] [pitch] [minVolume].
+    fn cmd_playsound(&mut self, eid: i32, p: &Parsed) -> R<()> {
+        let sound = p.arg("sound").trim_start_matches("minecraft:").to_string();
+        let cats = [
+            "master", "music", "record", "weather", "block", "hostile", "neutral", "player",
+            "ambient", "voice", "ui",
+        ];
+        let cat = p
+            .path
+            .get(2)
+            .and_then(|c| cats.iter().position(|x| x == c))
+            .unwrap_or(0) as i32;
+        let ps = if p.has("targets") {
+            self.sel_players(eid, p.arg("targets"))?
+        } else {
+            vec![eid]
+        };
+        let pos = if p.has("pos") {
+            let (c, _) = cmdparse::parse_pos(p.arg("pos"), 0, PosKind::Vec3)?;
+            self.pos_from(eid, &c, false)
+        } else {
+            self.players[&eid].pos
+        };
+        let vol: f32 = if p.has("volume") {
+            p.arg("volume").parse().unwrap_or(1.0)
+        } else {
+            1.0
+        };
+        let pitch: f32 = if p.has("pitch") {
+            p.arg("pitch").parse().unwrap_or(1.0)
+        } else {
+            1.0
+        };
+        self.play_sound(&sound, cat, pos, vol, pitch);
+        self.ok_players(
+            eid,
+            "commands.playsound.success",
+            vec![s(format!("minecraft:{sound}"))],
+            &ps,
+        );
+        Ok(())
     }
 
     fn cmd_experience(&mut self, eid: i32, p: &Parsed) -> R<()> {

@@ -211,6 +211,8 @@ pub struct Game {
     hp: f32, pub food: i32,
     /// experience bar progress 0..1 and level (set_experience)
     pub xp: (f32, i32),
+    /// title / subtitle with ticks since shown and fade in/stay/out; action bar text + ticks left
+    pub title: (String, String, i32, [i32; 3]), pub actionbar: (String, i32),
     hotbar: [ItemStack; 9], held: u8,
     inventory: Vec<ItemStack>,
     inv_state: i32,
@@ -305,7 +307,7 @@ impl Game {
         let mut g = Game {
             gpu, assets, rules, ui, entity_atlas, biomes, dim_types: Vec::new(), world: World::new(-64, 384), player: Player::new(), mesher,
             dirty: HashMap::new(), in_flight: HashSet::new(), events: rx, out: otx, entities: HashMap::new(), player_names: HashMap::new(), my_eid: 0, name: o.name,
-            chat: Vec::new(), chat_input: None, cmd_tree: None, sug: Sug::default(), hp: 20.0, food: 20, xp: (0.0, 0), hotbar: Default::default(), held: 0, inventory: vec![ItemStack::default(); 46], inv_state: 0, carried: ItemStack::default(), day_time: 6000,
+            chat: Vec::new(), chat_input: None, cmd_tree: None, sug: Sug::default(), hp: 20.0, food: 20, xp: (0.0, 0), title: (String::new(), String::new(), -1, [10, 70, 20]), actionbar: (String::new(), 0), hotbar: Default::default(), held: 0, inventory: vec![ItemStack::default(); 46], inv_state: 0, carried: ItemStack::default(), day_time: 6000,
             spawned: false, loaded_sent: false, connected: false, keys: HashSet::new(), mouse: [false; 2], mouse_pos: (0.0, 0.0), slider_drag: None, last_tick: Instant::now(),
             last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, sprint_sent: false, sprinting: false, sprint_trigger: 0, fwd_was: false, sprint_key_was: false, sprint_latch: false, jump_tick: None, particles: Default::default(), equip: (1.0, 1.0), equip_for: -1, shown_item: -1, attack_ticks: 100, walk_dist: (0.0, 0.0), view_bob: (0.0, 0.0), self_hurt: 0, held_name: (String::new(), 0), splash: String::new(), menu_t0: Instant::now(), pings: HashMap::new(), ping_chan: mpsc::channel(), icon_slots: HashMap::new(), ping_rounds: 0, worlds: Vec::new(), integrated: None, sp_world: None, step_dist: 0.0,
             last_place: Instant::now(), debug: false, disconnected: None, death_msg: None, respawn_at: None, auto_respawn: o.auto_respawn,
@@ -426,6 +428,11 @@ impl Game {
             Event::Chat(s) => { println!("[chat] {s}"); self.chat.push((s, Instant::now())); if self.chat.len() > 100 { self.chat.remove(0); } }
             Event::Health { hp, food } => { self.hp = hp; self.food = food; }
             Event::Experience { progress, level, total: _ } => { self.xp = (progress, level); }
+            Event::Title { kind: 0, text } => { self.title.0 = text; self.title.2 = 0; }
+            Event::Title { kind: 1, text } => { self.title.1 = text; }
+            Event::Title { text, .. } => { self.actionbar = (text, 60); }
+            Event::TitleTimes(t) => { self.title.3 = t; }
+            Event::ClearTitles { reset } => { self.title.0.clear(); self.title.1.clear(); self.title.2 = -1; if reset { self.title.3 = [10, 70, 20]; } }
             Event::GameMode(g) => { self.player.gamemode = g; self.player.flying = g == 3 || (g == 1 && self.player.flying); }
             Event::Time { day, .. } => self.day_time = day,
             Event::HeldSlot(s) => self.held = s.min(8),
@@ -681,6 +688,8 @@ impl Game {
         if self.equip.0 < 0.1 { self.shown_item = now; }
         if self.self_hurt > 0 { self.self_hurt -= 1; }
         if self.held_name.1 > 0 { self.held_name.1 -= 1; }
+        if self.title.2 >= 0 { self.title.2 += 1; let [a, b, c] = self.title.3; if self.title.2 > a + b + c { self.title.2 = -1; self.title.0.clear(); self.title.1.clear(); } }
+        if self.actionbar.1 > 0 { self.actionbar.1 -= 1; }
         if self.respawn_at.map(|t| Instant::now() >= t).unwrap_or(false) { self.respawn_at = None; self.respawn(); }
         if !self.spawned || matches!(self.screen, Some(Screen::Death { .. })) { return; }
         if !self.loaded_sent && !self.world.chunks.is_empty() {
@@ -1132,6 +1141,25 @@ impl Game {
                 let (x, y) = (hx + (3.0 + i as f32 * 20.0) * s, hy + 3.0 * s);
                 ui::item_icon(&self.assets, items, it.item, x, y, s);
                 ui::item_decorations(a, deco, it, self.max_damage(it.item), x, y, s);
+            }
+            // title (4x) and subtitle (2x) centred, fading in/out; action bar above the hotbar
+            if self.title.2 >= 0 && self.screen.is_none() {
+                let [fi, st, fo] = self.title.3;
+                let t = self.title.2 as f32 + alpha;
+                let k = if t < fi as f32 { t / fi.max(1) as f32 } else if t > (fi + st) as f32 { 1.0 - (t - (fi + st) as f32) / fo.max(1) as f32 } else { 1.0 };
+                let al = (k.clamp(0.0, 1.0) * 255.0) as u8;
+                if al > 8 {
+                    let (cx, cy) = (w / 2.0, h / 2.0);
+                    let tw = a.text_width(&self.title.0, s * 4.0);
+                    a.text(deco, &self.title.0, (cx - tw / 2.0).floor(), cy - 10.0 * 4.0 * s, s * 4.0, [255, 255, 255, al]);
+                    let sw = a.text_width(&self.title.1, s * 2.0);
+                    a.text(deco, &self.title.1, (cx - sw / 2.0).floor(), cy + 5.0 * 2.0 * s, s * 2.0, [255, 255, 255, al]);
+                }
+            }
+            if self.actionbar.1 > 0 && !self.actionbar.0.is_empty() {
+                let al = ((self.actionbar.1 as f32 - alpha) * 256.0 / 20.0).clamp(0.0, 255.0) as u8;
+                let tw = a.text_width(&self.actionbar.0, s);
+                a.text(deco, &self.actionbar.0, ((w - tw) / 2.0).floor(), h - 68.0 * s, s, [255, 255, 255, al]);
             }
             // name of a newly selected item above the hotbar: 2 s, fading over the last half second
             if self.held_name.1 > 0 && !self.held_name.0.is_empty() && self.screen.is_none() {
