@@ -106,7 +106,13 @@ fn run_one(a: &Assets, tex: &TexIndex, req_path: &Path, out_dir: &Path) -> Resul
     for s in req["scenes"].as_array().ok_or_else(|| anyhow!("{}: no scenes", req_path.display()))? {
         let sid = s["id"].clone();
         match mesh_scene(a, tex, s) {
-            Ok(q) => { total += q.len(); scenes.push(json!({"id": sid, "quads": q})); }
+            Ok(q) => {
+                total += q.len();
+                // the vanilla client picks one of several weighted models by position; Basalt uses the first
+                let target = s.pointer("/blocks/0/3").and_then(|v| v.as_str()).and_then(BlockState::parse);
+                let random = target.map(|t| a.random_variant.get(t.0 as usize).copied().unwrap_or(false)).unwrap_or(false);
+                scenes.push(json!({"id": sid, "quads": q, "random_variant": random}));
+            }
             Err(e) => scenes.push(json!({"id": sid, "error": e.to_string(), "quads": []})),
         }
     }

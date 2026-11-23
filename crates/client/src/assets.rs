@@ -21,6 +21,8 @@ pub struct Quad {
     pub tinted: bool,
     pub layer: u8,
     pub shade: bool,
+    /// the model allows smooth lighting / ambient occlusion ("ambientocclusion", default true)
+    pub ao: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -50,6 +52,10 @@ pub struct StateInfo {
     /// fluid level 0..8 (0 = source), 8+ = falling
     pub fluid_level: u8,
     pub emits_light: bool,
+    /// block light emitted (0..15)
+    pub emission: u8,
+    /// casts ambient occlusion on neighbouring faces (full-cube collidable models that are not glass-like)
+    pub ao_occluder: bool,
 }
 
 #[derive(Clone, Copy, Default, Debug)]
@@ -194,7 +200,6 @@ impl<'a> Baker<'a> {
     fn bake(&mut self, model: &str, rx: i32, ry: i32, uvlock: bool, out: &mut Model) {
         let Some(m) = self.raw(model) else { out.missing = true; return };
         let Some(elements) = &m.elements else { return };
-        let _ = m.ao;
         for el in elements {
             let f = |k: &str| -> [f32; 3] { let a = el[k].as_array(); let g = |i: usize| a.and_then(|a| a.get(i)).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32; [g(0), g(1), g(2)] };
             let (from, to) = (f("from"), f("to"));
@@ -262,17 +267,15 @@ impl<'a> Baker<'a> {
                 if !self.atlas.rects.contains_key(&tex) { out.missing = true; }
                 let (rect, layer) = self.atlas.rects.get(&tex).or_else(|| self.atlas.rects.get("missing")).copied().unwrap();
                 for u in uvs.iter_mut() {
-                    // inset slightly to avoid bleeding
                     let cu = u[0].clamp(0.0, 16.0) / 16.0; let cv = u[1].clamp(0.0, 16.0) / 16.0;
                     u[0] = (rect.x as f32 + cu * rect.w as f32) / self.atlas.w as f32;
                     u[1] = (rect.y as f32 + cv * rect.h as f32) / self.atlas.h as f32;
                 }
-                // shrink UVs toward centre by a hair
-                let cu = (uvs[0][0] + uvs[1][0] + uvs[2][0] + uvs[3][0]) / 4.0; let cv = (uvs[0][1] + uvs[1][1] + uvs[2][1] + uvs[3][1]) / 4.0;
-                for u in uvs.iter_mut() { u[0] += (cu - u[0]) * 0.002; u[1] += (cv - u[1]) * 0.002; }
+                // no UV inset: the vanilla client's quads use the exact face UVs (client-mesh harness); the
+                // atlas pads every sprite with its edge pixels instead
                 for p in pos.iter_mut() { for a in 0..3 { p[a] /= 16.0; el_min[a] = el_min[a].min(p[a]); el_max[a] = el_max[a].max(p[a]); } }
                 if layer == LAYER_OPAQUE { opaque_faces += 1; }
-                out.quads.push(Quad { pos, uv: uvs, cull, dir, tinted: face.get("tintindex").and_then(|t| t.as_i64()).map(|t| t >= 0).unwrap_or(false), layer, shade });
+                out.quads.push(Quad { pos, uv: uvs, cull, dir, tinted: face.get("tintindex").and_then(|t| t.as_i64()).map(|t| t >= 0).unwrap_or(false), layer, shade, ao: m.ao });
             }
             if el_min[0] <= el_max[0] {
                 let b = [el_min[0], el_min[1], el_min[2], el_max[0], el_max[1], el_max[2]];
@@ -402,6 +405,8 @@ pub struct Assets {
     /// per block state: the blockstate file applied no model at all
     /// 0 = has a model, 1 = the blockstate file applied no model, 2 = multipart with no matching part (renders nothing, like vanilla)
     pub no_model: Vec<u8>,
+    /// per block state: the blockstate file offers several weighted models (vanilla picks one by position)
+    pub random_variant: Vec<bool>,
 }
 
 impl Assets {
@@ -412,6 +417,7 @@ impl Assets {
         let mut states = Vec::with_capacity(basalt_data::blocks::STATE_COUNT);
         crate::lang::init(jar.files.get("assets/minecraft/lang/en_us.json").map(|v| v.as_slice()));
         let mut no_model = Vec::with_capacity(basalt_data::blocks::STATE_COUNT);
+        let mut random_variant = Vec::with_capacity(basalt_data::blocks::STATE_COUNT);
         let (mut item_models, mut item_tint, mut item_icons): (Vec<Option<u32>>, Vec<Option<u32>>, Vec<Option<String>>) = (Vec::new(), Vec::new(), Vec::new());
         {
             let mut baker = Baker { jar: &jar, raw: HashMap::new(), atlas: &atlas };
@@ -422,7 +428,9 @@ impl Assets {
                 let bs = bs_cache.entry(b.name).or_insert_with(|| jar.json(&format!("assets/minecraft/blockstates/{}.json", b.name)));
                 // collect applied (model, x, y, uvlock)
                 let mut applied: Vec<(String, i32, i32, bool)> = Vec::new();
+                let mut random = false;
                 let mut push = |v: &Value| {
+                    if v.as_array().map(|a| a.len() > 1).unwrap_or(false) { random = true; }
                     let v = if let Some(a) = v.as_array() { &a[0] } else { v };
                     if let Some(m) = v.get("model").and_then(|m| m.as_str()) {
                         applied.push((m.to_string(), v.get("x").and_then(|x| x.as_i64()).unwrap_or(0) as i32, v.get("y").and_then(|x| x.as_i64()).unwrap_or(0) as i32, v.get("uvlock").and_then(|x| x.as_bool()).unwrap_or(false)));
@@ -436,6 +444,7 @@ impl Assets {
                     }
                 }
                 // a multipart state matching no part renders nothing in vanilla either (e.g. an isolated wall without post)
+                random_variant.push(random);
                 no_model.push(if !applied.is_empty() { 0 } else if bs.as_ref().map(|b| b.get("multipart").is_some()).unwrap_or(false) { 2 } else { 1 });
                 let key = format!("{applied:?}");
                 let mi = match cache.get(&key) { Some(i) => *i, None => {
@@ -454,7 +463,8 @@ impl Assets {
                 if b.kind == "fence_gate" && st.get("open") == Some("true") { collides = false; }
                 states.push(StateInfo {
                     model: mi, tint: tint_for(name), occludes: m.occludes, self_cull: m.full_cube && !m.occludes && !name.ends_with("leaves"), collides, fluid, fluid_level: level,
-                    emits_light: matches!(name, "lava" | "glowstone" | "torch" | "wall_torch" | "lantern" | "sea_lantern" | "fire" | "jack_o_lantern" | "shroomlight" | "magma_block"),
+                    emits_light: basalt_world::props::emission(id) > 0, emission: basalt_world::props::emission(id),
+                    ao_occluder: m.full_cube && collides && !(m.full_cube && !m.occludes && !name.ends_with("leaves")),
                 });
             }
             // items: items/<name>.json → a block model (3D icon) or an item model's layer0 texture
@@ -527,7 +537,7 @@ impl Assets {
             water_still: uvrect("block/water_still"), water_flow: uvrect("block/water_flow"), lava_still: uvrect("block/lava_still"),
             grass_map: jar.png("assets/minecraft/textures/colormap/grass.png"), foliage_map: jar.png("assets/minecraft/textures/colormap/foliage.png"),
             font: jar.png("assets/minecraft/textures/font/ascii.png"),
-            atlas, models, states, biome_json, dimension_types, gui, entity_tex, item_icons, item_models, item_tint, no_model,
+            atlas, models, states, biome_json, dimension_types, gui, entity_tex, item_icons, item_models, item_tint, no_model, random_variant,
         })
     }
 

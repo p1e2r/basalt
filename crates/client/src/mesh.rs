@@ -86,34 +86,50 @@ pub fn mesh_block(a: &Assets, biomes: &[Biome], s: &Snapshot, x: i32, y: i32, z:
             }
             let d = DIR_VEC[q.dir as usize];
             let axis = if d[0] != 0 { 0 } else if d[1] != 0 { 1 } else { 2 };
-            let on_boundary = q.cull < 6 && model.full_cube;
             let shade = if q.shade { FACE_SHADE[q.dir as usize] } else { 1.0 };
             let mut vs = [Vertex::default(); 4]; let mut aos = [0u8; 4];
+            // Smooth lighting (verified against the vanilla client with `basalt-check client-mesh`):
+            // the face plane is the neighbour layer when the face lies on the block boundary, else
+            // the block's own layer. Each corner of that unit square averages 4 cells (centre, the
+            // two side cells, the diagonal): AO factor = mean of 0.2 (occluder) / 1.0, sky light =
+            // mean with unlit (0) cells taking the centre's sky value, block light = plain mean.
+            // Vertices interpolate the four corners bilinearly by their position on the face.
+            let smooth = q.ao && info.emission == 0;
+            let (t1, t2) = match axis { 0 => (1, 2), 1 => (0, 2), _ => (0, 1) };
+            let mut corner = [[0f32; 3]; 4]; // [ao factor, sky, block] for (-,-), (+,-), (-,+), (+,+)
+            if smooth {
+                let plane = q.pos[0][axis];
+                let flush = if d[axis] > 0 { plane >= 0.9999 } else { plane <= 0.0001 };
+                let f = if flush { [x + d[0], y + d[1], z + d[2]] } else { [x, y, z] };
+                let fl = s.light[sidx(f[0], f[1], f[2])];
+                for (ci, (c1, c2)) in [(-1, -1), (1, -1), (-1, 1), (1, 1)].into_iter().enumerate() {
+                    let cell = |a1: i32, a2: i32| { let mut c = f; c[t1] += a1; c[t2] += a2; sidx(c[0], c[1], c[2]) };
+                    let (mut ao, mut sky, mut blk) = (0.0f32, 0.0f32, 0.0f32);
+                    for ix in [cell(0, 0), cell(c1, 0), cell(0, c2), cell(c1, c2)] {
+                        ao += if a.info(s.blocks[ix]).ao_occluder { 0.2 } else { 1.0 };
+                        let l = s.light[ix];
+                        sky += if l >> 4 == 0 { (fl >> 4) as f32 } else { (l >> 4) as f32 };
+                        blk += (l & 15) as f32;
+                    }
+                    corner[ci] = [ao / 4.0, sky / 4.0, blk / 4.0];
+                }
+            }
             for i in 0..4 {
                 let p = q.pos[i];
-                let (mut sky, mut blk, mut ao) = (0.0f32, 0.0f32, 0u8);
-                if on_boundary {
-                    // smooth light + ambient occlusion from the 4 cells touching this corner
-                    let (t1, t2) = match axis { 0 => (1, 2), 1 => (0, 2), _ => (0, 1) };
-                    let s1 = if p[t1] > 0.5 { 1 } else { -1 }; let s2 = if p[t2] > 0.5 { 1 } else { -1 };
-                    let b = [x + d[0], y + d[1], z + d[2]];
-                    let cell = |a1: i32, a2: i32| { let mut c = b; c[t1] += a1; c[t2] += a2; sidx(c[0], c[1], c[2]) };
-                    let (i0, i1, i2, i3) = (cell(0, 0), cell(s1, 0), cell(0, s2), cell(s1, s2));
-                    let o1 = a.info(s.blocks[i1]).occludes; let o2 = a.info(s.blocks[i2]).occludes; let o3 = a.info(s.blocks[i3]).occludes;
-                    ao = if o1 && o2 { 3 } else { o1 as u8 + o2 as u8 + o3 as u8 };
-                    let mut n = 0.0;
-                    for (ci, occ) in [(i0, false), (i1, o1), (i2, o2), (i3, o3 || (o1 && o2))] {
-                        if !occ { let l = s.light[ci]; sky += (l >> 4) as f32; blk += (l & 15) as f32; n += 1.0; }
-                    }
-                    sky /= n; blk /= n;
+                let (sky, mut blk, aof);
+                if smooth {
+                    let u = p[t1].clamp(0.0, 1.0); let v = p[t2].clamp(0.0, 1.0);
+                    let w = [(1.0 - u) * (1.0 - v), u * (1.0 - v), (1.0 - u) * v, u * v];
+                    let mix = |k: usize| corner.iter().zip(w).map(|(c, w)| c[k] * w).sum::<f32>();
+                    aof = mix(0); sky = mix(1); blk = mix(2);
                 } else {
-                    let l = if q.cull < 6 { let l = s.light[sidx(x + d[0], y + d[1], z + d[2])]; if l == 0 { own_light } else { l } } else { own_light };
-                    sky = (l >> 4) as f32; blk = (l & 15) as f32;
+                    let l = if q.cull < 6 { s.light[sidx(x + d[0], y + d[1], z + d[2])] } else { own_light };
+                    sky = (l >> 4) as f32; blk = (l & 15) as f32; aof = 1.0;
                 }
-                if info.emits_light { blk = 15.0; }
-                let br = shade * (1.0 - ao as f32 * 0.18);
+                blk = blk.max(info.emission as f32);
+                let br = shade * aof;
                 let t = if q.tinted { tint } else { [1.0; 3] };
-                aos[i] = ao;
+                aos[i] = ((1.0 - aof) * 10.0) as u8;
                 vs[i] = Vertex {
                     pos: [base[0] + p[0], base[1] + p[1], base[2] + p[2]], uv: q.uv[i],
                     color: [(t[0] * br * 255.0) as u8, (t[1] * br * 255.0) as u8, (t[2] * br * 255.0) as u8, 255],
