@@ -39,7 +39,8 @@ impl Game {
                 match self.bes.get(&pos) {
                     Some(b) => {
                         let items: serde_json::Map<_, _> = b.items.iter().enumerate().filter(|(_, s)| s.count > 0).map(|(i, s)| (i.to_string(), json!([reg::ITEM.get(s.item as usize).copied().unwrap_or("?"), s.count, s.damage]))).collect();
-                        let j = json!({ "kind": b.kind.name(), "items": items, "lit": b.lit, "lit_total": b.lit_total, "cook": b.cook, "cook_total": b.cook_total, "used": b.used, "viewers": b.viewers.len() });
+                        let potions: serde_json::Map<_, _> = b.items.iter().enumerate().filter(|(_, s)| s.count > 0 && s.ench.potion != 0).map(|(i, s)| (i.to_string(), json!(reg::POTION.get(s.ench.potion as usize - 1).copied().unwrap_or("?")))).collect();
+                        let j = json!({ "kind": b.kind.name(), "items": items, "potions": potions, "brew": b.brew, "fuel": b.fuel, "lit": b.lit, "lit_total": b.lit_total, "cook": b.cook, "cook_total": b.cook_total, "used": b.used, "viewers": b.viewers.len() });
                         reply(self, format!("BASALT_CONTAINER {j}"));
                     }
                     None => reply(self, "BASALT_CONTAINER null".into()),

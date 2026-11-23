@@ -28,7 +28,7 @@ pub enum Meta { Byte(u8), Int(i32), Float(f32), Bool(bool), Item(ItemStack), Oth
 
 #[allow(dead_code)] // some decoded fields are kept for debugging / future use
 pub enum Event {
-    Registries { biomes: Vec<String>, dimension_types: Vec<String> },
+    Registries { biomes: Vec<String>, dimension_types: Vec<String>, enchantments: Vec<String> },
     Login { entity_id: i32, dimension_type: i32, dimension: String, gamemode: u8 },
     Respawn { dimension_type: i32, dimension: String, gamemode: u8 },
     Chunk { cx: i32, cz: i32, raw: Vec<u8> },
@@ -118,7 +118,7 @@ async fn run(opts: Options, tx: Sender<Event>, mut out: UnboundedReceiver<Vec<u8
         let mut w = Writer::with_id(ids::configuration::serverbound::CUSTOM_PAYLOAD); w.str("minecraft:brand").str("basalt"); c.send(&w).await?;
         let mut w = Writer::with_id(ids::configuration::serverbound::CLIENT_INFORMATION);
         w.str("en_us").i8(opts.view_distance).varint(0).bool(true).u8(0x7f).varint(1).bool(false).bool(true).varint(0); c.send(&w).await?;
-        let (mut biomes, mut dims) = (Vec::new(), Vec::new());
+        let (mut biomes, mut dims, mut enchs) = (Vec::new(), Vec::new(), Vec::new());
         loop {
             let f = c.read().await?; let mut r = f.reader();
             use ids::configuration::clientbound as cc; use ids::configuration::serverbound as cs;
@@ -127,7 +127,7 @@ async fn run(opts: Options, tx: Sender<Event>, mut out: UnboundedReceiver<Vec<u8
                 cc::REGISTRY_DATA => {
                     let reg = r.str()?; let n = r.varint()?; let mut names = Vec::new();
                     for _ in 0..n { names.push(r.str()?); if r.bool()? { r.nbt()?; } }
-                    match reg.as_str() { "minecraft:worldgen/biome" => biomes = names, "minecraft:dimension_type" => dims = names, _ => {} }
+                    match reg.as_str() { "minecraft:worldgen/biome" => biomes = names, "minecraft:dimension_type" => dims = names, "minecraft:enchantment" => enchs = names, _ => {} }
                 }
                 cc::KEEP_ALIVE => { let v = r.i64()?; let mut w = Writer::with_id(cs::KEEP_ALIVE); w.i64(v); c.send(&w).await?; }
                 cc::PING => { let v = r.i32()?; let mut w = Writer::with_id(cs::PONG); w.i32(v); c.send(&w).await?; }
@@ -136,7 +136,7 @@ async fn run(opts: Options, tx: Sender<Event>, mut out: UnboundedReceiver<Vec<u8
                 _ => {}
             }
         }
-        tx.send(Event::Registries { biomes, dimension_types: dims }).ok();
+        tx.send(Event::Registries { biomes, dimension_types: dims, enchantments: enchs }).ok();
 
         // ---- play ----
         loop {

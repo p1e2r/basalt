@@ -14,7 +14,7 @@ impl Ingredient {
         self.0.contains(&item)
     }
 
-    fn parse(v: &Value, tags: &Tags) -> Option<Ingredient> {
+    pub(crate) fn parse(v: &Value, tags: &Tags) -> Option<Ingredient> {
         let mut set = HashSet::new();
         fn add(v: &Value, tags: &Tags, set: &mut HashSet<i32>) {
             match v {

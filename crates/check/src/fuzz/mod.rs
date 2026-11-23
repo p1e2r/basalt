@@ -322,6 +322,10 @@ pub fn stack_str(s: &crate::proto::Stack) -> String {
     let mut r = format!("{}*{}", s.name(), s.count);
     if s.damage != 0 { r += &format!("~{}", s.damage); }
     if !s.ench.is_empty() { r += &format!("+e{:?}", s.ench); }
+    if s.repair != 0 { r += &format!("+rc{}", s.repair); }
+    if !s.name.is_empty() { r += &format!("+n{}", s.name); }
+    if s.potion >= 0 { r += &format!("+p{}", s.potion); }
+    if s.trim.0 != 0 { r += &format!("+t{:?}", s.trim); }
     r
 }
 

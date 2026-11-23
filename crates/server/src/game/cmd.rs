@@ -527,27 +527,17 @@ impl Game {
                     });
                 }
                 let ids = Self::players_of(&targets);
+                let mut proto = Stack {
+                    item,
+                    count,
+                    damage: 0,
+                    ench: NO_ENCH,
+                };
+                self.apply_components(item_raw, &mut proto);
                 for &e in &ids {
-                    let left = self.give_stack(
-                        e,
-                        Stack {
-                            item,
-                            count,
-                            damage: 0,
-                            ench: NO_ENCH,
-                        },
-                    );
+                    let left = self.give_stack(e, proto);
                     if left > 0 {
-                        self.throw_item(
-                            e,
-                            Stack {
-                                item,
-                                count: left,
-                                damage: 0,
-                                ench: NO_ENCH,
-                            },
-                            false,
-                        );
+                        self.throw_item(e, Stack { count: left, ..proto }, false);
                     }
                 }
                 let comp = tr("chat.square_brackets", vec![item_name(item)]);
