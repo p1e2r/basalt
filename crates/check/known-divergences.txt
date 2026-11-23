@@ -28,6 +28,3 @@ place target-changed/ladder
 place target-changed/door
 place neighbor/door
 place neighbor/banner
-# structures (tools/structure-parity.sh): seed 12345 has 4 mineshaft starts (lush caves / frozen peaks columns) that vanilla
-# rejects although the biome check passes; mineshaft pieces are not generated yet
-structures mineshaft

@@ -547,11 +547,10 @@ server jar (tools/structure-world.sh, cached in vanilla/structures/) and `/locat
   vanilla sample: 0 of 12 located huts of seed 42 face south). Four oak-log legs (1,1) (6,1) (1,5) (6,5) go down from y-1
   while the block is air or water. Hut interior air only inside the walls; the rest of the box keeps terrain/vegetation.
   Blocks 97.7-100 % (rest: mushrooms/grass decoration drift). Witch and cat entities not spawned.
-- Not modelled: procedural structures (strongholds, monuments, mansions: placement only, no pieces), the encapsulate
-  (trial chambers) and bury (trail ruins, strongholds) adaptations, ocean-ruin clusters and warm ruins' integrity,
+- Not modelled: woodland mansions (no start, no pieces), the encapsulate (trial chambers) and bury (trail ruins,
+  strongholds) adaptations, ocean-ruin clusters and warm ruins' integrity,
   ruined-portal processors (netherrack, lava, moss), the capped processor, block entities (chest loot) and template
-  entities (villagers, golems), ancient-city sculk. Unexplained: 4 of 29 seed-12345 mineshaft starts that vanilla rejects
-  (lush caves / frozen peaks, biome passes), 1 of 31 desert pyramid candidates (seed 12345 chunk -234,-281: corners above
+  entities (villagers, golems), ancient-city sculk. Unexplained: 1 of 31 desert pyramid candidates (seed 12345 chunk -234,-281: corners above
   sea level, but the middle of one edge is under water; only "a corner at or below sea level rejects" is modelled, 30/31).
 
 ### Desert pyramids and jungle temples (M3c, 2026-11-24) — crates/worldgen/src/structure/temple.rs
@@ -599,8 +598,14 @@ random = large-feature random after the frequency `nextDouble`):
 - Crossing children: N, S, W, E minus the side it was entered from, at y0; if two floors: N, W, E, S (all four) with
   `nextBool()` each at y0 + 4. Stairs: one child straight on at the bottom.
 - Vertical: normal = top j = (ymax - ymin + 2) + minY(-64); if j < sea - 10: j += nextInt(sea - 10 - j); move by j - ymax
-  (53/53). Mesa: vanilla bottoms 55..87 / tops 79..113 (10 samples); no rule on the start random, the room or the surface
-  height fitted, Basalt draws the bottom uniformly from 55..87 (statistical).
+  (53/53). Mesa: vanilla bottoms 55..89 / tops 79..113 (18 samples, seeds 12345 / 42 / 2); no rule fitted: tried
+  bottom/top = A + nextInt(B [- height]) and A + nextInt(surface + C - A [- height]) on each of the next 3 draws after the
+  pieces (best 5/18), the room or surface height alone; Basalt draws the bottom uniformly from 55..87 (statistical).
+- Biome check (`has_structure/mineshaft`): at the centre of the room box after the vertical move (BBox centre = min +
+  size / 2). The 4 seed-12345 starts vanilla drops have their room in deep_dark (the old (8, 50, 8) check passed them);
+  now 17/17, 10/10, 26/26 starts on the 64 x 64 sites of seeds 12345 / 42 / 1. Mesa: still at y 50 (its y is not
+  reproduced); seed 2 chunk 217,45 is a normal mineshaft in vanilla but mesa in Basalt (vanilla's mesa check fails at
+  its own y).
 - Placement (measured per cell in the piece frames, 1015 placed corridors): a piece is left out of a chunk when its box holds
   water or lava inside that chunk (a corridor carved in one chunk and missing in the next), or when the biome at the centre
   of its box part in the chunk is in `#mineshaft_blocking` (deep dark: whole areas of vanilla mineshafts are missing,
@@ -614,6 +619,62 @@ random = large-feature random after the frequency `nextDouble`):
   ~13 % of ceiling cells vanilla leaves solid), torches, hanging chains, chest minecarts (entities), spawner block entity.
 - Block parity in the vanilla piece boxes (examples/structures compare, ONLY=mineshaft, first 120 chunks): seed 12345
   90.1 %, 42 88.5 %, 1 89.2 % (terrain alone 27-31 %); mesa 15.8 / 49.7 % (the y is not reproduced).
+
+### Strongholds (M3c, 2026-11-24) — crates/worldgen/src/structure/stronghold.rs, mod.rs (rings)
+Measured with `/locate structure stronghold` on vanilla servers (seeds 12345 / 42: a 1200-block grid of
+`execute positioned X 0 Z run locate ...` out to 30 000 finds all 128) and the pieces saved in vanilla worlds at 48 ring
+positions of seed 12345 (tools/structure-sites.sh 12345 strongholds 1 ..., `structures json` + `shdump` + a diff script).
+- Concentric rings (structure_set distance 32, spread 3, count 128): JavaRandom(world seed); angle = nextDouble * 2pi;
+  per stronghold distance (chunks) = 4 d + 6 d ring + (nextDouble - 0.5) * 2.5 d, chunk = round(cos/sin * distance), then
+  one nextLong seeds the biome search's own JavaRandom; angle += 2pi / spread; after `spread` strongholds: ring + 1,
+  spread += 2 spread / (ring + 1), spread = min(spread, count - index), angle += nextDouble * 2pi (rings 3, 6, 10, 15, 21,
+  28, 36, 9 of 10). Biome search: every 4 blocks within 112 of the chunk middle (z outer, x inner) at y 0, biomes of
+  `preferred_biomes`; a uniformly random hit (k-th hit taken if nextInt(k) == 0 after the first); none = the chunk
+  itself. Result 123/128 (seed 12345) and 122/128 (42) exact, the others one chunk off in x: the neighbouring cell in
+  the search order, i.e. one biome cell at y 0 differs earlier in the search. `/locate`: the nearest ring chunk
+  (corner), any distance. m3_locate_structure checks it.
+- Pieces (48/48 strongholds, 7750/7750 pieces: type, box, `O`, depth, saved order exact): start random = large-feature
+  random; start `shstart` (5 x 11 x 5 at chunk corner + 2, y 64, `O` = (N, E, S, W)[nextInt(4)]) imposes a five-way
+  crossing as its child. Pending pieces are taken in random order (`pending.remove(nextInt(size))`), each adds its
+  children at once. A child at (x, y, z) facing o: none if depth > 50 or more than 112 blocks (x or z) from the start;
+  else up to 5 weighted tries over (type, weight, limit): straight 40, prison 5/5, left turn 20, right turn 20, room
+  crossing 10/6, straight stairs 5/5, spiral stairs 5/5, five crossing 5/4, chest corridor 5/4, library 10/2 (depth > 4),
+  portal room 20/1 (depth > 5); a try stops on a type that cannot be placed or is the previous type; a type reaching its
+  limit leaves the table; no tries left when all limited types are used up. Box = orientBox(entry, offsets, size, o)
+  (offsets x/y: corridors / turns / chest / prison -1/-1, room crossing / library / portal -4/-1, five crossing -4/-3,
+  stairs -1/-7; sizes 5x5x7, 5x5x5, 11x7x11, 14x11x15 (or 14x6x15 when the tall one collides), 11x8x16, 10x9x11,
+  5x11x8, 5x11x5, 9x5x11); rejected if its floor <= 10 or it intersects a piece. Draws at creation: entry door
+  nextInt(5) (2 wood, 3 grates, 4 iron, else opening) after the box check, then straight: Left = nextInt(2) == 0, Right
+  likewise; room crossing Type = nextInt(5); five crossing nextBool x3 + nextInt(3) > 0. No try fits: a filler corridor
+  if a 4-long box hits a piece at the same floor: one longer than the longest of 2, 1 that is clear (2 or 3).
+- Exits (world offsets from the box minimum, for all `O`): forward (ox, oy) = beyond the far end at min + ox across;
+  left (oy, oz) = west side (N/S) or north side (E/W) at min + oz along, right = east / south. Straight forward (1,1),
+  side doors (1, 2); turns one side (1,1) (left turn: left for N/E, right for S/W; right turn the opposite); room
+  crossing forward (4,1), left/right (1,4); five crossing forward (5,1) and low (y 3 for S/E, 5 for N/W, z 1) / high
+  (5 / 3, z 7) side doors by its four flags; stairs, chest corridor, prison forward (1,1).
+- No portal room: generated again with the start random re-seeded by setLargeFeatureSeed(world seed + attempt, cx, cz)
+  (1 of 48). Then moved down like a normal mineshaft (top = height + 1 - 64 + nextInt(53 - that)).
+- Blocks: measured majority layouts per piece type in the piece frame (`structures pcells` on 3 full strongholds,
+  stronghold_layout.rs), cells that depend on one piece field (door, side doors, room type, tall, `O` 2/3) separately;
+  random stone bricks (plain 48.6 %, mossy 28.3 %, cracked 18.5 %, infested 4.6 %) drawn statistically, not in vanilla's
+  order. Block-exact inside the vanilla boxes 61-63 % (symbolic layout match 96-99 % per piece type; the bricks are the
+  rest). Not reproduced: chests' loot, the spawner block entity, end portal eyes, the bury adaptation.
+
+### Ocean monuments (M3c, 2026-11-24) — crates/worldgen/src/structure/monument.rs
+- Placement = the structure_set (random_spread 32/5 triangular) + the biome check at the chunk middle: `/locate` 6/6
+  vanilla, 40/40 Basalt starts of seed 12345 have a vanilla monument (sites 1 chunk around each).
+- Saved: one piece `omb`, box (chunk x16 - 29, sea - 24, chunk z16 - 29) + 57 / 22 / 57, `O` = (N, E, S, W)[first
+  nextInt(4)] (40/40). The rooms are not saved (vanilla re-derives them).
+- Blocks: majority layout of 16 monuments (sites 3 chunks around, `pcells`; cells where vanilla equals Basalt's
+  structure-free terrain in most instances are left alone), monument_layout.rs, run-length encoded. 92.5 % block-exact
+  in-sample (72-97 % per monument), 88.9 % on 24 other monuments; the interior rooms vary (room graph not fitted).
+  No elder guardians / guardians, no sponge rooms per monument.
+
+### Woodland mansions (not done)
+- `/locate` measured on seeds 42 (28 mansions within 20 000 + 30 candidates queried in place) and 12345 (27 candidates):
+  the start draws a rotation `nextInt(4)` first; a biome check at the chunk corner + the rotated (7, 7) / (7, 8) at the
+  surface agrees with 28-29 of 30 (seed 42) but only 22 of 27 (seed 12345) candidates; corner-height minimums (WG
+  surface / ocean floor, 5..32 blocks, >= 60) did not explain the rest. Not enabled (no start, no pieces).
 
 ### Terrain adaptation (M3c, 2026-11-24) — fitted empirically, crates/worldgen/src/structure/adapt.rs
 Method: the same seed/site generated twice by the official server jar (tools/structure-world.sh, `NO_STRUCTURES=1` =

@@ -825,13 +825,16 @@ impl Generator {
             }
             Kind::Mineshaft { mesa } => {
                 r.next_double();
+                // Biome check at the centre of the room after the vertical move (measured: the 4
+                // seed-12345 starts vanilla drops have their room in deep_dark, 21/21 then).
+                let pieces = mineshaft::mineshaft(self, *mesa, cx, cz, r);
+                let b = pieces[0].bb;
+                let c = |i: usize| b.min[i] + (b.max[i] - b.min[i] + 1) / 2;
+                // mesa: the y is not reproduced (mineshaft.rs), checked at y 50 instead
+                let y = if *mesa { 50 } else { c(1) };
                 Some(Stub {
-                    pos: [mx, 50, mz],
-                    pieces: if full {
-                        mineshaft::mineshaft(self, *mesa, cx, cz, r)
-                    } else {
-                        Vec::new()
-                    },
+                    pos: [c(0), y, c(2)],
+                    pieces: if full { pieces } else { Vec::new() },
                 })
             }
             Kind::Monument => {
@@ -847,50 +850,8 @@ impl Generator {
                     }],
                 })
             }
-            Kind::Mansion => {
-                if std::env::var_os("MANSION_EXP").is_none() {
-                    return None;
-                }
-                let rot = r.next_int_bounded(4);
-                let e = |k: &str, d: i32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
-                let (a, b) = (e("MA", 7), e("MB", 7));
-                let (ox, oz) = match rot {
-                    0 => (a, b),
-                    1 => (-b, a),
-                    2 => (-a, -b),
-                    _ => (b, -a),
-                };
-                let (x, z) = (cx * 16 + ox, cz * 16 + oz);
-                let y = self.first_free(x, z, false) + e("MY", 0);
-                let span = e("MS", 0);
-                if span > 0 {
-                    let (bx, bz) = (cx * 16 + e("MC", 7), cz * 16 + e("MC", 7));
-                    let rotp = |a: i32, b: i32| match rot {
-                        0 => (a, b),
-                        1 => (-b, a),
-                        2 => (-a, -b),
-                        _ => (b, -a),
-                    };
-                    let low = [(0, 0), (span, 0), (0, span), (span, span)]
-                        .iter()
-                        .map(|&(a, b)| {
-                            let (dx, dz) = rotp(a, b);
-                            self.first_free(bx + dx, bz + dz, e("MF", 1) == 1)
-                        })
-                        .min()
-                        .unwrap();
-                    if low < e("ML", 60) {
-                        return None;
-                    }
-                }
-                if std::env::var_os("MANSION_DBG").is_some() {
-                    eprintln!("mansion {cx} {cz} rot {rot} y {y}");
-                }
-                Some(Stub {
-                    pos: [x, y, z],
-                    pieces: Vec::new(),
-                })
-            }
+            // Woodland mansions: start rule not fitted (NOTES.md "Woodland mansions").
+            Kind::Mansion => None,
             Kind::Stronghold => Some(Stub {
                 pos: [mx, 0, mz],
                 pieces: if full {
@@ -1260,5 +1221,16 @@ mod tests {
         assert_eq!(bb(dp.pieces[0].bb), [-3584, 63, -5008, -3564, 77, -4988]);
         let jp = find(-95, 2, "jungle_pyramid").expect("jungle temple");
         assert_eq!(bb(jp.pieces[0].bb), [-1520, 68, 32, -1506, 77, 43]);
+        // NOTES.md "Strongholds" / "Ocean monuments"
+        let sh = find(-35, -103, "stronghold").expect("stronghold -35,-103");
+        assert_eq!(sh.pieces.len(), 225);
+        assert_eq!(bb(sh.pieces[0].bb), [-558, 12, -1646, -554, 22, -1642]);
+        assert_eq!(bb(sh.pieces[1].bb), [-561, 10, -1657, -552, 18, -1647]);
+        let sh = find(-105, 124, "stronghold").expect("stronghold -105,124 (second attempt)");
+        assert_eq!(sh.pieces.len(), 115);
+        let om = find(38, -115, "monument").expect("monument 38,-115");
+        assert_eq!(bb(om.pieces[0].bb), [579, 39, -1869, 636, 61, -1812]);
+        assert_eq!(g.locate("stronghold", 0, 0, 100), Some((-560, -1648)));
+        assert_eq!(g.locate("monument", 0, 0, 100), Some((1760, -1360)));
     }
 }
