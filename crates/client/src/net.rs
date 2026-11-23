@@ -206,7 +206,7 @@ fn read_meta(r: &mut Reader) -> Result<Vec<(u8, Meta)>> {
             11 => { if r.bool()? { r.i64()?; } Meta::Other }
             12 => Meta::Int(r.varint()?),
             13 => { if r.bool()? { r.uuid()?; } Meta::Other }
-            14 | 15 => Meta::Int(r.varint()?),
+            14 | 15 | 20 => Meta::Int(r.varint()?),
             // unknown serializer: the rest of the list can't be skipped safely
             _ => break,
         };

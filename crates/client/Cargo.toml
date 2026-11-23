@@ -24,6 +24,16 @@ png = "0.17"
 bytemuck = { version = "1", features = ["derive"] }
 glam = "0.29"
 pollster = "0.3"
+serde.workspace = true
+# pure-Rust Ogg Vorbis decoder for the launcher asset store sounds
+lewton = "0.10"
+
+# audio output: on by default on macOS/Windows; on Linux behind `--features audio` (needs ALSA headers)
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+rodio = { version = "0.20", default-features = false }
+[target.'cfg(not(any(target_os = "macos", target_os = "windows")))'.dependencies]
+rodio = { version = "0.20", default-features = false, optional = true }
 
 [features]
 wayland = ["winit/wayland"]
+audio = ["dep:rodio"]

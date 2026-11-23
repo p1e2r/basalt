@@ -39,6 +39,9 @@ pub struct Gpu {
     pub sections: HashMap<(i32, i32, i32), SectionGpu>,
 }
 
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Tex { Ui, Blocks, Entities }
+
 pub struct Frame<'a> {
     pub uniforms: Uniforms,
     pub cam: Vec3,
@@ -46,13 +49,16 @@ pub struct Frame<'a> {
     pub render_dist: f32,
     /// world y of section index 0 (section keys are (cx, index, cz))
     pub min_y: f32,
-    /// world-space extras drawn with the opaque pipeline (white texture): outlines
+    /// world-space extras drawn with the opaque pipeline (block atlas): outlines, fallback boxes
     pub extra: &'a MeshData,
-    /// player models drawn with the skin texture
+    /// entity models drawn with the entity texture atlas (cutout)
     pub skinned: &'a MeshData,
-    /// UI vertices using the UI atlas, then ones using the block atlas (item icons)
-    pub ui: &'a MeshData,
-    pub ui_items: &'a MeshData,
+    /// dropped items etc. in the block atlas (cutout)
+    pub items3d: &'a MeshData,
+    /// block-breaking cracks (block atlas, alpha blended)
+    pub overlay: &'a MeshData,
+    /// 2D layers drawn in order, each with its texture
+    pub ui_layers: &'a [(MeshData, Tex)],
 }
 
 fn make_depth(device: &wgpu::Device, w: u32, h: u32) -> wgpu::TextureView {
@@ -165,7 +171,8 @@ impl Gpu {
             vis.push((c.length_squared(), s));
         }
         vis.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-        let extra = self.upload(f.extra); let skinned = self.upload(f.skinned); let ui = self.upload(f.ui); let ui_items = self.upload(f.ui_items);
+        let extra = self.upload(f.extra); let skinned = self.upload(f.skinned); let items3d = self.upload(f.items3d); let overlay = self.upload(f.overlay);
+        let layers: Vec<(Option<GpuMesh>, Tex)> = f.ui_layers.iter().map(|(m, t)| (self.upload(m), *t)).collect();
         let mut enc = self.device.create_command_encoder(&Default::default());
         {
             let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: None,
@@ -182,11 +189,16 @@ impl Gpu {
             if let Some(m) = &skinned { rp.set_pipeline(&self.p_cutout); rp.set_bind_group(1, &self.skin_bind, &[]); draw_mesh(&mut rp, m); rp.set_bind_group(1, &self.atlas_bind, &[]); }
             rp.set_pipeline(&self.p_cutout);
             for (_, s) in &vis { if let Some(m) = &s.layers[1] { draw_mesh(&mut rp, m); } }
+            if let Some(m) = &items3d { draw_mesh(&mut rp, m); }
+            if let Some(m) = &overlay { rp.set_pipeline(&self.p_trans); draw_mesh(&mut rp, m); }
             rp.set_pipeline(&self.p_trans);
             for (_, s) in vis.iter().rev() { if let Some(m) = &s.layers[2] { draw_mesh(&mut rp, m); } }
             rp.set_pipeline(&self.p_ui);
-            if let Some(m) = &ui { rp.set_bind_group(1, &self.ui_bind, &[]); draw_mesh(&mut rp, m); }
-            if let Some(m) = &ui_items { rp.set_bind_group(1, &self.atlas_bind, &[]); draw_mesh(&mut rp, m); }
+            for (m, t) in &layers {
+                let Some(m) = m else { continue };
+                rp.set_bind_group(1, match t { Tex::Ui => &self.ui_bind, Tex::Blocks => &self.atlas_bind, Tex::Entities => &self.skin_bind }, &[]);
+                draw_mesh(&mut rp, m);
+            }
         }
         self.queue.submit([enc.finish()]);
     }
@@ -205,7 +217,10 @@ impl Gpu {
     }
 
     /// Render offscreen and write a PNG.
-    pub fn screenshot(&mut self, f: &Frame, path: &str) -> Result<()> {
+    pub fn screenshot(&mut self, f: &Frame, path: &str) -> Result<()> { let rgb = self.capture(f)?; save_png(path, self.size.0, self.size.1, &rgb) }
+
+    /// Render offscreen and read back the frame as tightly packed RGB.
+    pub fn capture(&mut self, f: &Frame) -> Result<Vec<u8>> {
         let (w, h) = self.size;
         let owned;
         let tex = match &self.offscreen { Some(t) => t, None => {
@@ -227,11 +242,16 @@ impl Gpu {
         let bgra = matches!(self.format, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb);
         let mut out = Vec::with_capacity((w * h * 3) as usize);
         for y in 0..h { for x in 0..w { let i = (y * bpr + x * 4) as usize; if bgra { out.extend_from_slice(&[data[i + 2], data[i + 1], data[i]]); } else { out.extend_from_slice(&data[i..i + 3]); } } }
-        let mut e = png::Encoder::new(std::io::BufWriter::new(std::fs::File::create(path)?), w, h);
-        e.set_color(png::ColorType::Rgb); e.set_depth(png::BitDepth::Eight);
-        e.write_header()?.write_image_data(&out)?;
-        Ok(())
+        drop(data); buf.unmap();
+        Ok(out)
     }
+}
+
+pub fn save_png(path: &str, w: u32, h: u32, rgb: &[u8]) -> Result<()> {
+    let mut e = png::Encoder::new(std::io::BufWriter::new(std::fs::File::create(path)?), w, h);
+    e.set_color(png::ColorType::Rgb); e.set_depth(png::BitDepth::Eight);
+    e.write_header()?.write_image_data(rgb)?;
+    Ok(())
 }
 
 fn frustum_planes(vp: &Mat4) -> [glam::Vec4; 5] {
