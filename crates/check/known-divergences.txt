@@ -12,6 +12,7 @@ commands outcome/summon/vanilla-ok-vs-basalt-fail
 commands outcome/setblock/vanilla-fail-vs-basalt-ok
 commands outcome/setblock/vanilla-ok-vs-basalt-fail
 commands outcome/fill/vanilla-ok-vs-basalt-fail
+commands outcome/fill/vanilla-fail-vs-basalt-ok
 place placed/door/extra
 place placed/wall/prop
 place neighbor/other
