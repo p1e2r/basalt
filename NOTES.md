@@ -263,3 +263,60 @@ real server/client over the wire.
   a darkened sky with a black horizon band. Basalt always sent isFlat=false, so a `--flat` world (players at y=-59) looked
   dusky/black in the real client. Now `--flat` sends isFlat=true. Generated worlds were never affected (noon sky matched
   vanilla). Ruled out along the way: registry order, update_tags, set_time layout, weather events, login fields.
+
+## Randomized differential harnesses (crates/check/src/fuzz, tools/pr_ready.sh)
+- Run: `basalt-check --fuzz clicks|commands|dig|place|worldgen [--cases N] [--seed S] [--long] [--replay FILE] [--jobs N]`.
+  Cases are generated from (seed, n) with a per-case splitmix64 stream, recorded as JSONL in
+  `target/check/cases/<harness>/<seed>-<n>.jsonl` (per-server results next to them as `.vanilla/.basalt.results.jsonl`,
+  failing cases only as `.fail.jsonl`), and replay exactly with `--replay`. Output: mismatch classes with the 3 smallest
+  inputs each, and `RESULT fuzz=<id> cases= mismatches= new= info= errors= skipped=`. `new` counts mismatch classes not listed
+  in `crates/check/known-divergences.txt` (`<harness> <class>`); `info` classes (packet-level diffs, key-name diffs) never fail.
+- Result cache + selective runs: `basalt-check --affected [--base REF]` / `--list-affected` / `--no-cache`; every harness declares
+  the paths it can be affected by in `crates/check/src/harness.rs` (globs). Cache key = harness + seed + n + content hash of the
+  declared paths + data version + vanilla on/off; only passes are cached (`target/check/cache.json`).
+- Vanilla behaviours learned while building these (all observed, not read from code):
+  - Chat commands run on an async chain: a command sent right after a container packet can overtake it or lag behind it. Use
+    a `list` barrier (`fuzz::barrier`) between "set up with commands" and "act with packets".
+  - Container clicks: vanilla answers with *incremental* container_set_slot/set_cursor_item for exactly the changed slots (a click
+    that changes nothing sends nothing); Basalt resends set_content for the whole window on every click (info class
+    `packets/full-content-vs-incremental`). A client that lost track resyncs by sending a click with a stale state id: vanilla then
+    answers with set_content. The harness uses that to start every case from a known view.
+  - Vanilla's /clear also clears the carried item and the 2x2 grid; /give fills hotbar 36..44 first, then 9..35.
+  - Shift-click in a crafting table moves inventory stacks into the 3x3 grid first (slots 1-9), then between hotbar and main.
+  - Dig acceptance: after `start_destroy`, vanilla accepts `stop_destroy` after about `ceil(0.7*T)-1` server ticks, where T is the
+    break time computed from the *server's* view of the player: the client's on_ground flag is ignored (a frozen bot claiming
+    on_ground=false breaks at the on-ground speed; Basalt takes the flag and applies the /5 penalty). Basalt's rule is
+    `0.7*T - 6` ticks. In water (eye in water) the /5 penalty applies in both.
+  - Command errors arrive as two system chat lines: the error (translation key) and a `command.context.here` line echoing the input.
+    Incomplete commands (`/gamemode`) answer `command.unknown.command`; wrong trailing/bad-typed args `command.unknown.argument`
+    or the specific `argument.*`/`parsing.*` key. `/setblock` that changes nothing fails (`commands.setblock.failed`); `/kill` with
+    no match fails (`argument.entity.notfound.entity`); `/time set` takes time units (`368t`, `1d`) and marker names.
+  - Placement: a click on a replaceable block (grass, snow layers < full, water) places into it; waterlogging is applied for
+    slabs/stairs/fences into water; neighbours re-derive connection state (fence/wall/pane/bars) on placement.
+- **Divergences found by the first fuzz run (seed 1, default sizes; all listed in known-divergences.txt):**
+  - clicks: only `state/table/mode1` — shift-click in a crafting table from the inventory part must go to the grid first
+    (crates/server/src/game/inv.rs). Everything else (modes 0-6, drags, number keys, double-click, drops, 2x2 grid) matches in
+    final state; packet streams differ everywhere (info): Basalt resends set_content per click, vanilla sends only changed slots.
+  - commands (172/500 outcome classes differ, crates/server/src/game.rs `command`): no argument-count/type validation (extra args,
+    `weather rain ` with empty duration, `give @s stone 1 2`, `tp ~ ~ ~ 90`, `save-all foo`, `list foo` all succeed); no selector
+    parsing (`@s[`, `@x`, `@e[type=foo]`, `kill @e[...]` with no match must fail with argument.entity.notfound.entity); aliases and
+    shorthands vanilla rejects (`gamemode 1`, `gamemode s`, bare `enchant sharpness`); missing: `tp @s`/`tp @s @s` (entity
+    targets), time units (`368t`, `1d`), `/summon armor_stand|villager`, `setblock` of the same block must fail
+    (commands.setblock.failed), `effect clear` with no effects must fail, `help foo` must fail, `/kill` on creative players works in
+    vanilla. All replies are English (key table: fuzz/commands.rs `basalt_key`; unmapped ones are `key-unmapped/*` info classes).
+    FIXED here: `/tp` accepted NaN/inf/huge coordinates and the next move packet got the player kicked ("invalid position").
+  - dig (crates/server/src/game.rs `dig`, crates/game/src/{hardness,lib}.rs): acceptance is `0.7*T-6` ticks in Basalt vs
+    `ceil(0.7*T)-1` in vanilla (too early by ~5 ticks for T>20); on_ground comes from the client flag (vanilla: server-side), so
+    airborne spoofing changes Basalt's break time; wrong break times for specific block/tool pairs (gravel/netherrack by hand,
+    axe on stripped logs, quartz pillar with iron pickaxe: hardness or tool-speed tables differ from vanilla 26.2).
+  - place (crates/server/src/game.rs placement): no second halves (doors, beds), no neighbour shape updates (fence/wall/pane/bars
+    connections, stairs shape), no support/survival checks (torches, carpets, signs, pressure plates, plants, candles, lanterns pop
+    or are refused in vanilla), no replaceable-target rule (grass/snow), no waterlogging, facing for dispensers/droppers/barrels/
+    anvils/buttons/skulls/banners/signs uses the wrong axis, interactive targets (chest, slab? no: chest/hopper/shulker/door) must
+    open a screen / toggle instead of placing when not sneaking.
+  - worldgen parity (tools/parity.sh, 6 seeds x 5 sites): seed 42 site 2,-3,2 features 98.22 and seed 2026 site 0,0,3 shape 98.99
+    are under the thresholds (crates/worldgen).
+  - repo hygiene found along the way: `cargo clippy` has a deny-level error in crates/client/src/scenario.rs (`erasing_op`), so it
+    cannot finish that crate; `cargo fmt --check` differs in ~109 files (dense one-line style).
+  - scenarios: `m5_undead_sun` fails on the shared vanilla server right now (reference run: zombie never ignites at noon) with both
+    the old and new check binaries; not touched by this work, probably server state (retest on a clean vanilla).

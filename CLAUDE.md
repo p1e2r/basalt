@@ -122,6 +122,16 @@ Read NOTES.md for verified packet formats.
 - Every new feature ships with a scenario test in the check harness (crates/check).
 - Run `tools/check-all.sh` and get a clean pass/fail table before marking anything done.
 - Prefer differential checks against vanilla (25566) over hand-written expectations.
+- **Run `tools/pr_ready.sh` before merging** (fmt gate for new files, clippy: only NEW warnings vs
+  tools/baselines/clippy.txt, `cargo test --workspace`, then only the harnesses affected by your diff;
+  `--all` runs everything, `--no-vanilla` skips the differential/fuzz ones, `--client` adds the client group).
+  `basalt-check --list-affected` shows what your change touches; results are cached in
+  target/check/cache.json (`--no-cache` to force). New harnesses must declare their source paths in
+  crates/check/src/harness.rs.
+- Randomized differential harnesses (`basalt-check --fuzz clicks|commands|dig|place|worldgen`, each with
+  `--cases N --seed S`, `--long`, `--replay FILE`; cases are recorded in target/check/cases/) diff Basalt
+  against vanilla per case. Known gaps live in crates/check/known-divergences.txt (`<harness> <class>`);
+  only NEW mismatch classes fail. Fix a divergence, then delete its line. `tools/check-all.sh --fuzz` runs them.
 - Client work (M7, M14) is done only when `tools/check-all.sh --client` passes: visual parity vs the
   vanilla client (same seed/pos/rotation/time, per-region SSIM/histogram, diff images on failure),
   asset coverage (every block state + item renders, no missing model/texture), input parity

@@ -750,7 +750,8 @@ impl Game {
             "tp" | "teleport" => {
                 let target_pos = if args.len() >= 4 {
                     let cur = self.players[&eid].pos;
-                    let parse = |s: &str, c: f64| -> Option<f64> { if let Some(r) = s.strip_prefix('~') { Some(c + if r.is_empty() { 0.0 } else { r.parse().ok()? }) } else { s.parse().ok() } };
+                    // finite and inside the world border (vanilla: argument.pos.outofworld); NaN/inf would kick the player
+                    let parse = |s: &str, c: f64| -> Option<f64> { (if let Some(r) = s.strip_prefix('~') { Some(c + if r.is_empty() { 0.0 } else { r.parse().ok()? }) } else { s.parse().ok() }).filter(|v: &f64| v.is_finite() && v.abs() <= 30_000_000.0) };
                     match (parse(args[1], cur[0]), parse(args[2], cur[1]), parse(args[3], cur[2])) { (Some(x), Some(y), Some(z)) => Some([x, y, z]), _ => None }
                 } else if args.len() == 2 { self.players.values().find(|p| p.name.eq_ignore_ascii_case(args[1])).map(|p| p.pos) } else { None };
                 match target_pos {
@@ -857,7 +858,14 @@ impl Game {
                 reply(self, format!("{} mobs within {r}: {}", lines.len(), lines.join("; ")));
             }
             "kill" if args.get(1).map(|a| a.starts_with("@e")).unwrap_or(false) => {
-                let filter = args[1].split("type=").nth(1).map(|t| t.trim_end_matches(']').trim_start_matches("minecraft:").to_string());
+                let filter = args[1].split("type=").nth(1).map(|t| t.split([',', ']']).next().unwrap_or("").trim_start_matches("minecraft:").to_string());
+                if filter.as_deref() == Some("item") {
+                    // dropped items (vanilla selectors like distance= are ignored: everything goes)
+                    let ids: Vec<i32> = self.items.keys().copied().collect();
+                    for id in &ids { self.remove_item(*id); }
+                    reply(self, format!("Killed {} entities", ids.len()));
+                    return;
+                }
                 let ids: Vec<i32> = self.mobs.values().filter(|m| m.alive() && filter.as_deref().map(|f| f == m.kind.name()).unwrap_or(true)).map(|m| m.eid).collect();
                 let arrows: Vec<i32> = if filter.is_none() || filter.as_deref() == Some("arrow") { self.arrows.keys().copied().collect() } else { Vec::new() };
                 for a in &arrows { self.arrows.remove(a); self.untrack(*a); }
@@ -865,6 +873,15 @@ impl Game {
                 reply(self, format!("Killed {} entities", ids.len() + arrows.len()));
             }
             "kill" => { let h = self.players[&eid].health; let gm = self.players[&eid].gamemode; if gm == 1 || gm == 3 { reply(self, "Can't kill a creative/spectator player".into()); } else { self.hurt_bypass(eid, h.max(1.0) + 1000.0, "generic_kill"); } }
+            "clear" => {
+                // /clear [target]: empties the inventory, crafting grids and the carried item
+                let p = self.players.get_mut(&eid).unwrap();
+                let n: i32 = p.inv.iter().map(|s| s.count.max(0)).sum::<i32>() + p.cursor.count.max(0) + p.table_grid.iter().map(|s| s.count.max(0)).sum::<i32>();
+                for s in p.inv.iter_mut() { *s = Stack::default(); }
+                p.cursor = Stack::default(); p.table_grid = [Stack::default(); 9]; p.craft_result = Stack::default();
+                Self::send_window(p);
+                reply(self, if n == 0 { "No items were found on player".to_string() } else { format!("Removed {n} items from player") });
+            }
             "weather" => {
                 match args.get(1).copied() {
                     Some(k @ ("clear" | "rain" | "thunder")) => { self.set_weather(k, args.get(2).and_then(|d| parse_time_arg(d))); reply(self, format!("Set the weather to {k}")); }
