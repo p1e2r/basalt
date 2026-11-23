@@ -2,6 +2,7 @@
 mod ai;
 mod arrow;
 mod combat;
+mod debug;
 mod env;
 mod explosion;
 mod health;
@@ -798,6 +799,7 @@ impl Game {
             "list" => { let names: Vec<_> = self.players.values().map(|p| p.name.clone()).collect(); reply(self, format!("{} online: {}", names.len(), names.join(", "))); }
             "spawn" => { let s = self.spawn; let p = self.players.get_mut(&eid).unwrap(); p.pos = s; Self::teleport(p); self.stream_chunks(eid); }
             "save" | "save-all" => { self.save_level(); reply(self, "Saved the world".into()); }
+            c if c.starts_with("basalt:") && self.sh.cfg.debug => self.debug_command(eid, &args),
             "help" | "" => reply(self, "Commands: /gamemode /tp /give /time /say /list /spawn /save /effect /enchant /setblock /fill /kill [@e[type=..]] /summon /mobs".into()),
             other => reply(self, format!("Unknown command: {other}")),
         }

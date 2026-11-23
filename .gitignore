@@ -1,6 +1,6 @@
 /target
-/data/
-/vanilla/
+/data
+/vanilla
 /world/
 *.jar
 /.claude/worktrees/

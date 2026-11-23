@@ -179,8 +179,11 @@ impl Game {
             if turtle && !eyes_wet { self.add_effect(eid, "water_breathing", 0, 200, false); }
 
             // --- air supply
+            let hunger = effect_id("hunger").and_then(|id| self.players[&eid].effects.get(&id).map(|e| e.0));
             let p = self.players.get_mut(&eid).unwrap();
             p.prev_tick_pos = p.pos;
+            // Hunger effect: 0.005 exhaustion per tick per level
+            if let Some(amp) = hunger { if vulnerable { p.exhaustion += 0.005 * (amp as f32 + 1.0); } }
             let old_air = p.air;
             let mut drown = false;
             if eyes_wet && vulnerable {
@@ -217,7 +220,8 @@ impl Game {
             if frozen_changed { self.send_frozen(eid); }
             if !vulnerable { continue; }
             // vanilla damage per source; the hurt cooldown spaces repeated hits (10 ticks)
-            if void { self.hurt_bypass(eid, 4.0, "out_of_world"); continue; }
+            // vanilla: 4.0 per hit, spaced by the normal invulnerability frames (death after ~50 ticks)
+            if void { self.hurt(eid, 4.0, "out_of_world"); continue; }
             if drown { self.hurt(eid, 2.0, "drown"); }
             if freeze_hit { self.hurt(eid, freeze_dmg, "freeze"); }
             if in_lava && !fire_res { self.hurt(eid, 4.0, "lava"); }

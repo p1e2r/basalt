@@ -138,3 +138,32 @@ real server/client over the wire.
   - Real client handshake order (captured through the proxy): brand custom_payload, then client_information
     ("en_us", view, chat 0, colors 1, skin parts 0x7f, main hand 1, filtering 0, listing 1, particles 0).
     The launcher-run real client sends an all-zero UUID in hello in offline mode.
+
+## Test harness findings (crates/check, measured against vanilla 26.2 with the bot)
+- Command feedback is system_chat with a translatable component: `data get entity @s Health` →
+  `commands.data.entity.query` with [displayName, value] where value is a styled text tree whose
+  flattened text is SNBT (`20.0f`, `300s`, `[0.5d, 201.0d, 0.5d]`,
+  `[{count: 4, Slot: 0b, id: "minecraft:dirt"}]`, components as
+  `components: {"minecraft:damage": 2, "minecraft:enchantments": {"minecraft:respiration": 3}}`).
+  Missing paths reply `arguments.nbtpath.nothing_found(<path>)` wrapped as `{"text":"","extra":[{translate..}],"color":"red"}`
+  (TicksFrozen and active_effects are absent when zero/empty). `execute if block x y z <state>` →
+  `commands.execute.conditional.pass` / `.fail`; `execute if entity @e[...]` →
+  `commands.execute.conditional.pass_count(N)`. Other ops see `chat.type.admin` echoes of your commands.
+  `/gamemode X` when already X prints nothing. `/clear` with an empty inventory → `clear.failed.single`.
+- Player NBT paths: Health (f), foodLevel, foodSaturationLevel (f), foodExhaustionLevel (f), Air (s),
+  TicksFrozen, Fire (s; -20 when not burning), playerGameType, Pos, Inventory (Slot 0-8 hotbar,
+  9-35 main), equipment {head, chest, legs, feet, offhand}, active_effects [{id, amplifier, duration}].
+- `/tp @s X Y Z` with integer X/Z centres the player on the block (+0.5); send explicit decimals.
+- Console `op <name>` in offline mode lower-cases names it can't resolve (the op is then for a
+  different offline UUID): use lower-case bot names. The console is shared; match `Made <name> a server operator`.
+- Q / ctrl-Q (player_action 4 / 3): vanilla does NOT resend the slot — the client predicts the removal.
+- set_health is sent only when health/food change: saturation drops from exhaustion are invisible to
+  the client until then (query the server).
+- A block at head height only (feet free) makes vanilla switch the player to the crawling pose: no
+  suffocation. Fully enclosed (feet + head) → in_wall 1.0 every 10 ticks.
+- Players start with Fire -20: standing in a fire block ignites after ~20 ticks (in_fire 1.0 per hit
+  meanwhile); burning lasts ~8 s after leaving (on_fire 1.0 per 20 ticks). Rain on the player puts fires
+  out each tick — fire/lava tests need a roof (the vanilla test server may be raining).
+- Sprinting: 0.1 exhaustion per metre (47.8 blocks → saturation 5 → 4, exhaustion 0.74 left).
+- Drowning: air 300 → -20 at 1/tick, 2.0 drown damage at tick ~320 then every 20 ticks; refill +4/tick.
+- Summon NBT: any compound (`{PersistenceRequired:1b}`) stops vanilla's random equipment/baby rolls.
