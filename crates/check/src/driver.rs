@@ -213,10 +213,12 @@ pub fn try_main() -> Option<i32> {
     // ---- scripts
     for e in todo.iter().filter(|e| e.kind == HKind::Script) {
         let t = Instant::now();
-        if e.id == "fuzz_worldgen" {
-            let (seeds, path) = worldgen_cases(&a);
+        if e.id == "fuzz_worldgen" || e.id == "worldgen_nether" {
+            let nether = e.id == "worldgen_nether";
+            let (seeds, path) = if nether { (vec![12345i64, 42], std::path::PathBuf::from("vanilla/parity-nether")) } else { worldgen_cases(&a) };
             let mut c = Command::new("bash");
             c.arg("tools/parity.sh").arg("--out").arg(&out);
+            if nether { c.arg("--nether"); }
             for s in &seeds { c.arg(s.to_string()); }
             eprintln!("== worldgen parity: {} seed(s) x {} site(s), cases {}", seeds.len(), WORLDGEN_SITES.len(), path.display());
             let o = c.output();

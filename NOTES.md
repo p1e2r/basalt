@@ -453,3 +453,27 @@ Measured from the vanilla client's own model parts / PoseStacks (exact fits; for
 - First person: arm/item hand matrices (fp_arm_matrix / fp_item_matrix) match to < 1e-4; equip height eases ±0.4/tick to (attack strength)^3 (cooldown 20/attack speed ticks), to 0 while another item is drawn, which swaps once < 0.1; attacking air swings and resets the strength.
 - View bob (view space): T(sin(w pi)b/2, -|cos(w pi)b|, 0) Rz(3° sin(w pi)b) Rx(5° |cos(w pi - 0.2)|b), w = -(walkDist + step*pt), walkDist += 0.6*horizontal distance, b eases x0.4 to min(0.1, horizontal speed) on ground. Hurt roll -14° sin(((hurtTime-pt)/10)^4 pi).
 - Not done: swimming pose, hand sway (xBob/yBob lag), bow/crossbow/eat arm poses, baby head scaling, burning-entity fire overlay, red-overlay colour (vanilla white fur -> ~(202..225, 106..125, 106..125)).
+
+## Nether (M8, 2026-11-23) — derived from ./data, vanilla-generated worlds and the m8_* scenarios
+- Worldgen: noise_settings/nether.json has `legacy_random_source: true`. Root positional random = `JavaRandom(seed).nextLong()`;
+  `fromHashOf(s)` = `JavaRandom(String.hashCode(s) ^ that)`, octaves seeded `hashCode("octave_N") ^ nextLong()`.
+  old_blended_noise (nether/base_3d_noise) is seeded with `JavaRandom(worldSeed)` directly. The biome noises
+  nether/temperature / nether/vegetation use the 1.16 construction (legacy octave order) seeded `seed` / `seed + 1`:
+  with that biomes match vanilla's saved nether 100% (seeds 12345, 42). Biome list: reports/biome_parameters/minecraft/nether.json.
+- Generation range = noise.min_y/height (0..128) inside the 256-high dimension: anchors (surface rules, carvers,
+  placements) resolve against 0..128 (ceiling bedrock 123..127), y 128..255 stays air. Aquifers off: lava (default fluid) below sea level 32.
+- nether_cave carver = cave carver with cave bound 10, thickness `(f*2+f)*2`, tunnel y scale 5, and every replaceable
+  carved block becomes lava at y <= min_y+31, else cave_air.
+- Nether chunks on the wire: 16 sections, light arrays for sections -1..16 (18 bits), no sky light (sky masks 0);
+  heightmaps relative to y 0. Respawn into the nether (measured over the wire): dim type id + "minecraft:the_nether",
+  sea level 32, data-kept flags 3 for a dimension change; order respawn, change_difficulty, commands, player_position,
+  player_abilities, initialize_border, set_default_spawn_position (overworld), game_event 13, ticking_state/step,
+  container_set_content, set_held_slot, set_health, set_experience.
+- Portals (m8_portal_frames diff = vanilla): frames light from fire set anywhere inside (setblock too), corners optional,
+  inner 2..21 wide x 3..21 high (22 wide does not light, incomplete frames don't), axis x tried first; breaking a frame block
+  removes all portal blocks; flint and steel lights it (tool damage 1 in survival).
+- Travel (m8_portal_travel diff = vanilla): survival enters after ~80 ticks inside (vanilla compares the counter before
+  incrementing: 81st tick), creative at once; staying in the arrival portal never bounces back (the cooldown is renewed
+  while inside); stepping out and in returns to the original portal. Exit at x/8, z/8 (x*8 back), search radius 16 into
+  the nether / 128 into the overworld; a new portal uses vanilla's PortalForcer spiral search. First run against vanilla:
+  arrival x and y identical; the exit is centred across the portal (vanilla drops the across-axis offset).

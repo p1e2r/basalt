@@ -34,8 +34,12 @@ fn curve(l: f32) -> f32 { return l / (4.0 - 3.0 * l); }
     let rel = v.pos - u.cam.xyz;
     o.clip = u.vp * vec4<f32>(rel, 1.0);
     o.uv = v.uv;
-    let sky = curve(v.light.x) * u.params.z;
-    let blk = curve(v.light.y);
+    // u.screen.w >= 0: a sky-less dimension with that ambient light (nether 0.1): no sky light,
+    // block light brightened like vanilla (ambient + (1 - ambient) * curve)
+    let skyless = u.screen.w >= 0.0;
+    let amb = max(u.screen.w, 0.0);
+    let sky = select(curve(v.light.x) * u.params.z, 0.0, skyless);
+    let blk = select(curve(v.light.y), amb + (1.0 - amb) * curve(v.light.y), skyless);
     let sky_rgb = vec3<f32>(sky) * mix(vec3<f32>(0.55, 0.6, 1.0), vec3<f32>(1.0), u.params.z);
     let blk_rgb = vec3<f32>(blk, blk * (0.6 * blk + 0.4) * 0.9 + 0.08 * blk, blk * (blk * blk * 0.6 + 0.3));
     let l = clamp(max(sky_rgb, blk_rgb) + sky_rgb * blk_rgb * 0.2, vec3<f32>(0.0), vec3<f32>(1.0));
@@ -79,6 +83,7 @@ struct SOut { @builtin(position) clip: vec4<f32>, @location(0) ndc: vec2<f32> };
     return o;
 }
 @fragment fn fs_sky(i: SOut) -> @location(0) vec4<f32> {
+    if (u.screen.w >= 0.0) { return vec4<f32>(u.fog_color.rgb, 1.0); }
     let w = u.inv_vp * vec4<f32>(i.ndc, 1.0, 1.0);
     let d = normalize(w.xyz / w.w);
     let t = smoothstep(-0.02, 0.35, d.y);

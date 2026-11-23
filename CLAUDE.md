@@ -112,7 +112,19 @@ Read NOTES.md for verified packet formats.
       panorama backdrops, title with splash, pause icons, options + all sub-pages, language switching, server list pings
       with MOTD/players/ping bars/favicons); todo: singleplayer (integrated basalt-server), check-all --client group,
       clouds, below-horizon void sky, sky tint, glint, unifont fallback (CJK etc.), toasts (recipe unlocks), advancements/stats screens)
-- [ ] M8 Nether/End, portals, structures
+- [~] M8 Nether/End, portals, structures — **Nether started (2026-11-23)**:
+      worldgen `Generator::new_dim(seed, Dimension::Nether)` (legacy random source, nether biome preset, nether_cave
+      carver, gen range 0..128 inside the 0..256 dimension, nether features in features/nether.rs). Parity
+      (`tools/parity.sh --nether 12345 42`, harness `worldgen_nether`, worlds cached in vanilla/parity-nether/<seed>):
+      biomes 100% at all 10 sites, shape 99.83-99.99, exact 99.81-99.98, features 99.31-99.97 (fungus forests drift,
+      basalt deltas / soul sand valley features unverified). Server: one world/generator/players/entities per
+      dimension (game/dim.rs, swapped in as "current"), login/respawn per dimension, nether saved in
+      world/dimensions/minecraft/the_nether/region, `execute in <dim> run <cmd>`, portals (game/portal.rs: frames 2x3..21x21,
+      fire/flint and steel lighting, breaking, 80-tick travel 8:1, exit search 16/128 + vanilla's PortalForcer build).
+      Scenarios m8_execute_in / m8_portal_frames / m8_portal_travel (diff vs vanilla, pass) + m8_nether_persistence;
+      client: sky-less dimensions (fog colour background, ambient light, dimension fog), client scenario `nether`.
+      Todo: End, structures (fortress, bastion), nether mobs, portal POI files (Basalt keeps basalt-portals.json),
+      portal sounds/nausea in the client, entity travel through portals, the overworld region folder is still `region/`.
 - [ ] M9 redstone  - [ ] M10 enchant/anvil/brewing/smithing/XP  - [ ] M11 villagers/raids/AI
 - [ ] M12 bosses/endgame  - [ ] M13 commands/datapacks/advancements/scoreboards
 - [ ] M14 client polish
