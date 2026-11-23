@@ -490,6 +490,27 @@ pub fn first_person_arm(atlas: &EntityAtlas, uuid: &Uuid, eye: Vec3, yaw: f32, p
     m.part([0.0; 3], [0.0; 3], &[cube([-w / 2.0, -2.0, -2.0], [w, 12.0, 4.0], [40.0, 16.0]), cube_i([-w / 2.0, -2.0, -2.0], [w, 12.0, 4.0], [40.0, 32.0], 0.25)]);
 }
 
+/// Flat (GUI) rendering of an entity model facing the viewer: block-space model → screen pixels
+/// (`scale` px per block, feet at (cx, cy)), faces sorted back to front since the UI pass has no depth.
+pub fn build_model_gui(atlas: &EntityAtlas, e: &Entity, cx: f32, cy: f32, scale: f32, out: &mut MeshData) {
+    let mut m = MeshData::default();
+    let mut e2 = Entity::new(e.id, e.uuid, e.kind, [0.0; 3], [0.0; 3], 0.0, 0.0, 0.0);
+    e2.flags = e.flags;
+    if !build_model(atlas, &e2, 1.0, [255, 255], &mut m) { return; }
+    let mut quads: Vec<(f32, [Vertex; 4])> = m.verts.chunks(4).map(|q| {
+        let z = q.iter().map(|v| v.pos[2]).sum::<f32>() / 4.0;
+        let mut a = [q[0], q[1], q[2], q[3]];
+        for v in a.iter_mut() { v.pos = [cx - v.pos[0] * scale, cy - v.pos[1] * scale, 0.0]; }
+        (z, a)
+    }).collect();
+    quads.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    for (_, q) in quads {
+        let b = out.verts.len() as u32;
+        out.verts.extend_from_slice(&q);
+        out.idx.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3]);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

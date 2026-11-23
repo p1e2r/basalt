@@ -880,7 +880,9 @@ impl Game {
             }
             // hearts + food (survival / adventure)
             if self.player.gamemode == 0 || self.player.gamemode == 2 {
-                let y = hy - 10.0 * s;
+                // experience bar (level 0) and the rows above it, as laid out by vanilla
+                a.sprite(ui, "experience_bar_background", hx, h - 29.0 * s, s);
+                let y = h - 39.0 * s;
                 for i in 0..10 {
                     let x = hx + i as f32 * 8.0 * s;
                     a.sprite(ui, "heart/container", x, y, s);
@@ -1021,9 +1023,9 @@ impl Game {
         fd.layers.push((ui, Tex::Ui)); fd.layers.push((items, Tex::Blocks)); fd.layers.push((deco, Tex::Ui));
         match &self.screen {
             Some(Screen::Container(c)) => {
-                let (mut bg, mut it, mut top, mut top_items) = (MeshData::default(), MeshData::default(), MeshData::default(), MeshData::default());
-                self.draw_container(c, &mut bg, &mut it, &mut top, &mut top_items);
-                fd.layers.push((bg, Tex::Ui)); fd.layers.push((it, Tex::Blocks)); fd.layers.push((top, Tex::Ui)); fd.layers.push((top_items, Tex::Blocks));
+                let (mut bg, mut ents, mut it, mut top, mut top_items) = (MeshData::default(), MeshData::default(), MeshData::default(), MeshData::default(), MeshData::default());
+                self.draw_container(c, &mut bg, &mut ents, &mut it, &mut top, &mut top_items);
+                fd.layers.push((bg, Tex::Ui)); fd.layers.push((ents, Tex::Entities)); fd.layers.push((it, Tex::Blocks)); fd.layers.push((top, Tex::Ui)); fd.layers.push((top_items, Tex::Blocks));
             }
             Some(_) => { let mut m = MeshData::default(); self.draw_menu(&mut m); fd.layers.push((m, Tex::Ui)); }
             None => {}

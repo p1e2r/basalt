@@ -274,7 +274,7 @@ impl Game {
 
     // ------------------------------------------------------------ drawing
 
-    pub(crate) fn draw_container(&self, c: &Open, ui: &mut MeshData, items: &mut MeshData, top: &mut MeshData, top_items: &mut MeshData) {
+    pub(crate) fn draw_container(&self, c: &Open, ui: &mut MeshData, ents: &mut MeshData, items: &mut MeshData, top: &mut MeshData, top_items: &mut MeshData) {
         let s = self.gui_scale();
         let a = &self.ui;
         let (w, h) = (self.gpu.size.0 as f32, self.gpu.size.1 as f32);
@@ -282,7 +282,13 @@ impl Game {
         let (ox, oy) = self.container_origin(c.kind);
         let (cw, ch) = c.kind.size();
         match c.kind {
-            Kind::Inventory => a.region(ui, "container/inventory", ox, oy, 0.0, 0.0, cw, ch, s),
+            Kind::Inventory => {
+                a.region(ui, "container/inventory", ox, oy, 0.0, 0.0, cw, ch, s);
+                // the player preview in the black box
+                let pid = basalt_data::registry_id(basalt_data::registries::ENTITY_TYPE, "player").unwrap_or(0);
+                let me = crate::entity::Entity::new(self.my_eid, crate::net::offline_uuid(&self.name), pid, [0.0; 3], [0.0; 3], 0.0, 0.0, 0.0);
+                crate::entity::build_model_gui(&self.entity_atlas, &me, ox + 51.0 * s, oy + 75.0 * s, 30.0 * s, ents);
+            }
             Kind::Crafting => a.region(ui, "container/crafting_table", ox, oy, 0.0, 0.0, cw, ch, s),
             Kind::Generic(r) => {
                 let top_h = r as f32 * 18.0 + 17.0;

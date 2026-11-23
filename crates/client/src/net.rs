@@ -105,9 +105,10 @@ async fn run(opts: Options, tx: Sender<Event>, mut out: UnboundedReceiver<Vec<u8
     let mut players: HashMap<Uuid, String> = HashMap::new();
     'session: loop {
         // ---- configuration ----
+        // same order as the real client: brand, then client information
+        let mut w = Writer::with_id(ids::configuration::serverbound::CUSTOM_PAYLOAD); w.str("minecraft:brand").str("basalt"); c.send(&w).await?;
         let mut w = Writer::with_id(ids::configuration::serverbound::CLIENT_INFORMATION);
         w.str("en_us").i8(opts.view_distance).varint(0).bool(true).u8(0x7f).varint(1).bool(false).bool(true).varint(0); c.send(&w).await?;
-        let mut w = Writer::with_id(ids::configuration::serverbound::CUSTOM_PAYLOAD); w.str("minecraft:brand").str("basalt"); c.send(&w).await?;
         let (mut biomes, mut dims) = (Vec::new(), Vec::new());
         loop {
             let f = c.read().await?; let mut r = f.reader();
