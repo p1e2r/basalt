@@ -50,7 +50,7 @@ pub fn worldgen_columns(ctx: &mut Ctx) -> Result<()> {
 /// `/locate structure` from a fixed spot near spawn (seed 12345): found position and distance per
 /// structure (and one tag), plus the reply key. Differential: the vanilla test server runs the same
 /// read-only command. Structure types whose placement Basalt does not model yet (mansion,
-/// stronghold, desert pyramid's extra checks) are left out.
+/// desert pyramid's extra checks) are left out.
 pub fn locate(ctx: &mut Ctx) -> Result<()> {
     let bot = ctx.bot()?;
     ctx.gamemode(&bot, "creative")?;
@@ -58,7 +58,7 @@ pub fn locate(ctx: &mut Ctx) -> Result<()> {
     bot.tp([8.5, 150.0, 8.5])?;
     let ids = ["minecraft:village_plains", "#minecraft:village", "minecraft:pillager_outpost", "minecraft:shipwreck", "minecraft:ruined_portal",
         "minecraft:trial_chambers", "minecraft:ancient_city", "minecraft:ocean_ruin_cold", "minecraft:buried_treasure", "minecraft:mineshaft",
-        "minecraft:igloo", "minecraft:swamp_hut", "minecraft:jungle_pyramid"];
+        "minecraft:igloo", "minecraft:swamp_hut", "minecraft:jungle_pyramid", "minecraft:stronghold"];
     for id in ids {
         let reply = bot.cmd_reply(&format!("locate structure {id}"))?;
         let Some(t) = reply.iter().find(|t| t.key.as_deref().map(|k| k.starts_with("commands.locate")).unwrap_or(false)) else {

@@ -523,6 +523,52 @@ fn main() -> Result<()> {
                 println!("{line}");
             }
         }
+        "shdump" => {
+            // shdump STRUCT SEED CX,CZ...: Basalt's pieces of a procedural structure (stronghold /
+            // monument / mansion) started in those chunks, as JSON lines like `json`'s Children
+            use basalt_worldgen::structure::PieceKind;
+            let seed: i64 = args[3].parse()?;
+            let g = basalt_worldgen::Generator::new(seed);
+            let s = g.structures().unwrap();
+            let def = *s.by_name.get(args[2].as_str()).expect("structure");
+            for c in &args[4..] {
+                let v: Vec<i32> = c.split(',').map(|x| x.parse().unwrap()).collect();
+                let Some(st) = g.try_start(def, v[0], v[1], true) else {
+                    println!("{{\"cx\":{},\"cz\":{},\"Children\":[]}}", v[0], v[1]);
+                    continue;
+                };
+                let mut ch = Vec::new();
+                for p in &st.pieces {
+                    let b = p.bb;
+                    let bb = [b.min[0], b.min[1], b.min[2], b.max[0], b.max[1], b.max[2]];
+                    if let PieceKind::Stronghold { piece } = &p.kind {
+                        ch.push(serde_json::json!({"id": format!("minecraft:{}", piece.kind.id()), "BB": bb, "O": piece.o, "GD": piece.depth, "k": format!("{:?}", piece.kind)}));
+                    } else {
+                        ch.push(serde_json::json!({"id": "?", "BB": bb}));
+                    }
+                }
+                println!(
+                    "{}",
+                    serde_json::json!({"cx": v[0], "cz": v[1], "Children": ch})
+                );
+            }
+        }
+        "rings" => {
+            // rings SET SEED: chunk positions of a concentric-rings set (dir argument = set name)
+            let seed: i64 = args[3].parse()?;
+            let g = basalt_worldgen::Generator::new(seed);
+            let s = g.structures().unwrap();
+            let si = s
+                .sets
+                .iter()
+                .position(|x| x.name.ends_with(&args[2]))
+                .unwrap();
+            let t = std::time::Instant::now();
+            for (x, z) in g.ring_positions(si).iter() {
+                println!("{x} {z}");
+            }
+            eprintln!("{:?}", t.elapsed());
+        }
         "locate" => {
             // locate ID X,Z SEED   (dir argument = id)
             let seed: i64 = args[4].parse()?;
