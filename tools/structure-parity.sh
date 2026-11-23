@@ -11,7 +11,8 @@
 #   Final line: `RESULT fuzz=structures cases=.. mismatches=.. new=.. errors=.. skipped=..`.
 #   Thresholds: every vanilla start of a placed type found (types in KNOWN_TYPES may differ) and
 #   jigsaw pieces 100 %, and block parity inside the piece boxes at least BLOCK_FLOOR per type (terrain
-#   adaptation, 2026-11-24: villages / outposts 98.5, ancient cities 95, trial chambers 99; a miss is
+#   adaptation, 2026-11-24: villages / outposts 98.5, ancient cities 95, trial chambers 99, igloos and
+#   swamp huts 97; a miss is
 #   the mismatch class `blocks-<type>`). Known gaps: crates/check/known-divergences.txt lines `structures <type>`.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -26,8 +27,9 @@ while [ $# -gt 0 ]; do
 done
 mkdir -p "$OUT"
 # seed 12345: 64x64 chunks around the origin + one 16x16 site per village biome / outpost (found
-# with /locate on vanilla); seeds 42 and 1: 64x64 around the origin.
-SITES=("12345 32 0 0" "42 32 0 0" "1 32 0 0" "12345 8 10 55" "12345 8 -146 37" "12345 8 -66 -98" "12345 8 91 75" "12345 8 75 -23" "12345 8 17 -60")
+# with /locate on vanilla); seeds 42 and 1: 64x64 around the origin; an igloo with a laboratory (12345) and
+# a swamp hut (42), 4x4 chunks.
+SITES=("12345 32 0 0" "42 32 0 0" "1 32 0 0" "12345 8 10 55" "12345 8 -146 37" "12345 8 -66 -98" "12345 8 91 75" "12345 8 75 -23" "12345 8 17 -60" "12345 2 171 6" "42 2 144 -51")
 [ $QUICK = 1 ] && SITES=("12345 8 10 55" "42 32 0 0")
 KNOWN=${CHECK_KNOWN:-crates/check/known-divergences.txt}
 cargo build --release -q -p basalt-worldgen --example structures 2>&1 | tail -5
@@ -44,7 +46,7 @@ for site in "${SITES[@]}"; do
   cases=$((cases+1))
   log=$OUT/structure-parity-$seed-$CX-$CZ.txt
   # Blocks are measured where Basalt places pieces (jigsaw + template structures).
-  CENTER=$CX,$CZ BLOCK_TYPES=${BLOCK_TYPES:-village,pillager,trail,trial,ancient,shipwreck,ruined,ocean} MAX_CHUNKS=${MAX_CHUNKS:-150} \
+  CENTER=$CX,$CZ BLOCK_TYPES=${BLOCK_TYPES:-village,pillager,trail,trial,ancient,shipwreck,ruined,ocean,igloo,swamp} MAX_CHUNKS=${MAX_CHUNKS:-150} \
     ./target/release/examples/structures compare "$dir/world/dimensions/minecraft/overworld/region" "$R" "$seed" > "$log" 2>&1
   grep -E "^(STRUCT|BLOCKS)" "$log" | sed "s/^/  [$seed $CX,$CZ] /"
   verdict=$(python3 - "$log" "$KNOWN" <<'EOF'
@@ -67,10 +69,10 @@ for l in open(log):
     if not ok:
         bad.append(t)
         if t not in kn: new.append(t)
-FLOOR = {"village": 98.5, "pillager": 98.5, "ancient": 95.0, "trial": 99.0}
+FLOOR = {"village": 98.5, "pillager": 98.5, "ancient": 95.0, "trial": 99.0, "igloo": 97.0, "swamp": 97.0}
 for l in open(log):
     m = re.match(r"BLOCKS (\S+)\s+([\d.]+)% of (\d+)", l)
-    if not m or int(m.group(3)) < 1000: continue
+    if not m or int(m.group(3)) < 200: continue
     t, pct = m.group(1), float(m.group(2))
     fl = next((v for k, v in FLOOR.items() if t.startswith(k)), None)
     if fl is not None and pct < fl:

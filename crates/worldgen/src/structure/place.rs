@@ -547,6 +547,7 @@ fn place_piece(g: &Generator, s: &Structures, p: &Piece, reg: &mut Region, clip:
                 }
             }
         }
+        PieceKind::SwampHut { origin, o } => place_swamp_hut(reg, clip, *origin, *o),
         PieceKind::Chest { pos, .. } => {
             let chest = BlockState::parse("chest[facing=north,type=single,waterlogged=false]")
                 .map(|b| b.0 as u16)
@@ -950,4 +951,184 @@ pub fn ruined_portal(
             },
         }],
     })
+}
+
+/// Swamp hut layout, measured from 6 vanilla huts of seed 42 (chunks -17,22 144,-51 -51,-23
+/// 119,-126 197,333 558,-23; 2026-11-24, `structures blocks`), in the frame of orientation 1 (west):
+/// layers y = 0..4 above the box floor, rows z = 0..6, columns x = 0..8; ' ' = not touched
+/// (terrain / vegetation stay), '.' = air (only inside the hut). Palette below.
+const HUT_LAYERS: [[&str; 7]; 5] = [
+    [
+        "         ",
+        " b    b  ",
+        "         ",
+        "         ",
+        "         ",
+        " b    b  ",
+        "         ",
+    ],
+    [
+        "         ",
+        " bccccbc ",
+        " cccccccc",
+        " cccccccc",
+        " cccccccc",
+        " bccccbc ",
+        "         ",
+    ],
+    [
+        "         ",
+        " bccccbd ",
+        " c ...c  ",
+        " ce. .c  ",
+        " cf.  .  ",
+        " bccccbd ",
+        "         ",
+    ],
+    [
+        "         ",
+        " bcg.cb  ",
+        " c....h  ",
+        " h....c  ",
+        " c.....  ",
+        " bc..cb  ",
+        "         ",
+    ],
+    [
+        "ijjjjjjk ",
+        "lccccccm ",
+        "lccccccm ",
+        "lccccccm ",
+        "lccccccm ",
+        "lccccccm ",
+        "noooooop ",
+    ],
+];
+const HUT_PALETTE: [(char, &str); 16] = [
+    ('.', "air"),
+    ('b', "oak_log[axis=y]"),
+    ('c', "spruce_planks"),
+    (
+        'd',
+        "oak_fence[east=false,north=false,south=false,waterlogged=false,west=true]",
+    ),
+    ('e', "crafting_table"),
+    ('f', "cauldron"),
+    ('g', "potted_red_mushroom"),
+    (
+        'h',
+        "oak_fence[east=false,north=true,south=true,waterlogged=false,west=false]",
+    ),
+    (
+        'i',
+        "spruce_stairs[facing=east,half=bottom,shape=outer_right,waterlogged=false]",
+    ),
+    (
+        'j',
+        "spruce_stairs[facing=south,half=bottom,shape=straight,waterlogged=false]",
+    ),
+    (
+        'k',
+        "spruce_stairs[facing=west,half=bottom,shape=outer_left,waterlogged=false]",
+    ),
+    (
+        'l',
+        "spruce_stairs[facing=east,half=bottom,shape=straight,waterlogged=false]",
+    ),
+    (
+        'm',
+        "spruce_stairs[facing=west,half=bottom,shape=straight,waterlogged=false]",
+    ),
+    (
+        'n',
+        "spruce_stairs[facing=east,half=bottom,shape=outer_left,waterlogged=false]",
+    ),
+    (
+        'o',
+        "spruce_stairs[facing=north,half=bottom,shape=straight,waterlogged=false]",
+    ),
+    (
+        'p',
+        "spruce_stairs[facing=west,half=bottom,shape=outer_right,waterlogged=false]",
+    ),
+];
+/// Leg columns (frame of orientation 1): oak logs from y = -1 down while the block is air or water.
+const HUT_LEGS: [(i32, i32); 4] = [(1, 1), (6, 1), (1, 5), (6, 5)];
+
+/// Swamp hut start (measured): orientation `nextInt(4)` over (north, east, south, west) -> vanilla
+/// `O` (2, 3, 0, 1); box at the chunk corner, 9 x 7 (west/east) or 7 x 9 (north/south), 7 high;
+/// floor y = floor(mean WORLD_SURFACE_WG over the box footprint) (6/6 vanilla huts).
+pub fn swamp_hut(g: &Generator, cx: i32, cz: i32, r: &mut JavaRandom) -> Piece {
+    let o = [2u8, 3, 0, 1][r.next_int_bounded(4) as usize];
+    let (w, d) = if o == 1 || o == 3 { (9, 7) } else { (7, 9) };
+    let (x0, z0) = (cx * 16, cz * 16);
+    let mut sum = 0i64;
+    for x in 0..w {
+        for z in 0..d {
+            sum += g.first_free(x0 + x, z0 + z, false) as i64;
+        }
+    }
+    let y = sum.div_euclid((w * d) as i64) as i32;
+    Piece {
+        bb: BBox::new([x0, y, z0], [x0 + w - 1, y + 6, z0 + d - 1]),
+        kind: PieceKind::SwampHut {
+            origin: [x0, y, z0],
+            o,
+        },
+    }
+}
+
+/// Map a layout position (frame of orientation 1) into the box of orientation `o`, with the block
+/// state transform. East mirrors x, north transposes; south (no vanilla sample yet) is assumed to be
+/// the transpose with z flipped.
+fn hut_transform(o: u8, x: i32, z: i32) -> (i32, i32) {
+    match o {
+        3 => (8 - x, z),
+        2 => (z, x),
+        0 => (z, 8 - x),
+        _ => (x, z),
+    }
+}
+
+fn hut_state(o: u8, s: u16) -> u16 {
+    match o {
+        3 => transform_state(s, Rotation::None, true),
+        2 => transform_state(s, Rotation::Ccw90, true),
+        0 => transform_state(s, Rotation::Ccw90, false),
+        _ => s,
+    }
+}
+
+fn place_swamp_hut(reg: &mut Region, clip: BBox, origin: [i32; 3], o: u8) {
+    let pal: HashMap<char, u16> = HUT_PALETTE
+        .iter()
+        .map(|(c, n)| (*c, BlockState::parse(n).map(|b| b.0 as u16).unwrap_or(0)))
+        .collect();
+    for (y, layer) in HUT_LAYERS.iter().enumerate() {
+        for (z, row) in layer.iter().enumerate() {
+            for (x, c) in row.chars().enumerate() {
+                let Some(st) = pal.get(&c) else { continue };
+                let (bx, bz) = hut_transform(o, x as i32, z as i32);
+                let p = [origin[0] + bx, origin[1] + y as i32, origin[2] + bz];
+                if clip.contains(p) {
+                    reg.set(p[0], p[1], p[2], hut_state(o, *st));
+                }
+            }
+        }
+    }
+    let log = pal[&'b'];
+    for (x, z) in HUT_LEGS {
+        let (bx, bz) = hut_transform(o, x, z);
+        let (px, pz) = (origin[0] + bx, origin[2] + bz);
+        let mut y = origin[1] - 1;
+        while y > origin[1] - 64 && clip.contains([px, y, pz]) {
+            let Some(cur) = reg.get(px, y, pz) else { break };
+            let name = BlockState(cur as u32).name();
+            if !(BlockState(cur as u32).is_air() || name == "water") {
+                break;
+            }
+            reg.set(px, y, pz, log);
+            y -= 1;
+        }
+    }
 }

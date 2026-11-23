@@ -153,6 +153,9 @@ pub enum PieceKind {
     },
     /// Buried treasure chest.
     Chest { pos: [i32; 3], loot: String },
+    /// Swamp hut (measured layout, place::swamp_hut) with its box corner and orientation
+    /// (vanilla's `O`: 0 south, 1 west, 2 north, 3 east).
+    SwampHut { origin: [i32; 3], o: u8 },
 }
 
 #[derive(Clone, Debug, Default)]
@@ -755,7 +758,7 @@ impl Generator {
                 let y = self.first_free(mx, mz, false) - 1;
                 Some(Stub {
                     pos: [mx, y, mz],
-                    pieces: Vec::new(),
+                    pieces: vec![place::swamp_hut(self, cx, cz, r)],
                 })
             }
             Kind::DesertPyramid | Kind::JunglePyramid => {

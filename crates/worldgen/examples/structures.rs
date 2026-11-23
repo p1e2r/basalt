@@ -207,6 +207,45 @@ fn main() -> Result<()> {
             args.get(4).map(|s| s.parse()).transpose()?.unwrap_or(12345),
         )?,
         "adapt" => adapt(dir, r, args[4].parse()?, Path::new(&args[5]), &args[6])?,
+        "blocks" => {
+            // blocks REGION R X0,Y0,Z0,X1,Y1,Z1: vanilla block states in the box ("x y z state" lines)
+            let v: Vec<i32> = args[4].split(',').map(|x| x.parse().unwrap()).collect();
+            for cx in (v[0] >> 4)..=(v[3] >> 4) {
+                for cz in (v[2] >> 4)..=(v[5] >> 4) {
+                    let Some(b) = vanilla_blocks(dir, cx, cz)? else {
+                        continue;
+                    };
+                    for x in v[0].max(cx * 16)..=v[3].min(cx * 16 + 15) {
+                        for z in v[2].max(cz * 16)..=v[5].min(cz * 16 + 15) {
+                            for y in v[1]..=v[4] {
+                                let i = (((y + 64) as usize) << 8)
+                                    | (((z & 15) as usize) << 4)
+                                    | (x & 15) as usize;
+                                println!(
+                                    "{x} {y} {z} {}",
+                                    basalt_data::BlockState(b[i] as u32).to_string()
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        "bstarts" => {
+            // bstarts CX,CZ R SEED ID (dir argument = "CX,CZ"): Basalt's starts of ID in the square
+            let v: Vec<i32> = args[2].split(',').map(|x| x.parse().unwrap()).collect();
+            let g = basalt_worldgen::Generator::new(args[4].parse()?);
+            let s = g.structures().unwrap();
+            for cx in v[0] - r..v[0] + r {
+                for cz in v[1] - r..v[1] + r {
+                    for st in g.structure_starts(cx, cz).iter() {
+                        if s.defs[st.def].name.contains(args[5].as_str()) {
+                            println!("{cx} {cz} {:?}", st.pieces.first().map(|p| (&p.kind, p.bb)));
+                        }
+                    }
+                }
+            }
+        }
         "wsheight" => {
             // wsheight SEED X,Z... (dir argument = seed): WORLD_SURFACE_WG / OCEAN_FLOOR_WG first free y
             let g = basalt_worldgen::Generator::new(args[2].parse()?);

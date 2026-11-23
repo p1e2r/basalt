@@ -535,9 +535,46 @@ server jar (tools/structure-world.sh, cached in vanilla/structures/) and `/locat
 - `/locate structure`: rings of spacing regions around the source; the first hit inside a ring (x outer, z inner) wins,
   not the nearest. Reply `commands.locate.structure.success` [id | `#tag (id)`, [x, ~, z], floor(distance)]; locate
   position = chunk corner + locate_offset (buried treasure 9, 0, 9). m3_locate_structure = vanilla for 13 ids + a tag.
-- Not modelled: beardifier terrain adaptation (the largest remaining block difference around villages/ancient cities),
-  procedural structures (mineshafts, strongholds, monuments, desert/jungle temples, swamp huts, mansions: placement only, no
-  pieces), igloo pieces, ocean-ruin clusters and warm ruins' integrity, ruined-portal processors (netherrack, lava, moss),
-  the capped processor, block entities (chest loot) and template entities (villagers, golems). Unexplained: 4 of 29 seed-12345
-  mineshaft starts that vanilla rejects (lush caves / frozen peaks, biome passes), desert pyramids that vanilla rejects on
-  hilly ground (only "a corner below sea level rejects" is modelled).
+- Igloos (9 vanilla igloos, seed 12345): rotation `nextInt(4)`, laboratory if `nextDouble() < 0.5`, then `nextInt(8) + 3`
+  ladder pieces. Template origins from the chunk corner: top (0, 0, 0) pivot (3, 0, 5), ladder i (2, -3 - 3i, 4) pivot (1, 0, 1),
+  bottom (0, -3n - 6, -2) pivot (3, 0, 7) (one world pivot). Top floor y = WORLD_SURFACE_WG - 1 at the top's local (3, 0) after
+  rotation (9/9). Saved order: bottom, ladders top-down, top (vanilla keeps TPY = 90-based and moves only BB). Without a
+  laboratory the top's trapdoor (at the pivot) is snow_block. 9/9 piece-exact, blocks 95.7-100 % (rest: snow layers, trees).
+- Swamp huts (6 vanilla huts, seed 42; procedural, layout measured with `structures blocks` and encoded in place.rs):
+  orientation `nextInt(4)` over (north, east, south, west) = saved `O` (2, 3, 0, 1); box at the chunk corner, 9x7 (west/east)
+  or 7x9 (north/south), 7 high; floor y = floor(mean WORLD_SURFACE_WG over the box footprint) (6/6). East = the west layout
+  mirrored in x, north = transposed (states: transform_state mirror / mirror + ccw90); south assumed = transpose + z flip (no
+  vanilla sample: 0 of 12 located huts of seed 42 face south). Four oak-log legs (1,1) (6,1) (1,5) (6,5) go down from y-1
+  while the block is air or water. Hut interior air only inside the walls; the rest of the box keeps terrain/vegetation.
+  Blocks 97.7-100 % (rest: mushrooms/grass decoration drift). Witch and cat entities not spawned.
+- Not modelled: procedural structures (mineshafts, strongholds, monuments, desert/jungle temples, mansions: placement only, no
+  pieces), the encapsulate (trial chambers) and bury (trail ruins, strongholds) adaptations, ocean-ruin clusters and warm
+  ruins' integrity, ruined-portal processors (netherrack, lava, moss), the capped processor, block entities (chest loot)
+  and template entities (villagers, golems), ancient-city sculk. Unexplained: 4 of 29 seed-12345 mineshaft starts that
+  vanilla rejects (lush caves / frozen peaks, biome passes), desert pyramids that vanilla rejects on hilly ground (only "a
+  corner below sea level rejects" is modelled).
+
+### Terrain adaptation (M3c, 2026-11-24) — fitted empirically, crates/worldgen/src/structure/adapt.rs
+Method: the same seed/site generated twice by the official server jar (tools/structure-world.sh, `NO_STRUCTURES=1` =
+generate-structures=false, cached in vanilla/structures/<site>_nostruct), plus Basalt's own pre-adaptation density per
+block (`Generator::density_dump`; Basalt's terrain agrees with the no-structure world 99.9 % there). `structures adapt`
+dumps (x, y, z, vanilla with, vanilla without, Basalt density) near the pieces of one structure type + the vanilla piece
+boxes / ground deltas / projections / junctions. The contribution B is added to the final density per block (before the
+aquifer); "vanilla solid <=> density + B > 0" is fitted first with free lookup tables (sum over pieces, by outside offset
+and dy), whose shape gave the closed forms below, then their 4 parameters by logistic loss + error count.
+- beard_thin (villages, pillager outposts), per rigid piece: `B = -0.53 * dyc/r * exp(-r^2 / 16.4)` with
+  `dyc = y + 0.5 - (box min y + ground_level_delta)`, `r^2 = dx^2 + dz^2 + dyc^2`, dx/dz = distance outside the box (0
+  within). Odd in dyc: fills below the floor, clears above it; strongest ~1.5 blocks from the floor. Terrain-matching pieces
+  (streets) add nothing themselves, but every junction entry of every piece (both ends of a connection are saved, rigid and
+  terrain-matching alike) adds `-0.26 * dyc/r * exp(-r^2/16)` around (source_x, source_ground_y, source_z). Reach 12 blocks.
+  Explains 98 % of the 22 867 solid<->air flips at 4 fitted sites (residual 458); dropping the junctions leaves 50 %
+  unexplained, junctions from rigid pieces only 47 %.
+- beard_box (ancient cities): at or above the box floor `B = -0.36 * exp(-r^2/16)`, r = 3D distance outside the box (0
+  inside); nothing measurable below the floor (all solid there). Explains 96 % of 278 752 flips; the free table does not do
+  better (residual: flips next to aquifer fluid), vertical falloff above the top is slightly slower than horizontal.
+- Block parity inside the vanilla piece boxes (before -> after; "halo" = blocks within 8 of a box, outside all boxes):
+  village_plains 90.82 -> 99.69 (halo 94.75 -> 99.67), village_desert 94.15 -> 99.75 (96.52 -> 99.76), village_savanna
+  90.19 -> 98.95 (95.33 -> 99.53), village_snowy 97.51 -> 99.52 (97.34 -> 99.91), village_taiga 90.62 -> 99.46 (91.54 ->
+  99.58), pillager_outpost 90.53 -> 99.72 (93.50 -> 99.85), ancient_city 13.5 -> 96.6 (halo 58.9 -> 94.4; the rest is
+  sculk). Snowy/taiga sites were not used for fitting. Encapsulate (trial chambers, already 99.7 %) and bury not fitted.
+- Turn off with env BASALT_NO_BEARD (measuring); `HALO=n` in `structures compare` reports the halo rows.
