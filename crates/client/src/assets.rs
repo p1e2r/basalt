@@ -37,6 +37,33 @@ pub struct Model {
     pub full_cube: bool,
     /// a face referenced a texture that could not be resolved / is not in the atlas
     pub missing: bool,
+    /// For models drawn entirely in the solid layer: per direction, a 16x16 mask of the block
+    /// boundary face covered by its element boxes (row = first in-plane axis, bit = second).
+    /// A neighbour's face is hidden when this mask covers it (shape-based face culling).
+    pub occl: Option<Box<[[u16; 16]; 6]>>,
+}
+
+/// In-plane axes of a face direction's axis (shared by culling masks and smooth lighting).
+pub fn plane_axes(dir: u8) -> (usize, usize, usize) {
+    match dir { DOWN | UP => (1, 0, 2), NORTH | SOUTH => (2, 0, 1), _ => (0, 1, 2) }
+}
+
+impl Model {
+    fn compute_occlusion(&mut self) {
+        if self.boxes.is_empty() || self.quads.is_empty() || self.quads.iter().any(|q| q.layer != LAYER_OPAQUE) { return; }
+        let mut m = [[0u16; 16]; 6];
+        for b in &self.boxes {
+            for d in 0..6u8 {
+                let (ax, t1, t2) = plane_axes(d);
+                let touches = if DIR_VEC[d as usize][ax] > 0 { b[3 + ax] >= 0.999 } else { b[ax] <= 0.001 };
+                if !touches { continue; }
+                let r = |lo: f32, hi: f32| ((lo * 16.0 + 0.01).floor().max(0.0) as usize, ((hi * 16.0 - 0.01).ceil() as usize).min(16));
+                let (a0, a1) = r(b[t1], b[3 + t1]); let (b0, b1) = r(b[t2], b[3 + t2]);
+                for i in a0..a1 { for j in b0..b1 { m[d as usize][i] |= 1 << j; } }
+            }
+        }
+        self.occl = Some(Box::new(m));
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -68,7 +95,7 @@ pub struct Image { pub w: u32, pub h: u32, pub rgba: Vec<u8> }
 pub struct Atlas { pub w: u32, pub h: u32, pub rgba: Vec<u8>, pub rects: HashMap<String, (Rect, u8)> }
 
 #[derive(Clone, Debug)]
-pub struct Biome { pub name: String, pub grass: u32, pub foliage: u32, pub water: u32, pub sky: u32, pub fog: u32 }
+pub struct Biome { pub name: String, pub grass: u32, pub foliage: u32, pub dry_foliage: u32, pub water: u32, pub sky: u32, pub fog: u32 }
 
 #[derive(Clone, Debug)]
 pub struct DimensionType { pub name: String, pub min_y: i32, pub height: i32, pub has_skylight: bool }
@@ -402,6 +429,21 @@ const NO_COLLIDE_KINDS: &[&str] = &["air", "attached_stem", "bamboo_sapling", "b
     "trip_wire_hook", "tripwire", "twisting_vines", "twisting_vines_plant", "vine", "wall_banner", "wall_torch", "web", "weeping_vines", "weeping_vines_plant", "weighted_pressure_plate", "wither_rose",
     "big_dripleaf_stem", "cactus_flower", "nether_sprouts", "moving_piston"];
 
+/// Redstone dust colour per power level (measured from the vanilla client with the client-mesh oracle).
+const REDSTONE_TINT: [u32; 16] = [0x4C0000, 0x700000, 0x7A0000, 0x840000, 0x8E0000, 0x990000, 0xA30000, 0xAD0000,
+    0xB70000, 0xC10000, 0xCC0000, 0xD60000, 0xE00000, 0xEA0600, 0xF41B00, 0xFF3200];
+
+/// Per-state tint: state-dependent colours first, then the per-block table.
+fn tint_for_state(name: &str, st: BlockState) -> Tint {
+    let num = |p: &str| st.get(p).and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+    match name {
+        "redstone_wire" => Tint::Fixed(REDSTONE_TINT[num("power").min(15) as usize]),
+        // stem colour moves linearly from green to yellow with age (measured)
+        "melon_stem" | "pumpkin_stem" => { let a = num("age").min(7); Tint::Fixed((a * 32) << 16 | (255 - a * 8) << 8 | a * 4) }
+        _ => tint_for(name),
+    }
+}
+
 fn tint_for(name: &str) -> Tint {
     match name {
         "grass_block" | "short_grass" | "tall_grass" | "fern" | "large_fern" | "potted_fern" | "sugar_cane" | "bush" => Tint::Grass,
@@ -482,6 +524,8 @@ impl Assets {
                 let mi = match cache.get(&key) { Some(i) => *i, None => {
                     let mut m = Model::default();
                     for (name, x, y, uvl) in &applied { baker.bake(name, *x, *y, *uvl, &mut m); }
+                    // blocks drawn like entities (signs, beds, banners, heads) never hide neighbour faces
+                    if !matches!(b.kind, "bed" | "standing_sign" | "wall_sign" | "ceiling_hanging_sign" | "wall_hanging_sign" | "banner" | "wall_banner" | "skull" | "wall_skull" | "piglinwallskull" | "player_head" | "player_wall_head" | "wither_skull" | "wither_wall_skull") { m.compute_occlusion(); }
                     models.push(m); let i = models.len() as u32 - 1; cache.insert(key, i); i
                 } };
                 let m = &models[mi as usize];
@@ -494,7 +538,7 @@ impl Assets {
                 if name == "snow" { collides = st.get("layers") != Some("1"); }
                 if b.kind == "fence_gate" && st.get("open") == Some("true") { collides = false; }
                 states.push(StateInfo {
-                    model: mi, tint: tint_for(name), occludes: m.occludes, self_cull: m.full_cube && !m.occludes && !name.ends_with("leaves"), collides, fluid, fluid_level: level,
+                    model: mi, tint: tint_for_state(name, st), occludes: m.occludes, self_cull: m.full_cube && !m.occludes && !name.ends_with("leaves"), collides, fluid, fluid_level: level,
                     emits_light: basalt_world::props::emission(id) > 0, emission: basalt_world::props::emission(id),
                     full_bright: name == "magma_block" || (name.ends_with("sculk_sensor") && st.get("sculk_sensor_phase") == Some("active")),
                     ao_occluder: m.full_cube && collides && !(m.full_cube && !m.occludes && !name.ends_with("leaves")),
@@ -613,6 +657,7 @@ impl Assets {
             Biome {
                 name: n.clone(), grass,
                 foliage: parse_color(fx.get("foliage_color")).unwrap_or_else(|| Self::colormap(&self.foliage_map, temp, down, 0x59AE30)),
+                dry_foliage: parse_color(fx.get("dry_foliage_color")).unwrap_or(0x7B5334),
                 water: parse_color(fx.get("water_color")).unwrap_or(0x3F76E4),
                 sky: parse_color(at.get("minecraft:visual/sky_color")).or(parse_color(fx.get("sky_color"))).unwrap_or(0x78A7FF),
                 fog: parse_color(at.get("minecraft:visual/fog_color")).or(parse_color(fx.get("fog_color"))).unwrap_or(0xC0D8FF),

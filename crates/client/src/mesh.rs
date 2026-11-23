@@ -72,7 +72,7 @@ pub fn mesh_block(a: &Assets, biomes: &[Biome], s: &Snapshot, x: i32, y: i32, z:
         let biome = biomes.get(s.biomes[((y >> 2) << 4 | (z >> 2) << 2 | (x >> 2)) as usize] as usize);
         let tint = match info.tint {
             Tint::None => [1.0; 3], Tint::Grass => rgb(biome.map(|b| b.grass).unwrap_or(0x79C05A)), Tint::Foliage => rgb(biome.map(|b| b.foliage).unwrap_or(0x59AE30)),
-            Tint::Water => rgb(biome.map(|b| b.water).unwrap_or(0x3F76E4)), Tint::Fixed(c) => rgb(c), Tint::DryFoliage => rgb(0x7B5334),
+            Tint::Water => rgb(biome.map(|b| b.water).unwrap_or(0x3F76E4)), Tint::Fixed(c) => rgb(c), Tint::DryFoliage => rgb(biome.map(|b| b.dry_foliage).unwrap_or(0x7B5334)),
         };
         let base = [ox + x as f32, oy + y as f32, oz + z as f32];
         let model = &a.models[info.model as usize];
@@ -83,6 +83,12 @@ pub fn mesh_block(a: &Assets, biomes: &[Biome], s: &Snapshot, x: i32, y: i32, z:
                 let n = s.blocks[sidx(x + d[0], y + d[1], z + d[2])];
                 let ni = a.info(n);
                 if ni.occludes || (info.self_cull && n != 0 && basalt_data::BlockState(n as u32).block_index() == basalt_data::BlockState(state as u32).block_index()) { continue; }
+                // shape-based culling (matches the vanilla client per basalt-check client-mesh): this
+                // block's whole boundary face on that side is covered by the neighbour's face
+                if let (Some(own), Some(nm)) = (&model.occl, &a.models[ni.model as usize].occl) {
+                    let (mine, theirs) = (&own[q.cull as usize], &nm[(q.cull ^ 1) as usize]);
+                    if mine.iter().any(|r| *r != 0) && mine.iter().zip(theirs.iter()).all(|(m, t)| m & t == *m) { continue; }
+                }
             }
             let d = DIR_VEC[q.dir as usize];
             let axis = if d[0] != 0 { 0 } else if d[1] != 0 { 1 } else { 2 };

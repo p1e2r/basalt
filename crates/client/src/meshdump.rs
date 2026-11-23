@@ -63,7 +63,7 @@ fn mesh_scene(a: &Assets, tex: &TexIndex, s: &Value) -> Result<Vec<Value>> {
     }
     let t = &s["tint"];
     let col = |k: &str, d: u32| t.get(k).and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(d);
-    let biome = Biome { name: "scene".into(), grass: col("grass", 0x91BD59), foliage: col("foliage", 0x77AB2F), water: col("water", 0x3F76E4), sky: 0x78A7FF, fog: 0xC0D8FF };
+    let biome = Biome { name: "scene".into(), grass: col("grass", 0x91BD59), foliage: col("foliage", 0x77AB2F), dry_foliage: col("dry_foliage", 0xA0784D), water: col("water", 0x3F76E4), sky: 0x78A7FF, fog: 0xC0D8FF };
     let snap = Snapshot { origin: so, blocks, light, biomes: [0; 64] };
     let mut out = SectionMesh::default();
     let mut trace: Vec<QuadTrace> = Vec::new();
