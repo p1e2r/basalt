@@ -1,12 +1,22 @@
 //! Basalt client: joins a 26.2 server, renders the world with wgpu.
 //!
-//! Usage: basalt-client [--addr host:port] [--name N] [--jar client.jar]
+//! Usage: basalt-client [--addr host:port | host:port] [--name N] [--jar client.jar] [--assets DIR --asset-index ID]
 //!                      [--screenshot out.png --wait SECS] [--look yaw,pitch] [--cmd 'tp @s 0 100 0']...
+//!                      [--scenario NAME|all] [--auto-respawn]
+//! Without an address (windowed) it starts at the title screen.
 mod assets;
+mod assetgrid;
+mod bench;
+mod container;
+mod entity;
+mod lang;
+mod menu;
 mod mesh;
 mod net;
 mod player;
 mod render;
+mod scenario;
+mod sound;
 mod ui;
 mod world;
 
@@ -15,9 +25,10 @@ use assets::{Assets, Biome};
 use basalt_protocol::{ids::play::serverbound as sb, Writer};
 use glam::{Mat4, Vec3};
 use mesh::{MeshData, SectionMesh, Snapshot, Vertex};
+use menu::Screen;
 use net::{Event, ItemStack};
 use player::{Input, Player};
-use render::{Frame, Gpu, Uniforms};
+use render::{Frame, Gpu, Tex, Uniforms};
 use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -29,18 +40,30 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
-struct Args { data: String, addr: String, name: String, jar: String, screenshot: Option<String>, wait: f32, size: (u32, u32), pos: Option<[f64; 3]>, look: Option<(f32, f32)>, cmds: Vec<String>, walk: f32, chat: Vec<String>, click: Option<char>, clicks: Vec<(i16, i8, i32)>, hold: f32, later: Vec<(f32, String)>, attack: u32, attack_every: f32 }
+pub struct Args {
+    data: String, addr: String, addr_given: bool, name: String, jar: String, screenshot: Option<String>, wait: f32, size: (u32, u32), pos: Option<[f64; 3]>, look: Option<(f32, f32)>,
+    cmds: Vec<String>, walk: f32, chat: Vec<String>, click: Option<char>, clicks: Vec<(i16, i8, i32)>, hold: f32, later: Vec<(f32, String)>, attack: u32, attack_every: f32,
+    scenario: Option<String>, vanilla: Option<String>, assets: Option<String>, asset_index: Option<String>, auto_respawn: bool,
+    // visual parity / asset grid / benchmark
+    time: Option<i64>, fov: Option<f32>, render_distance: Option<u32>, gui_scale: Option<u32>, no_gui: bool, options: Option<String>,
+    asset_grid: Option<String>, grid_items: bool, allowlist: String, bench: Option<String>, seconds: f32, bench_mode: String,
+}
 
 fn parse_args() -> Args {
-    let mut a = Args { data: "data".into(), addr: "127.0.0.1:25566".into(), name: "Basalt".into(), jar: std::env::var("BASALT_JAR").unwrap_or_else(|_| "vanilla/client.jar".into()),
-        screenshot: None, wait: 8.0, size: (1280, 720), pos: None, look: None, cmds: Vec::new(), walk: 0.0, chat: Vec::new(), click: None, clicks: Vec::new(), hold: 1.0, later: Vec::new(), attack: 0, attack_every: 0.7 };
+    let mut a = Args { data: "data".into(), addr: "127.0.0.1:25566".into(), addr_given: false, name: "Basalt".into(), jar: std::env::var("BASALT_JAR").unwrap_or_else(|_| "vanilla/client.jar".into()),
+        screenshot: None, wait: 8.0, size: (1280, 720), pos: None, look: None, cmds: Vec::new(), walk: 0.0, chat: Vec::new(), click: None, clicks: Vec::new(), hold: 1.0, later: Vec::new(), attack: 0, attack_every: 0.7,
+        scenario: None, vanilla: None, assets: None, asset_index: None, auto_respawn: false,
+        time: None, fov: None, render_distance: None, gui_scale: None, no_gui: false, options: None, asset_grid: None, grid_items: false, allowlist: "tools/asset-allowlist.txt".into(),
+        bench: None, seconds: 20.0, bench_mode: "rotate".into() };
     let mut it = std::env::args().skip(1);
     let triple = |s: String| -> Option<[f64; 3]> { let v: Vec<f64> = s.split(',').filter_map(|p| p.parse().ok()).collect(); (v.len() == 3).then(|| [v[0], v[1], v[2]]) };
     while let Some(k) = it.next() {
         let mut v = || it.next().unwrap_or_default();
         match k.as_str() {
             "--data" => a.data = v(),
-            "--addr" => a.addr = v(), "--name" => a.name = v(), "--jar" => a.jar = v(),
+            "--addr" => { a.addr = v(); a.addr_given = true; }
+            "--name" => a.name = v(), "--jar" => a.jar = v(),
+            "--assets" => a.assets = Some(v()), "--asset-index" => a.asset_index = Some(v()),
             "--screenshot" => a.screenshot = Some(v()), "--wait" => a.wait = v().parse().unwrap_or(8.0),
             "--size" => { let s = v(); if let Some((w, h)) = s.split_once('x') { a.size = (w.parse().unwrap_or(1280), h.parse().unwrap_or(720)); } }
             "--pos" => a.pos = triple(v()),
@@ -57,7 +80,22 @@ fn parse_args() -> Args {
             "--clicks" => a.clicks = v().split(',').filter_map(|c| { let p: Vec<&str> = c.split(':').collect(); Some((p.first()?.parse().ok()?, p.get(1).unwrap_or(&"0").parse().ok()?, p.get(2).unwrap_or(&"0").parse().ok()?)) }).collect(),
             "--walk" => a.walk = v().parse().unwrap_or(0.0),
             "--look" => { let s = v(); if let Some((y, p)) = s.split_once(',') { a.look = Some((y.parse().unwrap_or(0.0), p.parse().unwrap_or(0.0))); } }
-            other if !other.starts_with("--") => a.addr = other.to_string(),
+            "--scenario" => a.scenario = Some(v()),
+            "--vanilla" => a.vanilla = Some(v()),
+            "--auto-respawn" => a.auto_respawn = true,
+            "--time" => a.time = v().parse().ok(),
+            "--fov" => a.fov = v().parse().ok(),
+            "--render-distance" => a.render_distance = v().parse().ok(),
+            "--gui-scale" => a.gui_scale = v().parse().ok(),
+            "--no-gui" => a.no_gui = true,
+            "--options" => a.options = Some(v()),
+            "--asset-grid" => a.asset_grid = Some(v()),
+            "--blocks" => a.grid_items = false, "--items" => a.grid_items = true,
+            "--allowlist" => a.allowlist = v(),
+            "--bench" => a.bench = Some(v()),
+            "--seconds" => a.seconds = v().parse().unwrap_or(20.0),
+            "--bench-mode" => a.bench_mode = v(),
+            other if !other.starts_with("--") => { a.addr = other.to_string(); a.addr_given = true; }
             other => eprintln!("unknown argument {other}"),
         }
     }
@@ -66,7 +104,7 @@ fn parse_args() -> Args {
 
 // ---------------------------------------------------------------- meshing workers
 
-struct Mesher { jobs: mpsc::Sender<((i32, i32, i32), Snapshot)>, done: mpsc::Receiver<((i32, i32, i32), SectionMesh)> }
+struct Mesher { jobs: mpsc::Sender<((i32, i32, i32), Snapshot)>, done: mpsc::Receiver<((i32, i32, i32), SectionMesh, Duration)> }
 
 impl Mesher {
     fn new(assets: Arc<Assets>, biomes: Arc<Mutex<Arc<Vec<Biome>>>>) -> Mesher {
@@ -80,7 +118,9 @@ impl Mesher {
                 let job = jrx.lock().unwrap().recv();
                 let Ok((key, snap)) = job else { return };
                 let b = biomes.lock().unwrap().clone();
-                if dtx.send((key, mesh::mesh_section(&assets, &b, &snap))).is_err() { return; }
+                let t = Instant::now();
+                let m = mesh::mesh_section(&assets, &b, &snap);
+                if dtx.send((key, m, t.elapsed())).is_err() { return; }
             }).unwrap();
         }
         Mesher { jobs: jtx, done: drx }
@@ -102,104 +142,157 @@ fn snapshot(w: &World, cx: i32, sy: i32, cz: i32) -> Snapshot {
     Snapshot { origin, blocks, light, biomes }
 }
 
+/// How long a dirty section waits for its horizontal neighbours before it is meshed anyway
+/// (faces toward unloaded chunks are then drawn, like the edge of vanilla's view).
+const EDGE_MESH_DELAY: Duration = Duration::from_millis(400);
+
 // ---------------------------------------------------------------- game state
 
-#[derive(Clone)]
-struct Entity { pos: [f64; 3], yaw: f32, kind: i32 }
+/// Measurements for --bench.
+#[derive(Default)]
+pub struct Stats { pub mesh_ms: Vec<f32>, pub sections_meshed: u64, pub chunk_arrived: HashMap<(i32, i32), Instant>, pub chunk_latency_ms: Vec<f32> }
 
-/// Box width, height and colour per entity type (vanilla hitbox sizes, from public docs).
-fn entity_look(kind: i32) -> (f32, f32, [u8; 4]) {
-    let name = basalt_data::registries::ENTITY_TYPE.get(kind as usize).copied().unwrap_or("");
-    match name {
-        "player" => (0.6, 1.8, [200, 170, 140, 255]),
-        "zombie" => (0.6, 1.95, [60, 140, 70, 255]),
-        "skeleton" => (0.6, 1.99, [220, 220, 220, 255]),
-        "creeper" => (0.6, 1.7, [40, 200, 40, 255]),
-        "spider" => (1.4, 0.9, [70, 50, 50, 255]),
-        "cow" => (0.9, 1.4, [90, 60, 40, 255]),
-        "pig" => (0.9, 0.9, [240, 160, 170, 255]),
-        "sheep" => (0.9, 1.3, [245, 245, 245, 255]),
-        "chicken" => (0.4, 0.7, [255, 255, 230, 255]),
-        "item" | "experience_orb" => (0.25, 0.25, [230, 200, 80, 255]),
-        "arrow" => (0.5, 0.5, [120, 90, 60, 255]),
-        _ => (0.6, 0.9, [200, 170, 140, 255]),
-    }
-}
+pub struct Dig { pub block: [i32; 3], pub face: u8, pub ticks: u32, pub total: u32 }
 
-struct Game {
+pub struct Game {
     gpu: Gpu,
     assets: Arc<Assets>,
     rules: Option<Arc<basalt_game::GameData>>,
     ui: UiAtlas,
+    entity_atlas: entity::EntityAtlas,
     biomes: Arc<Mutex<Arc<Vec<Biome>>>>,
     dim_types: Vec<String>,
     world: World,
     player: Player,
     mesher: Mesher,
-    dirty: HashSet<(i32, i32, i32)>,
+    dirty: HashMap<(i32, i32, i32), Instant>,
     in_flight: HashSet<(i32, i32, i32)>,
     events: mpsc::Receiver<Event>,
     out: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
-    entities: HashMap<i32, Entity>,
+    entities: HashMap<i32, entity::Entity>,
+    player_names: HashMap<uuid::Uuid, String>,
     my_eid: i32,
+    name: String,
     chat: Vec<(String, Instant)>,
     chat_input: Option<String>,
     hp: f32, food: i32,
     hotbar: [ItemStack; 9], held: u8,
     inventory: Vec<ItemStack>,
+    inv_state: i32,
+    carried: ItemStack,
     day_time: i64,
     spawned: bool,
     loaded_sent: bool,
+    connected: bool,
     keys: HashSet<KeyCode>,
     mouse: [bool; 2],
+    mouse_pos: (f32, f32),
+    slider_drag: Option<String>,
     last_tick: Instant,
     last_sent: ([f64; 3], f32, f32, bool),
     ticks_since_pos: u32,
     last_input_flags: u8,
     seq: i32,
-    dig: Option<([i32; 3], u8, Instant)>,
+    dig: Option<Dig>,
+    dig_delay: u32,
+    /// (ticks taken, block) of the last survival break the client finished
+    last_dig: Option<(u32, [i32; 3])>,
+    /// other players' block_destruction progress: eid → (block, stage)
+    destroy: HashMap<i32, ([i32; 3], i8)>,
+    fp_swing: i32,
+    step_dist: f64,
     last_place: Instant,
     last_space: Option<Instant>,
     debug: bool,
     disconnected: Option<String>,
-    died: Option<Instant>,
+    death_msg: Option<String>,
+    respawn_at: Option<Instant>,
+    auto_respawn: bool,
+    screen: Option<Screen>,
+    cfg: menu::Config,
+    sounds: sound::Sounds,
+    last_addr: String,
+    quit: bool,
+    fullscreen_changed: bool,
+    hide_entities: bool,
+    hide_cracks: bool,
+    /// F1: no HUD, no hand
+    hide_gui: bool,
+    /// fixed time of day for deterministic captures (overrides the server)
+    fixed_time: Option<i64>,
+    last_chunk_at: Instant,
+    stats: Stats,
+    clicks_sent: u32,
+    ticks: u64,
     frames: (u32, Instant, f32),
 }
 
-fn send(out: &tokio::sync::mpsc::UnboundedSender<Vec<u8>>, w: Writer) { let _ = out.send(w.buf); }
+pub(crate) fn send(out: &tokio::sync::mpsc::UnboundedSender<Vec<u8>>, w: Writer) { let _ = out.send(w.buf); }
+
+pub struct GameOpts { pub name: String, pub addr: Option<String>, pub auto_respawn: bool, pub sounds: sound::Sounds, pub cfg: menu::Config }
 
 impl Game {
-    fn new(gpu_window: Option<Arc<Window>>, size: (u32, u32), assets: Arc<Assets>, rules: Option<Arc<basalt_game::GameData>>, args: &Args) -> Result<Game> {
+    pub fn new(gpu_window: Option<Arc<Window>>, size: (u32, u32), assets: Arc<Assets>, rules: Option<Arc<basalt_game::GameData>>, o: GameOpts) -> Result<Game> {
         let ui = UiAtlas::build(&assets);
-        let skin = assets.skin.as_ref().map(|s| (s.rgba.as_slice(), s.w, s.h)).unwrap_or((&[255; 4], 1, 1));
-        let gpu = Gpu::new(gpu_window, size, &assets, (&ui.rgba, ui.w, ui.h), skin)?;
+        let entity_atlas = entity::EntityAtlas::build(&assets);
+        let gpu = Gpu::new(gpu_window, size, &assets, (&ui.rgba, ui.w, ui.h), (&entity_atlas.rgba, entity_atlas.w, entity_atlas.h))?;
         let biomes = Arc::new(Mutex::new(Arc::new(Vec::new())));
         let mesher = Mesher::new(assets.clone(), biomes.clone());
+        let (_tx, rx) = mpsc::channel();
+        let (otx, _orx) = tokio::sync::mpsc::unbounded_channel();
+        let mut sounds = o.sounds; sounds.master = o.cfg.master_volume;
+        let mut g = Game {
+            gpu, assets, rules, ui, entity_atlas, biomes, dim_types: Vec::new(), world: World::new(-64, 384), player: Player::new(), mesher,
+            dirty: HashMap::new(), in_flight: HashSet::new(), events: rx, out: otx, entities: HashMap::new(), player_names: HashMap::new(), my_eid: 0, name: o.name,
+            chat: Vec::new(), chat_input: None, hp: 20.0, food: 20, hotbar: Default::default(), held: 0, inventory: vec![ItemStack::default(); 46], inv_state: 0, carried: ItemStack::default(), day_time: 6000,
+            spawned: false, loaded_sent: false, connected: false, keys: HashSet::new(), mouse: [false; 2], mouse_pos: (0.0, 0.0), slider_drag: None, last_tick: Instant::now(),
+            last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, step_dist: 0.0,
+            last_place: Instant::now(), last_space: None, debug: false, disconnected: None, death_msg: None, respawn_at: None, auto_respawn: o.auto_respawn,
+            screen: Some(Screen::Title), cfg: o.cfg, sounds, last_addr: String::new(), quit: false, fullscreen_changed: false, hide_entities: false, hide_cracks: false, hide_gui: false, fixed_time: None, last_chunk_at: Instant::now(), stats: Stats::default(), clicks_sent: 0, ticks: 0,
+            frames: (0, Instant::now(), 0.0),
+        };
+        if let Some(a) = o.addr { g.connect(&a); }
+        Ok(g)
+    }
+
+    /// Open a connection (replacing any current one) and show the connecting screen.
+    pub fn connect(&mut self, addr: &str) {
+        self.disconnect();
         let (tx, rx) = mpsc::channel();
         let (otx, orx) = tokio::sync::mpsc::unbounded_channel();
-        net::spawn(net::Options { addr: args.addr.clone(), name: args.name.clone() }, tx, orx);
-        Ok(Game {
-            gpu, assets, rules, ui, biomes, dim_types: Vec::new(), world: World::new(-64, 384), player: Player::new(), mesher,
-            dirty: HashSet::new(), in_flight: HashSet::new(), events: rx, out: otx, entities: HashMap::new(), my_eid: 0,
-            chat: Vec::new(), chat_input: None, hp: 20.0, food: 20, hotbar: Default::default(), held: 0, inventory: vec![ItemStack::default(); 46], day_time: 6000,
-            spawned: false, loaded_sent: false, keys: HashSet::new(), mouse: [false; 2], last_tick: Instant::now(),
-            last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None,
-            last_place: Instant::now(), last_space: None, debug: false, disconnected: None, died: None, frames: (0, Instant::now(), 0.0),
-        })
+        net::spawn(net::Options { addr: addr.to_string(), name: self.name.clone(), view_distance: self.cfg.render_distance.clamp(2, 32) as i8 }, tx, orx);
+        self.events = rx; self.out = otx;
+        self.last_addr = addr.to_string();
+        self.disconnected = None;
+        self.connected = true;
+        self.screen = Some(Screen::Connecting { addr: addr.to_string(), error: None });
+    }
+
+    /// Drop the connection (the net thread ends when its outbound channel closes) and clear the world.
+    pub fn disconnect(&mut self) {
+        let (_tx, rx) = mpsc::channel();
+        let (otx, _orx) = tokio::sync::mpsc::unbounded_channel();
+        self.events = rx; self.out = otx;
+        self.connected = false; self.spawned = false; self.loaded_sent = false;
+        self.world = World::new(-64, 384); self.gpu.sections.clear(); self.dirty.clear(); self.entities.clear(); self.destroy.clear();
+        self.inventory = vec![ItemStack::default(); 46]; self.hotbar = Default::default(); self.carried = ItemStack::default(); self.dig = None;
+        self.chat.clear(); self.chat_input = None;
     }
 
     fn mark_chunk(&mut self, cx: i32, cz: i32) {
+        let now = Instant::now();
         for dx in -1..=1 { for dz in -1..=1 {
             let k = (cx + dx, cz + dz);
             if !self.world.chunks.contains_key(&k) { continue; }
-            for sy in 0..self.world.nsections() as i32 { self.dirty.insert((k.0, sy, k.1)); }
+            for sy in 0..self.world.nsections() as i32 { self.dirty.entry((k.0, sy, k.1)).or_insert(now); }
         } }
     }
     fn mark_block(&mut self, x: i32, y: i32, z: i32) {
         let sy = (y - self.world.min_y) >> 4;
+        let now = Instant::now() - EDGE_MESH_DELAY;
         for dx in -1..=1 { for dy in -1..=1 { for dz in -1..=1 {
             let (cx, csy, cz) = ((x + dx) >> 4, ((y + dy - self.world.min_y) >> 4), (z + dz) >> 4);
-            if csy >= 0 && csy < self.world.nsections() as i32 && (csy - sy).abs() <= 1 { self.dirty.insert((cx, csy, cz)); }
+            if csy >= 0 && csy < self.world.nsections() as i32 && (csy - sy).abs() <= 1 { self.dirty.entry((cx, csy, cz)).or_insert(now); }
         } } }
     }
 
@@ -207,8 +300,10 @@ impl Game {
         let name = self.dim_types.get(dim_type as usize).cloned().unwrap_or_default();
         let (min_y, height) = self.assets.dimension_types.get(&name).map(|d| (d.min_y, d.height)).unwrap_or((-64, 384));
         self.world = World::new(min_y, height);
-        self.gpu.sections.clear(); self.dirty.clear(); self.entities.clear();
+        self.gpu.sections.clear(); self.dirty.clear(); self.entities.clear(); self.destroy.clear();
     }
+
+    fn open_container(&self) -> Option<&container::Open> { if let Some(Screen::Container(c)) = &self.screen { Some(c) } else { None } }
 
     fn handle(&mut self, ev: Event) {
         match ev {
@@ -220,9 +315,12 @@ impl Game {
                 self.my_eid = entity_id; self.player.gamemode = gamemode; self.player.flying = gamemode == 3;
                 self.reset_world(dimension_type);
             }
-            Event::Respawn { dimension_type, gamemode, .. } => { self.player.gamemode = gamemode; self.reset_world(dimension_type); self.spawned = false; }
+            Event::Respawn { dimension_type, gamemode, .. } => {
+                self.player.gamemode = gamemode; self.reset_world(dimension_type); self.spawned = false;
+                if matches!(self.screen, Some(Screen::Death { .. })) { self.screen = None; }
+            }
             Event::Chunk { cx, cz, raw } => match net::decode_chunk(&raw, self.world.nsections()) {
-                Ok(c) => { self.world.chunks.insert((cx, cz), c); self.mark_chunk(cx, cz); }
+                Ok(c) => { self.world.chunks.insert((cx, cz), c); self.mark_chunk(cx, cz); self.last_chunk_at = Instant::now(); self.stats.chunk_arrived.entry((cx, cz)).or_insert_with(Instant::now); }
                 Err(e) => log::warn!("chunk {cx},{cz}: {e:#}"),
             },
             Event::Light { cx, cz, raw } => {
@@ -251,40 +349,125 @@ impl Game {
                 let mut w = Writer::with_id(sb::ACCEPT_TELEPORTATION); w.varint(id); send(&self.out, w);
                 self.send_move(true);
                 self.spawned = true;
+                if matches!(self.screen, Some(Screen::Connecting { .. })) { self.screen = None; }
             }
             Event::Chat(s) => { println!("[chat] {s}"); self.chat.push((s, Instant::now())); if self.chat.len() > 100 { self.chat.remove(0); } }
             Event::Health { hp, food } => { self.hp = hp; self.food = food; }
             Event::GameMode(g) => { self.player.gamemode = g; self.player.flying = g == 3 || (g == 1 && self.player.flying); }
             Event::Time { day, .. } => self.day_time = day,
             Event::HeldSlot(s) => self.held = s.min(8),
-            Event::Slot { window, slot, item } => {
-                if window == 0 && (0..46).contains(&slot) { self.inventory[slot as usize] = item.clone(); }
-                if window == 0 && (36..45).contains(&slot) { self.hotbar[(slot - 36) as usize] = item.clone(); }
-                if window == -2 && (0..9).contains(&slot) { self.hotbar[slot as usize] = item; }
+            Event::Slot { window, state, slot, item } => {
+                if window == -1 && slot == -1 { self.carried = item; return; }
+                // set_player_inventory numbering: 0-8 hotbar, 9-35 main, 36-39 armor (feet..head), 40 offhand
+                let (window, slot) = if window == -2 { (0, match slot { 0..=8 => 36 + slot, 9..=35 => slot, 36..=39 => 8 - (slot - 36), 40 => 45, _ => -1 }) } else { (window, slot) };
+                if window == 0 && (0..46).contains(&slot) {
+                    self.inventory[slot as usize] = item.clone();
+                    if (36..45).contains(&slot) { self.hotbar[(slot - 36) as usize] = item.clone(); }
+                    if state != 0 { self.inv_state = state; }
+                }
+                if let Some(Screen::Container(c)) = &mut self.screen {
+                    if c.window == window && slot >= 0 && (slot as usize) < c.slots.len() { c.slots[slot as usize] = item.clone(); c.state = state; }
+                    // the player's own inventory part of another window mirrors window 0
+                    if window == 0 && c.window != 0 && (9..45).contains(&slot) { let i = c.kind.player_start() + slot as usize - 9; if i < c.slots.len() { c.slots[i] = item; } }
+                }
             }
-            Event::Inventory { items } => { for (i, it) in items.iter().enumerate().take(46) { self.inventory[i] = it.clone(); } for i in 0..9 { if let Some(it) = items.get(36 + i) { self.hotbar[i] = it.clone(); } } }
-            Event::AddEntity { id, kind, pos, yaw, .. } => { self.entities.insert(id, Entity { pos, yaw, kind }); }
-            Event::MoveEntity { id, delta, rot } => { if let Some(e) = self.entities.get_mut(&id) { for i in 0..3 { e.pos[i] += delta[i]; } if let Some((y, _)) = rot { e.yaw = y; } } }
-            Event::TeleportEntity { id, pos, yaw } => { if let Some(e) = self.entities.get_mut(&id) { e.pos = pos; e.yaw = yaw; } }
-            Event::RemoveEntities(v) => { for id in v { self.entities.remove(&id); } }
-            Event::PlayerName { .. } => {}
+            Event::Content { window, state, items, carried } => {
+                if window == 0 {
+                    for (i, it) in items.iter().enumerate().take(46) { self.inventory[i] = it.clone(); }
+                    for i in 0..9 { self.hotbar[i] = self.inventory[36 + i].clone(); }
+                    self.inv_state = state;
+                }
+                if let Some(Screen::Container(c)) = &mut self.screen {
+                    if c.window == window { c.slots = items.clone(); c.slots.resize(c.kind.slot_count().max(items.len()), ItemStack::default()); c.state = state; }
+                    if c.window != 0 && window != c.window && window == 0 { let ps = c.kind.player_start(); for i in 0..36 { if ps + i < c.slots.len() { c.slots[ps + i] = self.inventory[9 + i].clone(); } } }
+                    if c.window == window { self.carried = carried; }
+                } else if window == 0 { self.carried = carried; }
+                // keep the hotbar in sync when the server sends another window's content
+                if window != 0 { if let Some(Screen::Container(c)) = &self.screen { if c.window == window { let ps = c.kind.player_start(); for i in 0..9 { if let Some(it) = c.slots.get(ps + 27 + i) { self.hotbar[i] = it.clone(); self.inventory[36 + i] = it.clone(); } } } } }
+            }
+            Event::Cursor(item) => self.carried = item,
+            Event::OpenScreen { window, menu, title } => {
+                let kind = container::Kind::from_menu(menu);
+                let mut slots = vec![ItemStack::default(); kind.slot_count()];
+                let ps = kind.player_start();
+                for i in 0..36 { if ps + i < slots.len() { slots[ps + i] = self.inventory[9 + i].clone(); } }
+                self.chat_input = None; self.mouse = [false; 2];
+                self.screen = Some(Screen::Container(container::Open { window, kind, title, slots, state: 0, drag: None, last_click: None, hover: None }));
+            }
+            Event::CloseScreen(w) => { if self.open_container().map(|c| c.window == w).unwrap_or(false) { self.screen = None; self.carried = ItemStack::default(); } }
+            Event::AddEntity { id, uuid, kind, pos, vel, yaw, pitch, head_yaw } => { self.entities.insert(id, entity::Entity::new(id, uuid, kind, pos, vel, yaw, pitch, head_yaw)); }
+            Event::MoveEntity { id, delta, rot, on_ground } => { if let Some(e) = self.entities.get_mut(&id) { let p = [e.server_pos[0] + delta[0], e.server_pos[1] + delta[1], e.server_pos[2] + delta[2]]; e.move_to(p, rot); e.on_ground = on_ground; } }
+            Event::TeleportEntity { id, pos, yaw, pitch, on_ground } => { if let Some(e) = self.entities.get_mut(&id) { e.move_to(pos, Some((yaw, pitch))); e.on_ground = on_ground; } }
+            Event::EntityMotion { id, vel } => { if id == self.my_eid { self.player.vel = vel; } else if let Some(e) = self.entities.get_mut(&id) { e.vel = vel; } }
+            Event::EntityData { id, entries } => { if let Some(e) = self.entities.get_mut(&id) { e.apply_meta(&entries); } }
+            Event::HeadYaw { id, yaw } => { if let Some(e) = self.entities.get_mut(&id) { e.set_head(yaw); } }
+            Event::Animate { id, action } => { if action == 0 || action == 3 { if let Some(e) = self.entities.get_mut(&id) { e.swing = 0; } } }
+            Event::Hurt { id } => { if let Some(e) = self.entities.get_mut(&id) { e.hurt = 10; } }
+            Event::EntityEvent { id, status } => { if let Some(e) = self.entities.get_mut(&id) { match status { 3 => { if e.death == 0 { e.death = 1; } } 2 => e.hurt = 10, _ => {} } } }
+            Event::TakeItem { item, collector } => {
+                if collector == self.my_eid { let p = self.player.pos; self.sounds.play("entity.item.pickup", Some(p), 0.2, 1.4); }
+                let _ = item;
+            }
+            Event::RemoveEntities(v) => { for id in v { self.entities.remove(&id); self.destroy.remove(&id); } }
+            Event::BlockDestruction { id, pos, stage } => { if (0..10).contains(&stage) { self.destroy.insert(id, (pos, stage)); } else { self.destroy.remove(&id); } }
+            Event::Sound { event, pos, entity, volume, pitch, .. } => {
+                let p = pos.or_else(|| entity.and_then(|id| if id == self.my_eid { Some(self.player.pos) } else { self.entities.get(&id).map(|e| e.pos) }));
+                self.sounds.play(&event, p, volume, pitch);
+            }
+            Event::LevelEvent { event, pos, data } => {
+                if event == 2001 { self.block_sound(data as u16, "break", [pos[0] as f64 + 0.5, pos[1] as f64 + 0.5, pos[2] as f64 + 0.5]); }
+            }
+            Event::PlayerName { uuid, name } => { self.player_names.insert(uuid, name); }
             Event::Velocity(v) => self.player.vel = v,
-            Event::EntityMotion { id, vel } => { if id == self.my_eid { self.player.vel = vel; } }
-            Event::Died(m) => { println!("[death] {m}"); self.chat.push((m, Instant::now())); self.died = Some(Instant::now()); }
-            Event::Disconnected(m) => { eprintln!("disconnected: {m}"); self.chat.push((format!("Disconnected: {m}"), Instant::now())); self.disconnected = Some(m); }
+            Event::Died { player, msg } => {
+                if player != self.my_eid && self.my_eid != 0 { return; }
+                println!("[death] {msg}");
+                self.chat.push((msg.clone(), Instant::now()));
+                self.death_msg = Some(msg.clone());
+                self.mouse = [false; 2]; self.dig = None; self.chat_input = None;
+                if self.auto_respawn { self.respawn_at = Some(Instant::now() + Duration::from_secs(2)); }
+                else { self.screen = Some(Screen::Death { msg, at: Instant::now() }); }
+            }
+            Event::Disconnected(m) => {
+                eprintln!("disconnected: {m}");
+                self.chat.push((format!("Disconnected: {m}"), Instant::now()));
+                self.disconnected = Some(m.clone());
+                if self.connected { self.disconnect(); self.screen = Some(Screen::Connecting { addr: self.last_addr.clone(), error: Some(m) }); }
+            }
         }
+    }
+
+    fn respawn(&mut self) {
+        let mut w = Writer::with_id(sb::CLIENT_COMMAND); w.varint(0); send(&self.out, w);
+        self.spawned = false;
+        if matches!(self.screen, Some(Screen::Death { .. })) { self.screen = None; }
+    }
+
+    fn block_sound(&mut self, state: u16, kind: &str, at: [f64; 3]) {
+        if state == 0 { return; }
+        let g = sound::block_group(basalt_data::BlockState(state as u32).name());
+        let (v, p) = match kind { "break" | "place" => (1.0, 0.8), "step" => (0.15, 1.0), _ => (0.25, 0.5) };
+        self.sounds.play(&format!("block.{g}.{kind}"), Some(at), v, p);
     }
 
     fn pump(&mut self) {
         let start = Instant::now();
         while let Ok(ev) = self.events.try_recv() { self.handle(ev); if start.elapsed() > Duration::from_millis(30) { break; } }
-        while let Ok((k, m)) = self.mesher.done.try_recv() { self.in_flight.remove(&k); if self.world.chunks.contains_key(&(k.0, k.2)) { self.gpu.set_section(k, &m); } }
-        // queue dirty sections whose horizontal neighbours are loaded, nearest first
+        while let Ok((k, m, dt)) = self.mesher.done.try_recv() {
+            self.in_flight.remove(&k);
+            self.stats.mesh_ms.push(dt.as_secs_f32() * 1000.0); self.stats.sections_meshed += 1;
+            if self.world.chunks.contains_key(&(k.0, k.2)) {
+                self.gpu.set_section(k, &m);
+                if let Some(t) = self.stats.chunk_arrived.remove(&(k.0, k.2)) { self.stats.chunk_latency_ms.push(t.elapsed().as_secs_f32() * 1000.0); }
+            }
+        }
+        // queue dirty sections, nearest first: those with all horizontal neighbours loaded at once,
+        // edge sections (a neighbour missing) after a short wait; they are re-meshed when it arrives
         if self.in_flight.len() < 64 && !self.dirty.is_empty() {
             let (pcx, pcz) = ((self.player.pos[0].floor() as i32) >> 4, (self.player.pos[2].floor() as i32) >> 4);
-            let mut ready: Vec<(i32, i32, i32)> = self.dirty.iter().copied().filter(|&(cx, _, cz)| {
-                !self.in_flight.contains(&(cx, 0, cz)) && [(-1, 0), (1, 0), (0, -1), (0, 1)].iter().all(|(dx, dz)| self.world.chunks.contains_key(&(cx + dx, cz + dz)))
-            }).collect();
+            let mut ready: Vec<(i32, i32, i32)> = self.dirty.iter().filter(|&(&(cx, sy, cz), t)| {
+                !self.in_flight.contains(&(cx, sy, cz)) && (t.elapsed() >= EDGE_MESH_DELAY || [(-1, 0), (1, 0), (0, -1), (0, 1)].iter().all(|(dx, dz)| self.world.chunks.contains_key(&(cx + dx, cz + dz))))
+            }).map(|(k, _)| *k).collect();
             ready.sort_by_key(|&(cx, _, cz)| (cx - pcx).pow(2) + (cz - pcz).pow(2));
             for k in ready.into_iter().take(256) {
                 self.dirty.remove(&k);
@@ -316,7 +499,7 @@ impl Game {
     }
 
     fn input(&self) -> Input {
-        if self.chat_input.is_some() { return Input::default(); }
+        if self.chat_input.is_some() || self.screen.is_some() { return Input::default(); }
         let k = |c: KeyCode| self.keys.contains(&c);
         Input {
             forward: k(KeyCode::KeyW) as i32 as f32 - k(KeyCode::KeyS) as i32 as f32,
@@ -336,12 +519,11 @@ impl Game {
     }
 
     fn tick(&mut self) {
-        // no death screen yet: respawn automatically after a moment
-        if self.died.map(|t| t.elapsed() > Duration::from_secs(2)).unwrap_or(false) {
-            self.died = None; self.spawned = false;
-            let mut w = Writer::with_id(sb::CLIENT_COMMAND); w.varint(0); send(&self.out, w);
-        }
-        if !self.spawned || self.died.is_some() { return; }
+        self.ticks += 1;
+        for e in self.entities.values_mut() { e.tick(); }
+        if self.fp_swing >= 0 { self.fp_swing += 1; if self.fp_swing >= 6 { self.fp_swing = -1; } }
+        if self.respawn_at.map(|t| Instant::now() >= t).unwrap_or(false) { self.respawn_at = None; self.respawn(); }
+        if !self.spawned || matches!(self.screen, Some(Screen::Death { .. })) { return; }
         if !self.loaded_sent && !self.world.chunks.is_empty() {
             send(&self.out, Writer::with_id(sb::PLAYER_LOADED)); self.loaded_sent = true;
         }
@@ -349,7 +531,18 @@ impl Game {
         let flags = (inp.forward > 0.0) as u8 | ((inp.forward < 0.0) as u8) << 1 | ((inp.strafe > 0.0) as u8) << 2 | ((inp.strafe < 0.0) as u8) << 3
             | (inp.jump as u8) << 4 | (inp.sneak as u8) << 5 | (inp.sprint as u8) << 6;
         if flags != self.last_input_flags { let mut w = Writer::with_id(sb::PLAYER_INPUT); w.u8(flags); send(&self.out, w); self.last_input_flags = flags; }
+        let before = self.player.pos;
         self.player.tick(&self.assets, &self.world, inp);
+        // footsteps
+        if self.player.on_ground && !self.player.flying && !self.player.sneaking {
+            self.step_dist += ((self.player.pos[0] - before[0]).powi(2) + (self.player.pos[2] - before[2]).powi(2)).sqrt();
+            if self.step_dist > 1.6 {
+                self.step_dist = 0.0;
+                let p = self.player.pos;
+                let below = self.world.get(p[0].floor() as i32, (p[1] - 0.2).floor() as i32, p[2].floor() as i32);
+                self.block_sound(below, "step", [p[0], p[1], p[2]]);
+            }
+        }
         self.send_move(false);
         self.tick_dig();
         send(&self.out, Writer::with_id(sb::CLIENT_TICK_END));
@@ -371,9 +564,8 @@ impl Game {
         let block = self.target().map(|h| { let c = [h.block[0] as f64 + 0.5, h.block[1] as f64 + 0.5, h.block[2] as f64 + 0.5]; ((c[0] - o[0]).powi(2) + (c[1] - o[1]).powi(2) + (c[2] - o[2]).powi(2)).sqrt() - 0.5 }).unwrap_or(f64::MAX);
         let mut best: Option<(i32, f64)> = None;
         for (id, e) in &self.entities {
-            if *id == self.my_eid { continue; }
-            let (w, h, _) = entity_look(e.kind);
-            if basalt_data::registries::ENTITY_TYPE.get(e.kind as usize).map(|n| matches!(*n, "item" | "arrow" | "experience_orb")).unwrap_or(false) { continue; }
+            if *id == self.my_eid || !entity::is_living(e.kind) || e.death > 0 { continue; }
+            let (w, h, _) = entity::dims(e.kind);
             let hw = w as f64 / 2.0;
             let bb = [e.pos[0] - hw, e.pos[1], e.pos[2] - hw, e.pos[0] + hw, e.pos[1] + h as f64, e.pos[2] + hw];
             let (mut t0, mut t1) = (0.0f64, reach);
@@ -393,15 +585,19 @@ impl Game {
     /// Attack packet (varint entity id) + swing, as the real client sends on left click.
     fn attack(&mut self, id: i32) {
         let mut w = Writer::with_id(sb::ATTACK); w.varint(id); send(&self.out, w);
+        self.swing_arm();
+    }
+    fn swing_arm(&mut self) {
         let mut w = Writer::with_id(sb::SWING); w.varint(0); send(&self.out, w);
+        self.fp_swing = 0;
     }
 
     /// Test hook: face and attack the nearest non-player living entity within `range`.
     fn attack_nearest(&mut self, range: f64) -> bool {
         let eye = self.eye(1.0);
-        let skip = |k: i32| basalt_data::registries::ENTITY_TYPE.get(k as usize).map(|n| matches!(*n, "item" | "arrow" | "experience_orb" | "player")).unwrap_or(true);
-        let Some((id, pos, h)) = self.entities.iter().filter(|(id, e)| **id != self.my_eid && !skip(e.kind))
-            .map(|(id, e)| (*id, e.pos, entity_look(e.kind).1 as f64))
+        let skip = |k: i32| !entity::is_living(k) || entity::type_name(k) == "player";
+        let Some((id, pos, h)) = self.entities.iter().filter(|(id, e)| **id != self.my_eid && !skip(e.kind) && e.death == 0)
+            .map(|(id, e)| (*id, e.pos, entity::dims(e.kind).1 as f64))
             .min_by(|a, b| { let d = |p: [f64; 3]| (p[0] - eye[0]).powi(2) + (p[2] - eye[2]).powi(2); d(a.1).partial_cmp(&d(b.1)).unwrap() }) else { return false };
         let (dx, dy, dz) = (pos[0] - eye[0], pos[1] + h * 0.5 - eye[1], pos[2] - eye[2]);
         if (dx * dx + dy * dy + dz * dz).sqrt() > range { return false; }
@@ -411,44 +607,62 @@ impl Game {
         true
     }
 
+    /// Tick-based digging like the vanilla client: progress accumulates per tick, the finish packet
+    /// goes out on the tick it reaches 1, then a 5-tick delay before the next block.
     fn tick_dig(&mut self) {
-        if !self.mouse[0] || self.chat_input.is_some() {
-            if let Some((b, f, _)) = self.dig.take() { self.player_action(1, b, f); }
+        if self.dig_delay > 0 { self.dig_delay -= 1; }
+        if !self.mouse[0] || self.chat_input.is_some() || self.screen.is_some() {
+            if let Some(d) = self.dig.take() { self.player_action(1, d.block, d.face); }
             return;
         }
         let hit = self.target();
-        match (&self.dig, hit) {
-            (Some((b, _, t0)), Some(h)) if *b == h.block => {
-                if self.player.gamemode != 1 && t0.elapsed() >= self.dig_time(h.block) {
-                    let (b, f) = (*b, h.face); self.player_action(2, b, f); self.dig = None;
-                    self.world.set(b[0], b[1], b[2], 0); self.mark_block(b[0], b[1], b[2]);
-                }
+        let same = matches!((&self.dig, &hit), (Some(d), Some(h)) if d.block == h.block);
+        if same {
+            let d = self.dig.as_mut().unwrap();
+            d.ticks += 1;
+            let (b, f, ticks, total) = (d.block, d.face, d.ticks, d.total);
+            if ticks % 4 == 0 { let st = self.world.get(b[0], b[1], b[2]); self.block_sound(st, "hit", [b[0] as f64 + 0.5, b[1] as f64 + 0.5, b[2] as f64 + 0.5]); }
+            if self.fp_swing < 0 || self.fp_swing >= 3 { self.swing_arm(); }
+            if ticks >= total {
+                self.player_action(2, b, f);
+                self.break_local(b);
+                self.last_dig = Some((ticks, b));
+                self.dig = None; self.dig_delay = 5;
             }
-            (_, Some(h)) => {
-                if let Some((b, f, _)) = self.dig.take() { self.player_action(1, b, f); }
-                self.player_action(0, h.block, h.face);
-                let mut w = Writer::with_id(sb::SWING); w.varint(0); send(&self.out, w);
-                if self.player.gamemode == 1 {
-                    // creative: instant break, no abort/finish follows; one block per click
-                    let b = h.block; self.world.set(b[0], b[1], b[2], 0); self.mark_block(b[0], b[1], b[2]);
-                    self.mouse[0] = false;
-                } else { self.dig = Some((h.block, h.face, Instant::now())); }
-            }
-            (Some(_), None) => { if let Some((b, f, _)) = self.dig.take() { self.player_action(1, b, f); } }
-            (None, None) => {}
+            return;
+        }
+        if let Some(d) = self.dig.take() { self.player_action(1, d.block, d.face); }
+        let Some(h) = hit else { return };
+        if self.dig_delay > 0 { return; }
+        self.player_action(0, h.block, h.face);
+        self.swing_arm();
+        if self.player.gamemode == 1 {
+            // creative: instant break, no abort/finish follows
+            self.break_local(h.block);
+            self.dig_delay = 5;
+        } else {
+            let total = self.dig_ticks(h.block);
+            if total <= 1 { self.break_local(h.block); self.last_dig = Some((total, h.block)); self.dig_delay = 5; }
+            else { self.dig = Some(Dig { block: h.block, face: h.face, ticks: 0, total }); }
         }
     }
 
-    /// Survival break time for the targeted block with the held item (vanilla formula via basalt-game).
-    fn dig_time(&self, b: [i32; 3]) -> Duration {
+    fn break_local(&mut self, b: [i32; 3]) {
+        let st = self.world.get(b[0], b[1], b[2]);
+        self.block_sound(st, "break", [b[0] as f64 + 0.5, b[1] as f64 + 0.5, b[2] as f64 + 0.5]);
+        self.world.set(b[0], b[1], b[2], 0); self.mark_block(b[0], b[1], b[2]);
+    }
+
+    /// Survival break time in ticks for the block with the held item (vanilla formula via basalt-game).
+    fn dig_ticks(&self, b: [i32; 3]) -> u32 {
         let state = self.world.get(b[0], b[1], b[2]) as u32;
         let held = self.hotbar[self.held as usize].clone();
         let held = (held.count > 0).then_some(held.item);
         let eye = self.eye(1.0);
         let in_water = self.assets.info(self.world.get(eye[0].floor() as i32, eye[1].floor() as i32, eye[2].floor() as i32)).fluid == 1;
         match &self.rules {
-            Some(r) => match r.dig_ticks(state, held, self.player.on_ground, in_water) { Some(t) => Duration::from_millis(t as u64 * 50 + 50), None => Duration::from_secs(3600) },
-            None => Duration::from_millis(1200),
+            Some(r) => r.dig_ticks(state, held, self.player.on_ground, in_water).unwrap_or(u32::MAX),
+            None => 24,
         }
     }
 
@@ -462,7 +676,16 @@ impl Game {
         let mut w = Writer::with_id(sb::USE_ITEM_ON);
         w.varint(0).position(h.block[0], h.block[1], h.block[2]).varint(h.face as i32).f32(c[0]).f32(c[1]).f32(c[2]).bool(false).bool(false).varint(self.seq);
         send(&self.out, w);
-        let mut w = Writer::with_id(sb::SWING); w.varint(0); send(&self.out, w);
+        self.swing_arm();
+        // place sound for block items (the server sends it only to other players)
+        let held = self.hotbar[self.held as usize].clone();
+        if held.count > 0 {
+            let name = basalt_data::registries::ITEM.get(held.item as usize).copied().unwrap_or("");
+            if let Some(st) = basalt_data::BlockState::from_name(name) {
+                let d = assets::DIR_VEC[h.face as usize];
+                self.block_sound(st.0 as u16, "place", [h.block[0] as f64 + 0.5 + d[0] as f64, h.block[1] as f64 + 0.5 + d[1] as f64, h.block[2] as f64 + 0.5 + d[2] as f64]);
+            }
+        }
     }
 
     fn send_chat(&mut self, msg: &str) {
@@ -480,36 +703,85 @@ impl Game {
 
     fn set_held(&mut self, s: u8) { self.held = s; let mut w = Writer::with_id(sb::SET_CARRIED_ITEM); w.i16(s as i16); send(&self.out, w); }
 
-    fn on_key(&mut self, code: KeyCode, pressed: bool, text: Option<&str>) -> bool {
+    // ------------------------------------------------------------ input (shared by the window and scenarios)
+
+    /// Whether the mouse should be captured for looking around.
+    pub fn wants_grab(&self) -> bool { self.screen.is_none() && self.chat_input.is_none() && self.connected && self.spawned }
+
+    pub fn key(&mut self, code: KeyCode, pressed: bool, text: Option<&str>) {
+        if pressed { self.keys.insert(code); } else { self.keys.remove(&code); }
+        if !pressed { return; }
         if let Some(buf) = &mut self.chat_input {
-            if !pressed { return false; }
             match code {
                 KeyCode::Escape => self.chat_input = None,
                 KeyCode::Enter | KeyCode::NumpadEnter => { let m = self.chat_input.take().unwrap(); self.send_chat(&m); }
                 KeyCode::Backspace => { buf.pop(); }
                 _ => if let Some(t) = text { for c in t.chars() { if !c.is_control() && buf.len() < 256 { buf.push(c); } } },
             }
-            return false;
+            return;
         }
-        if pressed { self.keys.insert(code); } else { self.keys.remove(&code); }
-        if !pressed { return false; }
+        if code == KeyCode::F11 { self.cfg.fullscreen = !self.cfg.fullscreen; self.cfg.save(); self.fullscreen_changed = true; return; }
+        match &self.screen {
+            Some(Screen::Container(_)) => { self.container_key(code); return; }
+            Some(_) => { self.menu_key(code, text); return; }
+            None => {}
+        }
         match code {
             KeyCode::KeyT => self.chat_input = Some(String::new()),
             KeyCode::Slash => self.chat_input = Some("/".into()),
             KeyCode::F3 => self.debug = !self.debug,
+            KeyCode::KeyE => self.open_inventory(),
+            KeyCode::KeyQ => {
+                // drop one (ctrl: the whole stack) from the selected hotbar slot
+                let all = self.keys.contains(&KeyCode::ControlLeft) || self.keys.contains(&KeyCode::SuperLeft);
+                if self.hotbar[self.held as usize].count > 0 {
+                    self.player_action(if all { 3 } else { 4 }, [0, 0, 0], 0);
+                    let h = &mut self.hotbar[self.held as usize]; h.count = if all { 0 } else { h.count - 1 };
+                    self.swing_arm();
+                }
+            }
+            KeyCode::KeyF => self.player_action(6, [0, 0, 0], 0),
             KeyCode::Space if self.player.gamemode == 1 => {
                 if self.last_space.map(|t| t.elapsed() < Duration::from_millis(300)).unwrap_or(false) {
                     self.player.flying = !self.player.flying; self.last_space = None;
                     let mut w = Writer::with_id(sb::PLAYER_ABILITIES); w.u8(if self.player.flying { 2 } else { 0 }); send(&self.out, w);
                 } else { self.last_space = Some(Instant::now()); }
             }
-            KeyCode::Escape => return true,
+            KeyCode::Escape => { if self.connected { self.screen = Some(Screen::Pause); self.mouse = [false; 2]; } }
             _ => {
                 let digits = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4, KeyCode::Digit5, KeyCode::Digit6, KeyCode::Digit7, KeyCode::Digit8, KeyCode::Digit9];
                 if let Some(i) = digits.iter().position(|d| *d == code) { self.set_held(i as u8); }
             }
         }
-        false
+    }
+
+    /// Mouse button: 0 left, 1 right, 2 middle.
+    pub fn mouse_button(&mut self, button: u8, pressed: bool) {
+        match &self.screen {
+            Some(Screen::Container(_)) => { self.container_mouse(button, pressed); return; }
+            Some(_) => { self.menu_mouse(button, pressed); return; }
+            None => {}
+        }
+        if self.chat_input.is_some() { return; }
+        match button {
+            0 => { if pressed { if let Some((id, _)) = self.target_entity() { self.attack(id); } else { self.mouse[0] = true; } } else { self.mouse[0] = false; } }
+            1 => { self.mouse[1] = pressed; if pressed { self.use_item(); } }
+            _ => {}
+        }
+    }
+    /// Absolute cursor position in window pixels.
+    pub fn mouse_move(&mut self, x: f32, y: f32) {
+        self.mouse_pos = (x, y);
+        match &self.screen { Some(Screen::Container(_)) => self.container_motion(), Some(_) => self.menu_motion(), None => {} }
+    }
+    pub fn mouse_look(&mut self, dx: f64, dy: f64) {
+        let f = self.cfg.mouse_factor();
+        self.player.yaw += dx as f32 * f;
+        self.player.pitch = (self.player.pitch + dy as f32 * f).clamp(-90.0, 90.0);
+    }
+    pub fn scroll(&mut self, dy: f32) {
+        if self.screen.is_some() || dy.abs() < 0.5 { return; }
+        let s = (self.held as i32 - dy.signum() as i32).rem_euclid(9) as u8; self.set_held(s);
     }
 
     // ------------------------------------------------------------ drawing
@@ -537,35 +809,90 @@ impl Game {
         }
     }
 
-    fn build_hud(&self, ui: &mut MeshData, items: &mut MeshData) {
-        let (w, h) = (self.gpu.size.0 as f32, self.gpu.size.1 as f32);
-        let s = (h / 240.0).floor().clamp(1.0, 4.0);
-        let a = &self.ui;
-        // crosshair
-        if let Some(r) = a.rects.get("crosshair") { a.sprite(ui, "crosshair", ((w - r[2] as f32 * s) / 2.0).floor(), ((h - r[3] as f32 * s) / 2.0).floor(), s); }
-        else { a.rect(ui, w / 2.0 - s, h / 2.0 - 5.0 * s, 2.0 * s, 10.0 * s, [255; 4]); a.rect(ui, w / 2.0 - 5.0 * s, h / 2.0 - s, 10.0 * s, 2.0 * s, [255; 4]); }
-        // hotbar
-        let hx = (w - 182.0 * s) / 2.0; let hy = h - 22.0 * s;
-        a.sprite(ui, "hotbar", hx, hy, s);
-        a.sprite(ui, "hotbar_selection", hx - s + self.held as f32 * 20.0 * s, hy - s, s);
-        for (i, it) in self.hotbar.iter().enumerate() {
-            if it.count <= 0 { continue; }
-            let (x, y) = (hx + (3.0 + i as f32 * 20.0) * s, hy + 3.0 * s);
-            if let Some(uv) = self.assets.icon_uv(it.item) { a.quad(items, x, y, 16.0 * s, 16.0 * s, uv, [255; 4]); }
-            if it.count > 1 { let t = it.count.to_string(); a.text(ui, &t, x + 17.0 * s - a.text_width(&t, s), y + 9.0 * s, s, [255; 4]); }
+    /// Crack overlay on a block: its model faces re-textured with destroy_stage_N, pushed out a hair.
+    fn crack(&self, m: &mut MeshData, b: [i32; 3], stage: i8) {
+        let Some(uv) = self.assets.tex_uv(&format!("block/destroy_stage_{}", stage.clamp(0, 9))) else { return };
+        let st = self.world.get(b[0], b[1], b[2]);
+        if st == 0 { return; }
+        let model = self.assets.model(st);
+        let mut quads: Vec<([[f32; 3]; 4], u8)> = model.quads.iter().map(|q| (q.pos, q.dir)).collect();
+        if quads.is_empty() {
+            let mut cube = MeshData::default();
+            Self::cuboid(&mut cube, [0.0; 3], [1.0; 3], [0.0; 4], [0; 4], 0);
+            for (i, f) in cube.verts.chunks(4).enumerate() { quads.push(([f[0].pos, f[1].pos, f[2].pos, f[3].pos], [0u8, 1, 2, 3, 4, 5][i])); }
         }
-        // hearts + food (survival / adventure)
-        if self.player.gamemode == 0 || self.player.gamemode == 2 {
-            let y = hy - 10.0 * s;
-            for i in 0..10 {
-                let x = hx + i as f32 * 8.0 * s;
-                a.sprite(ui, "heart/container", x, y, s);
-                let v = self.hp - i as f32 * 2.0;
-                if v >= 2.0 { a.sprite(ui, "heart/full", x, y, s); } else if v >= 1.0 { a.sprite(ui, "heart/half", x, y, s); }
-                let fx = hx + 182.0 * s - (i as f32 + 1.0) * 8.0 * s - s;
-                a.sprite(ui, "food_empty", fx, y, s);
-                let f = self.food - i * 2;
-                if f >= 2 { a.sprite(ui, "food_full", fx, y, s); } else if f >= 1 { a.sprite(ui, "food_half", fx, y, s); }
+        let (sl, bl) = self.world.light(b[0], b[1] + 1, b[2]);
+        for (pos, dir) in quads {
+            let d = assets::DIR_VEC[dir as usize % 6];
+            let base = m.verts.len() as u32;
+            for p in pos {
+                let (u, v) = match dir { 0 | 1 => (p[0], p[2]), 2 | 3 => (p[0], 1.0 - p[1]), _ => (p[2], 1.0 - p[1]) };
+                let (u, v) = (u.clamp(0.0, 1.0), v.clamp(0.0, 1.0));
+                m.verts.push(Vertex {
+                    pos: [b[0] as f32 + p[0] + d[0] as f32 * 0.002, b[1] as f32 + p[1] + d[1] as f32 * 0.002, b[2] as f32 + p[2] + d[2] as f32 * 0.002],
+                    uv: [uv[0] + (uv[2] - uv[0]) * u, uv[1] + (uv[3] - uv[1]) * v], color: [255, 255, 255, 230], light: [sl.max(bl) * 17, bl * 17, 0, 0],
+                });
+            }
+            m.idx.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        }
+    }
+
+    /// Current local dig stage (0..9), if any.
+    pub fn dig_stage(&self) -> Option<i8> {
+        let d = self.dig.as_ref()?;
+        let s = (d.ticks as f32 / d.total.max(1) as f32 * 10.0) as i32 - 1;
+        (s >= 0).then_some(s.min(9) as i8)
+    }
+
+    fn build_hud(&self, ui: &mut MeshData, items: &mut MeshData, deco: &mut MeshData, vp: &Mat4, alpha: f32) {
+        let (w, h) = (self.gpu.size.0 as f32, self.gpu.size.1 as f32);
+        let s = self.gui_scale();
+        let a = &self.ui;
+        let in_game = self.connected && self.spawned;
+        if in_game {
+            // name tags of other players (screen-space, scaled by distance)
+            let eye = self.eye(alpha as f64);
+            for e in self.entities.values() {
+                if entity::type_name(e.kind) != "player" || e.id == self.my_eid || self.hide_entities { continue; }
+                let Some(name) = self.player_names.get(&e.uuid) else { continue };
+                let p = e.render_pos(alpha);
+                let d = ((p[0] - eye[0]).powi(2) + (p[1] - eye[1]).powi(2) + (p[2] - eye[2]).powi(2)).sqrt();
+                if d > 64.0 { continue; }
+                let c = *vp * glam::Vec4::new((p[0] - eye[0]) as f32, (p[1] + 2.05 - eye[1]) as f32, (p[2] - eye[2]) as f32, 1.0);
+                if c.w <= 0.1 { continue; }
+                let (sx, sy) = ((c.x / c.w * 0.5 + 0.5) * w, (0.5 - c.y / c.w * 0.5) * h);
+                let ts = (h / 240.0 * 6.0 / d.max(1.0) as f32).clamp(0.5, 3.0);
+                let tw = a.text_width(name, ts);
+                a.rect(ui, sx - tw / 2.0 - ts, sy - ts, tw + 2.0 * ts, 10.0 * ts, [0, 0, 0, 64]);
+                a.text_ex(ui, name, sx - tw / 2.0, sy, ts, [255; 4], false);
+            }
+            // crosshair
+            if let Some(r) = a.rects.get("crosshair") { a.sprite(ui, "crosshair", ((w - r[2] as f32 * s) / 2.0).floor(), ((h - r[3] as f32 * s) / 2.0).floor(), s); }
+            // hotbar
+            let hx = ((w - 182.0 * s) / 2.0).floor(); let hy = h - 22.0 * s;
+            a.sprite(ui, "hotbar", hx, hy, s);
+            a.sprite(ui, "hotbar_selection", hx - s + self.held as f32 * 20.0 * s, hy - s, s);
+            for (i, it) in self.hotbar.iter().enumerate() {
+                if it.count <= 0 { continue; }
+                let (x, y) = (hx + (3.0 + i as f32 * 20.0) * s, hy + 3.0 * s);
+                ui::item_icon(&self.assets, items, it.item, x, y, s);
+                ui::item_decorations(a, deco, it, self.max_damage(it.item), x, y, s);
+            }
+            // hearts + food (survival / adventure)
+            if self.player.gamemode == 0 || self.player.gamemode == 2 {
+                // experience bar (level 0) and the rows above it, as laid out by vanilla
+                a.sprite(ui, "experience_bar_background", hx, h - 29.0 * s, s);
+                let y = h - 39.0 * s;
+                for i in 0..10 {
+                    let x = hx + i as f32 * 8.0 * s;
+                    a.sprite(ui, "heart/container", x, y, s);
+                    let v = self.hp - i as f32 * 2.0;
+                    if v >= 2.0 { a.sprite(ui, "heart/full", x, y, s); } else if v >= 1.0 { a.sprite(ui, "heart/half", x, y, s); }
+                    let fx = hx + 182.0 * s - (i as f32 + 1.0) * 8.0 * s - s;
+                    a.sprite(ui, "food_empty", fx, y, s);
+                    let f = self.food - i * 2;
+                    if f >= 2 { a.sprite(ui, "food_full", fx, y, s); } else if f >= 1 { a.sprite(ui, "food_half", fx, y, s); }
+                }
             }
         }
         // chat
@@ -575,40 +902,57 @@ impl Game {
             a.rect(ui, 2.0 * s, h - 14.0 * s, w - 4.0 * s, 12.0 * s, [0, 0, 0, 128]);
             a.text(ui, &format!("{buf}_"), 4.0 * s, h - 12.0 * s, s, [255; 4]);
         }
-        for (msg, t) in self.chat.iter().rev().take(if open { 20 } else { 10 }) {
-            let age = t.elapsed().as_secs_f32();
-            if !open && age > 10.0 { break; }
-            let alpha = if open { 255 } else { ((10.0 - age).min(1.0) * 255.0) as u8 };
-            a.rect(ui, 2.0 * s, y - s, 320.0 * s, 9.0 * s, [0, 0, 0, alpha / 2]);
-            a.text(ui, msg, 3.0 * s, y, s, [255, 255, 255, alpha]);
-            y -= 9.0 * s;
+        if in_game {
+            for (msg, t) in self.chat.iter().rev().take(if open { 20 } else { 10 }) {
+                let age = t.elapsed().as_secs_f32();
+                if !open && age > 10.0 { break; }
+                let alpha = if open { 255 } else { ((10.0 - age).min(1.0) * 255.0) as u8 };
+                a.rect(ui, 2.0 * s, y - s, 320.0 * s, 9.0 * s, [0, 0, 0, alpha / 2]);
+                a.text(ui, msg, 3.0 * s, y, s, [255, 255, 255, alpha]);
+                y -= 9.0 * s;
+            }
+            // debug
+            let p = &self.player;
+            let mut lines = vec![format!("Basalt 26.2  {:.0} fps", self.frames.2)];
+            if self.debug {
+                lines.push(format!("XYZ: {:.3} / {:.3} / {:.3}", p.pos[0], p.pos[1], p.pos[2]));
+                lines.push(format!("Facing: yaw {:.1} pitch {:.1}", p.yaw.rem_euclid(360.0), p.pitch));
+                lines.push(format!("Chunks: {} loaded, {} sections drawn, {} pending", self.world.chunks.len(), self.gpu.sections.len(), self.dirty.len() + self.in_flight.len()));
+                lines.push(format!("Entities: {}  Time: {}", self.entities.len(), self.day_time.rem_euclid(24000)));
+                if let Some(h) = self.target() { lines.push(format!("Target: {} @ {:?}", basalt_data::BlockState(self.world.get(h.block[0], h.block[1], h.block[2]) as u32).name(), h.block)); }
+            }
+            for (i, l) in lines.iter().enumerate() { a.text(ui, l, 2.0 * s, 2.0 * s + i as f32 * 10.0 * s, s, [255; 4]); }
         }
-        // debug
-        let p = &self.player;
-        let mut lines = vec![format!("Basalt 26.2  {:.0} fps", self.frames.2)];
-        if self.debug {
-            lines.push(format!("XYZ: {:.3} / {:.3} / {:.3}", p.pos[0], p.pos[1], p.pos[2]));
-            lines.push(format!("Facing: yaw {:.1} pitch {:.1}", p.yaw.rem_euclid(360.0), p.pitch));
-            lines.push(format!("Chunks: {} loaded, {} sections drawn, {} pending", self.world.chunks.len(), self.gpu.sections.len(), self.dirty.len() + self.in_flight.len()));
-            lines.push(format!("Entities: {}  Time: {}", self.entities.len(), self.day_time.rem_euclid(24000)));
-            if let Some(h) = self.target() { lines.push(format!("Target: {} @ {:?}", basalt_data::BlockState(self.world.get(h.block[0], h.block[1], h.block[2]) as u32).name(), h.block)); }
-        }
-        if let Some(d) = &self.disconnected { lines.push(format!("Disconnected: {d}")); }
-        for (i, l) in lines.iter().enumerate() { a.text(ui, l, 2.0 * s, 2.0 * s + i as f32 * 10.0 * s, s, [255; 4]); }
     }
 
-    fn frame_data(&self, alpha: f64) -> (Uniforms, Vec3, Mat4, MeshData, MeshData, MeshData, MeshData) {
+    /// View-projection matrix (camera at the origin, world coordinates relative to the eye).
+    pub fn view_proj(&self) -> Mat4 {
+        let (w, h) = (self.gpu.size.0 as f32, self.gpu.size.1 as f32);
+        let d = self.look_dir();
+        let view = Mat4::look_to_rh(Vec3::ZERO, Vec3::new(d[0] as f32, d[1] as f32, d[2] as f32), Vec3::Y);
+        Mat4::perspective_rh(self.cfg.fov.to_radians(), w / h.max(1.0), 0.05, 1024.0) * view
+    }
+    /// Screen position (pixels) of a world point, if in front of the camera.
+    pub fn project(&self, p: [f64; 3]) -> Option<(f32, f32)> {
+        let e = self.eye(1.0);
+        let c = self.view_proj() * glam::Vec4::new((p[0] - e[0]) as f32, (p[1] - e[1]) as f32, (p[2] - e[2]) as f32, 1.0);
+        if c.w <= 0.05 { return None; }
+        Some(((c.x / c.w * 0.5 + 0.5) * self.gpu.size.0 as f32, (0.5 - c.y / c.w * 0.5) * self.gpu.size.1 as f32))
+    }
+
+    fn frame(&self, alpha: f64) -> FrameData {
         let (w, h) = (self.gpu.size.0 as f32, self.gpu.size.1 as f32);
         let eye = self.eye(alpha);
         let d = self.look_dir();
         let view = Mat4::look_to_rh(Vec3::ZERO, Vec3::new(d[0] as f32, d[1] as f32, d[2] as f32), Vec3::Y);
-        let proj = Mat4::perspective_rh(70f32.to_radians(), w / h.max(1.0), 0.05, 1024.0);
+        let proj = Mat4::perspective_rh(self.cfg.fov.to_radians(), w / h.max(1.0), 0.05, 1024.0);
         let vp = proj * view;
-        let render_dist: f32 = 10.0 * 16.0;
+        let render_dist: f32 = self.cfg.render_distance.clamp(2, 32) as f32 * 16.0;
         let biomes = self.biomes.lock().unwrap().clone();
         let bi = self.world.biome(eye[0].floor() as i32, eye[1].floor() as i32, eye[2].floor() as i32) as usize;
         let (sky, fog) = biomes.get(bi).map(|b| (b.sky, b.fog)).unwrap_or((0x78A7FF, 0xC0D8FF));
-        let theta = (self.day_time.rem_euclid(24000) as f32 / 24000.0) * std::f32::consts::TAU;
+        let day_time = self.fixed_time.unwrap_or(self.day_time);
+        let theta = (day_time.rem_euclid(24000) as f32 / 24000.0) * std::f32::consts::TAU;
         let sun = [theta.cos(), theta.sin(), 0.0];
         let daylight = (0.5 + 2.0 * theta.sin()).clamp(0.2, 1.0);
         let col = |c: u32, k: f32| [(c >> 16 & 255) as f32 / 255.0 * k, (c >> 8 & 255) as f32 / 255.0 * k, (c & 255) as f32 / 255.0 * k, 1.0];
@@ -618,44 +962,87 @@ impl Game {
         let u = Uniforms {
             vp: vp.to_cols_array_2d(), inv_vp: vp.inverse().to_cols_array_2d(),
             cam: [eye[0] as f32, eye[1] as f32, eye[2] as f32, 0.0], fog_color: fogc, sky_color: col(sky, dk),
-            params: [fog_start, fog_end, daylight, self.day_time as f32], screen: [w, h, underwater as u8 as f32, 0.0], sun: [sun[0], sun[1], sun[2], 0.0],
+            params: [fog_start, fog_end, daylight, day_time as f32], screen: [w, h, underwater as u8 as f32, 0.0], sun: [sun[0], sun[1], sun[2], 0.0],
         };
         let cam = Vec3::new(eye[0] as f32, eye[1] as f32, eye[2] as f32);
-        // block outline + other entities
-        let mut extra = MeshData::default();
-        let dark = self.atlas_uv("block/black_concrete");
-        if let Some(hit) = self.target() {
-            let t = 0.004;
-            for b in &hit.boxes {
-                let lo = [b[0] as f32 - t, b[1] as f32 - t, b[2] as f32 - t]; let hi = [b[3] as f32 + t, b[4] as f32 + t, b[5] as f32 + t];
-                for ax in 0..3 { for c1 in 0..2 { for c2 in 0..2 {
-                    let (a1, a2) = match ax { 0 => (1, 2), 1 => (0, 2), _ => (0, 1) };
-                    let mut l = lo; let mut hh = hi;
-                    let v1 = if c1 == 0 { lo[a1] } else { hi[a1] }; let v2 = if c2 == 0 { lo[a2] } else { hi[a2] };
-                    l[a1] = v1 - t; hh[a1] = v1 + t; l[a2] = v2 - t; hh[a2] = v2 + t;
-                    Self::cuboid(&mut extra, l, hh, dark, [30, 30, 30, 255], 255);
-                } } }
+        let mut fd = FrameData { u, cam, vp, render_dist, extra: MeshData::default(), skinned: MeshData::default(), items3d: MeshData::default(), overlay: MeshData::default(), layers: Vec::new() };
+        let in_world = self.connected && self.spawned;
+        if in_world {
+            // block outline
+            let dark = self.atlas_uv("block/black_concrete");
+            if self.screen.is_none() {
+                if let Some(hit) = self.target() {
+                    let t = 0.004;
+                    for b in &hit.boxes {
+                        let lo = [b[0] as f32 - t, b[1] as f32 - t, b[2] as f32 - t]; let hi = [b[3] as f32 + t, b[4] as f32 + t, b[5] as f32 + t];
+                        for ax in 0..3 { for c1 in 0..2 { for c2 in 0..2 {
+                            let (a1, a2) = match ax { 0 => (1, 2), 1 => (0, 2), _ => (0, 1) };
+                            let mut l = lo; let mut hh = hi;
+                            let v1 = if c1 == 0 { lo[a1] } else { hi[a1] }; let v2 = if c2 == 0 { lo[a2] } else { hi[a2] };
+                            l[a1] = v1 - t; hh[a1] = v1 + t; l[a2] = v2 - t; hh[a2] = v2 + t;
+                            Self::cuboid(&mut fd.extra, l, hh, dark, [30, 30, 30, 255], 255);
+                        } } }
+                    }
+                }
+            }
+            // block-breaking cracks: own dig + other players' block_destruction
+            if !self.hide_cracks {
+                if let (Some(d), Some(st)) = (&self.dig, self.dig_stage()) { self.crack(&mut fd.overlay, d.block, st); }
+                for (id, (b, st)) in &self.destroy { if *id != self.my_eid { self.crack(&mut fd.overlay, *b, *st); } }
+            }
+            // entities
+            let wool = self.atlas_uv("block/white_wool");
+            let a = alpha as f32;
+            if !self.hide_entities {
+                for (id, e) in &self.entities {
+                    if *id == self.my_eid { continue; }
+                    let p = e.render_pos(a);
+                    let (sl, bl) = self.world.light(p[0].floor() as i32, (p[1] + 0.5).floor() as i32, p[2].floor() as i32);
+                    let light = [sl * 17, bl * 17];
+                    let name = entity::type_name(e.kind);
+                    if name == "item" { entity::build_item(&self.assets, e, a, light, &mut fd.items3d); continue; }
+                    if !entity::build_model(&self.entity_atlas, e, a, light, &mut fd.skinned) {
+                        let (bw, bh, color) = entity::dims(e.kind);
+                        let hw = bw / 2.0;
+                        let p = [p[0] as f32, p[1] as f32, p[2] as f32];
+                        Self::cuboid(&mut fd.extra, [p[0] - hw, p[1], p[2] - hw], [p[0] + hw, p[1] + bh, p[2] + hw], wool, color, (sl.max(bl) * 17).max(40));
+                    }
+                }
+            }
+            // first-person arm
+            if self.screen.is_none() && !self.hide_gui && self.player.gamemode != 3 && self.hotbar[self.held as usize].count == 0 {
+                let sw = if self.fp_swing >= 0 { (self.fp_swing as f32 + a) / 6.0 } else { 0.0 };
+                let (sl, bl) = self.world.light(eye[0].floor() as i32, eye[1].floor() as i32, eye[2].floor() as i32);
+                entity::first_person_arm(&self.entity_atlas, &net::offline_uuid(&self.name), cam, self.player.yaw, self.player.pitch, sw, 0.0, [sl * 17, bl * 17], &mut fd.skinned);
             }
         }
-        let wool = self.atlas_uv("block/white_wool");
-        for (id, e) in &self.entities {
-            if *id == self.my_eid { continue; }
-            let (w, hh, color) = entity_look(e.kind);
-            let hw = w / 2.0;
-            let (sl, bl) = self.world.light(e.pos[0].floor() as i32, e.pos[1].floor() as i32 + 1, e.pos[2].floor() as i32);
-            let lv = (sl.max(bl) * 17).max(40);
-            let p = [e.pos[0] as f32, e.pos[1] as f32, e.pos[2] as f32];
-            Self::cuboid(&mut extra, [p[0] - hw, p[1], p[2] - hw], [p[0] + hw, p[1] + hh, p[2] + hw], wool, color, lv);
+        // 2D: HUD, then the open screen
+        let (mut ui, mut items, mut deco) = (MeshData::default(), MeshData::default(), MeshData::default());
+        if !self.hide_gui { self.build_hud(&mut ui, &mut items, &mut deco, &vp, alpha as f32); }
+        // held item in the corner of the view (flat, simple)
+        fd.layers.push((ui, Tex::Ui)); fd.layers.push((items, Tex::Blocks)); fd.layers.push((deco, Tex::Ui));
+        match &self.screen {
+            Some(Screen::Container(c)) => {
+                let (mut bg, mut ents, mut it, mut top, mut top_items) = (MeshData::default(), MeshData::default(), MeshData::default(), MeshData::default(), MeshData::default());
+                self.draw_container(c, &mut bg, &mut ents, &mut it, &mut top, &mut top_items);
+                fd.layers.push((bg, Tex::Ui)); fd.layers.push((ents, Tex::Entities)); fd.layers.push((it, Tex::Blocks)); fd.layers.push((top, Tex::Ui)); fd.layers.push((top_items, Tex::Blocks));
+            }
+            Some(_) => { let mut m = MeshData::default(); self.draw_menu(&mut m); fd.layers.push((m, Tex::Ui)); }
+            None => {}
         }
-        let (mut ui, mut items) = (MeshData::default(), MeshData::default());
-        self.build_hud(&mut ui, &mut items);
-        (u, cam, vp, extra, MeshData::default(), ui, items)
+        fd
     }
 
     fn render(&mut self, alpha: f64, screenshot: Option<&str>) -> Result<()> {
-        let (u, cam, vp, extra, skinned, ui, items) = self.frame_data(alpha);
-        let f = Frame { uniforms: u, cam, vp, render_dist: 12.0 * 16.0, min_y: self.world.min_y as f32, extra: &extra, skinned: &skinned, ui: &ui, ui_items: &items };
+        let fd = self.frame(alpha);
+        let f = fd.as_frame(self.world.min_y as f32);
         match screenshot { Some(p) => self.gpu.screenshot(&f, p), None => self.gpu.render(&f) }
+    }
+    /// Render offscreen and return RGB pixels (scenarios).
+    pub fn capture(&mut self, alpha: f64) -> Result<Vec<u8>> {
+        let fd = self.frame(alpha);
+        let f = fd.as_frame(self.world.min_y as f32);
+        self.gpu.capture(&f)
     }
 
     /// Advance simulation to `now`; returns interpolation alpha.
@@ -666,7 +1053,16 @@ impl Game {
         if n == 10 { self.last_tick = Instant::now(); }
         self.frames.0 += 1;
         if self.frames.1.elapsed() >= Duration::from_secs(1) { self.frames.2 = self.frames.0 as f32 / self.frames.1.elapsed().as_secs_f32(); self.frames = (0, Instant::now(), self.frames.2); }
+        let e = self.eye(1.0);
+        self.sounds.listener = (e, self.player.yaw);
         (self.last_tick.elapsed().as_secs_f64() / 0.05).min(1.0)
+    }
+}
+
+pub struct FrameData { u: Uniforms, cam: Vec3, vp: Mat4, render_dist: f32, extra: MeshData, skinned: MeshData, items3d: MeshData, overlay: MeshData, layers: Vec<(MeshData, Tex)> }
+impl FrameData {
+    fn as_frame(&self, min_y: f32) -> Frame<'_> {
+        Frame { uniforms: self.u, cam: self.cam, vp: self.vp, render_dist: self.render_dist + 32.0, min_y, extra: &self.extra, skinned: &self.skinned, items3d: &self.items3d, overlay: &self.overlay, ui_layers: &self.layers }
     }
 }
 
@@ -681,6 +1077,16 @@ impl App {
         w.set_cursor_visible(!on);
         self.grabbed = on;
     }
+    fn sync(&mut self, el: &ActiveEventLoop) {
+        let Some(g) = &mut self.game else { return };
+        if g.quit { el.exit(); return; }
+        if g.fullscreen_changed {
+            g.fullscreen_changed = false;
+            if let Some(w) = &self.window { w.set_fullscreen(if g.cfg.fullscreen { Some(winit::window::Fullscreen::Borderless(None)) } else { None }); }
+        }
+        let want = g.wants_grab();
+        if want != self.grabbed { self.grab(want); }
+    }
 }
 
 impl ApplicationHandler for App {
@@ -689,7 +1095,11 @@ impl ApplicationHandler for App {
         let attrs = Window::default_attributes().with_title("Basalt").with_inner_size(winit::dpi::PhysicalSize::new(self.args.size.0, self.args.size.1));
         let w = Arc::new(el.create_window(attrs).expect("create window"));
         let size = w.inner_size();
-        match Game::new(Some(w.clone()), (size.width, size.height), self.assets.clone(), load_rules(&self.args), &self.args) {
+        let cfg = menu::Config::load();
+        if cfg.fullscreen { w.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None))); }
+        let name = if self.args.name != "Basalt" { self.args.name.clone() } else { cfg.name.clone() };
+        let opts = GameOpts { name, addr: self.args.addr_given.then(|| self.args.addr.clone()), auto_respawn: self.args.auto_respawn, sounds: load_sounds(&self.args, true), cfg };
+        match Game::new(Some(w.clone()), (size.width, size.height), self.assets.clone(), load_rules(&self.args), opts) {
             Ok(g) => { self.game = Some(g); self.window = Some(w); }
             Err(e) => { eprintln!("failed to start renderer: {e:#}"); el.exit(); }
         }
@@ -700,44 +1110,33 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => el.exit(),
             WindowEvent::Resized(s) => g.gpu.resize(s.width, s.height),
-            WindowEvent::Focused(false) => { g.keys.clear(); g.mouse = [false; 2]; self.grab(false); }
+            WindowEvent::Focused(false) => { g.keys.clear(); g.mouse = [false; 2]; if g.wants_grab() { g.screen = Some(Screen::Pause); } }
             WindowEvent::KeyboardInput { event, .. } => {
-                if let PhysicalKey::Code(code) = event.physical_key {
-                    let was_chat = g.chat_input.is_some();
-                    let esc = g.on_key(code, event.state == ElementState::Pressed, event.text.as_deref());
-                    let chat_now = self.game.as_ref().map(|g| g.chat_input.is_some()).unwrap_or(false);
-                    if esc || (chat_now && !was_chat) { self.grab(false); }
-                    if was_chat && !chat_now { self.grab(true); }
-                }
+                if let PhysicalKey::Code(code) = event.physical_key { g.key(code, event.state == ElementState::Pressed, event.text.as_deref()); }
             }
+            WindowEvent::CursorMoved { position, .. } => g.mouse_move(position.x as f32, position.y as f32),
             WindowEvent::MouseInput { state, button, .. } => {
                 let pressed = state == ElementState::Pressed;
-                if !self.grabbed { if pressed && g.chat_input.is_none() { self.grab(true); } return; }
-                match button {
-                    MouseButton::Left => { if pressed { if let Some((id, _)) = g.target_entity() { g.attack(id); } else { g.mouse[0] = true; } } else { g.mouse[0] = false; } }
-                    MouseButton::Right => { g.mouse[1] = pressed; if pressed { g.use_item(); } }
-                    _ => {}
-                }
+                let b = match button { MouseButton::Left => 0, MouseButton::Right => 1, MouseButton::Middle => 2, _ => 9 };
+                g.mouse_button(b, pressed);
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let dy = match delta { winit::event::MouseScrollDelta::LineDelta(_, y) => y, winit::event::MouseScrollDelta::PixelDelta(p) => p.y as f32 / 20.0 };
-                if dy.abs() >= 0.5 { let s = (g.held as i32 - dy.signum() as i32).rem_euclid(9) as u8; g.set_held(s); }
+                g.scroll(dy);
             }
             WindowEvent::RedrawRequested => {
                 let alpha = g.update();
-                if g.mouse[1] && g.last_place.elapsed() > Duration::from_millis(200) { g.use_item(); }
+                if g.mouse[1] && g.screen.is_none() && g.last_place.elapsed() > Duration::from_millis(200) { g.use_item(); }
                 if let Err(e) = g.render(alpha, None) { log::error!("render: {e:#}"); }
             }
             _ => {}
         }
+        self.sync(el);
     }
 
     fn device_event(&mut self, _el: &ActiveEventLoop, _id: winit::event::DeviceId, event: DeviceEvent) {
         if !self.grabbed { return; }
-        if let (Some(g), DeviceEvent::MouseMotion { delta }) = (&mut self.game, event) {
-            g.player.yaw += delta.0 as f32 * 0.15;
-            g.player.pitch = (g.player.pitch + delta.1 as f32 * 0.15).clamp(-90.0, 90.0);
-        }
+        if let (Some(g), DeviceEvent::MouseMotion { delta }) = (&mut self.game, event) { g.mouse_look(delta.0, delta.1); }
     }
 
     fn about_to_wait(&mut self, _el: &ActiveEventLoop) { if let Some(w) = &self.window { w.request_redraw(); } }
@@ -747,7 +1146,9 @@ impl ApplicationHandler for App {
 
 fn run_screenshot(args: &Args, assets: Arc<Assets>, out: &str) -> Result<()> {
     let rules = load_rules(args);
-    let mut g = Game::new(None, args.size, assets, rules, args)?;
+    let cfg = config_from_args(args);
+    let mut g = Game::new(None, args.size, assets, rules, GameOpts { name: args.name.clone(), addr: Some(args.addr.clone()), auto_respawn: true, sounds: load_sounds(args, false), cfg })?;
+    g.fixed_time = args.time; g.hide_gui = args.no_gui;
     let start = Instant::now();
     let mut placed = false;
     let mut walked_from: Option<Instant> = None;
@@ -791,30 +1192,53 @@ fn run_screenshot(args: &Args, assets: Arc<Assets>, out: &str) -> Result<()> {
         if let Some(d) = &g.disconnected { anyhow::bail!("disconnected: {d}"); }
         std::thread::sleep(Duration::from_millis(5));
     }
-    // let outstanding meshes land
+    // wait until every chunk the server sends has arrived (none for 1.5 s) and is meshed
     let t = Instant::now();
-    while (!g.in_flight.is_empty() || !g.dirty.is_empty()) && t.elapsed() < Duration::from_secs(10) { g.pump(); std::thread::sleep(Duration::from_millis(5)); }
-    g.debug = true;
+    while (!g.in_flight.is_empty() || !g.dirty.is_empty() || g.last_chunk_at.elapsed() < Duration::from_millis(1500)) && t.elapsed() < Duration::from_secs(30) { g.update(); if let Some((y, p)) = args.look { g.player.yaw = y; g.player.pitch = p; } std::thread::sleep(Duration::from_millis(5)); }
+    g.debug = !args.no_gui;
     g.render(1.0, Some(out))?;
     if std::env::var("BASALT_DIAG").is_ok() {
         let ks: Vec<_> = g.world.chunks.keys().copied().collect();
         let (minx, maxx) = (ks.iter().map(|k| k.0).min().unwrap_or(0), ks.iter().map(|k| k.0).max().unwrap_or(0));
         let (minz, maxz) = (ks.iter().map(|k| k.1).min().unwrap_or(0), ks.iter().map(|k| k.1).max().unwrap_or(0));
-        let ready = g.dirty.iter().filter(|&&(cx, _, cz)| [(-1, 0), (1, 0), (0, -1), (0, 1)].iter().all(|(dx, dz)| g.world.chunks.contains_key(&(cx + dx, cz + dz)))).count();
         let mut cols: HashSet<(i32, i32)> = HashSet::new(); for k in g.gpu.sections.keys() { cols.insert((k.0, k.2)); }
-        println!("diag: chunk x {minx}..{maxx} z {minz}..{maxz}; dirty {} (ready {ready}); in_flight {}; columns with meshes {}", g.dirty.len(), g.in_flight.len(), cols.len());
+        println!("diag: chunk x {minx}..{maxx} z {minz}..{maxz}; dirty {}; in_flight {}; columns with meshes {}", g.dirty.len(), g.in_flight.len(), cols.len());
         let mut grid = String::new();
         for z in minz..=maxz { for x in minx..=maxx { grid.push(if !g.world.chunks.contains_key(&(x, z)) { ' ' } else if cols.contains(&(x, z)) { '#' } else { '.' }); } grid.push('\n'); }
         println!("{grid}");
     }
     let p = &g.player;
     let inv: Vec<String> = g.inventory.iter().enumerate().filter(|(_, s)| s.count > 0).map(|(i, s)| format!("{i}:{}x{}{}", basalt_data::registries::ITEM.get(s.item as usize).unwrap_or(&"?"), s.count, if s.damage > 0 { format!("(dmg {})", s.damage) } else { String::new() })).collect();
-    let mut kinds: Vec<String> = g.entities.iter().filter(|(id, _)| **id != g.my_eid).map(|(_, e)| format!("{}@{:.1},{:.1},{:.1}", basalt_data::registries::ENTITY_TYPE.get(e.kind as usize).unwrap_or(&"?"), e.pos[0], e.pos[1], e.pos[2])).collect();
+    let mut kinds: Vec<String> = g.entities.iter().filter(|(id, _)| **id != g.my_eid).map(|(_, e)| format!("{}@{:.1},{:.1},{:.1}/y{:.0}/h{:.0}", entity::type_name(e.kind), e.pos[0], e.pos[1], e.pos[2], e.yaw, e.head_yaw)).collect();
     kinds.sort();
     println!("entity list: {}", kinds.join(" "));
     println!("state: hp {} food {} gamemode {} inv [{}]", g.hp, g.food, g.player.gamemode, inv.join(" "));
     println!("screenshot {out}: pos {:.2},{:.2},{:.2} chunks {} sections {} entities {}", p.pos[0], p.pos[1], p.pos[2], g.world.chunks.len(), g.gpu.sections.len(), g.entities.len());
     Ok(())
+}
+
+/// Options for deterministic captures: defaults, then the vanilla client's options.txt (--options), then flags.
+pub fn config_from_args(args: &Args) -> menu::Config {
+    let mut c = menu::Config { name: args.name.clone(), ..Default::default() };
+    if let Some(p) = &args.options {
+        match std::fs::read_to_string(p) {
+            Ok(s) => for line in s.lines() {
+                let Some((k, v)) = line.split_once(':') else { continue };
+                match k {
+                    // vanilla stores FOV normalised: 70 + v·40
+                    "fov" => if let Ok(f) = v.parse::<f32>() { c.fov = 70.0 + f * 40.0; },
+                    "renderDistance" => if let Ok(r) = v.parse() { c.render_distance = r; },
+                    "guiScale" => if let Ok(g) = v.parse() { c.gui_scale = g; },
+                    _ => {}
+                }
+            },
+            Err(e) => log::warn!("options file {p}: {e}"),
+        }
+    }
+    if let Some(f) = args.fov { c.fov = f; }
+    if let Some(r) = args.render_distance { c.render_distance = r; }
+    if let Some(g) = args.gui_scale { c.gui_scale = g; }
+    c
 }
 
 fn load_rules(args: &Args) -> Option<Arc<basalt_game::GameData>> {
@@ -824,12 +1248,21 @@ fn load_rules(args: &Args) -> Option<Arc<basalt_game::GameData>> {
     }
 }
 
+fn load_sounds(args: &Args, audio_out: bool) -> sound::Sounds {
+    let (dir, idx) = sound::default_assets();
+    let dir = args.assets.clone().map(std::path::PathBuf::from).unwrap_or(dir);
+    sound::Sounds::load(dir, args.asset_index.clone().or(idx), audio_out && std::env::var("BASALT_NOSOUND").is_err())
+}
+
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,wgpu_core=warn,wgpu_hal=warn,naga=warn")).init();
     let args = parse_args();
     let t = Instant::now();
     let assets = Arc::new(Assets::load(&args.jar).with_context(|| format!("loading assets from {} (pass --jar path/to/26.2.jar)", args.jar))?);
     log::info!("assets loaded in {:.2?}: {} models, atlas {}x{}", t.elapsed(), assets.models.len(), assets.atlas.w, assets.atlas.h);
+    if let Some(out) = args.asset_grid.clone() { let ok = assetgrid::run(&args, assets, &out)?; std::process::exit(if ok { 0 } else { 1 }); }
+    if let Some(out) = args.bench.clone() { return bench::run(&args, assets, &out); }
+    if let Some(name) = args.scenario.clone() { let ok = scenario::run(&args, assets, &name)?; std::process::exit(if ok { 0 } else { 1 }); }
     if let Some(out) = args.screenshot.clone() { return run_screenshot(&args, assets, &out); }
     let el = EventLoop::new()?;
     el.set_control_flow(ControlFlow::Poll);

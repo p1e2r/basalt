@@ -33,6 +33,8 @@ pub struct Model {
     pub boxes: Vec<[f32; 6]>,
     pub occludes: bool,
     pub full_cube: bool,
+    /// a face referenced a texture that could not be resolved / is not in the atlas
+    pub missing: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -70,8 +72,8 @@ impl Jar {
         let f = std::fs::File::open(path).with_context(|| format!("cannot open client jar {path} (pass --jar path/to/26.2 client.jar)"))?;
         let mut z = zip::ZipArchive::new(std::io::BufReader::new(f))?;
         let wanted = ["assets/minecraft/blockstates/", "assets/minecraft/models/block/", "assets/minecraft/textures/block/", "assets/minecraft/textures/colormap/",
-            "assets/minecraft/textures/font/ascii.png", "assets/minecraft/textures/gui/sprites/hud/", "assets/minecraft/textures/item/", "assets/minecraft/models/item/", "assets/minecraft/items/",
-            "assets/minecraft/textures/entity/player/", "assets/minecraft/textures/environment/",
+            "assets/minecraft/textures/font/ascii.png", "assets/minecraft/textures/gui/", "assets/minecraft/textures/item/", "assets/minecraft/models/item/", "assets/minecraft/items/",
+            "assets/minecraft/textures/entity/", "assets/minecraft/textures/environment/", "assets/minecraft/lang/en_us.json",
             "data/minecraft/dimension_type/", "data/minecraft/worldgen/biome/"];
         let mut files = HashMap::new();
         for i in 0..z.len() {
@@ -180,6 +182,8 @@ impl<'a> Baker<'a> {
 
     fn resolve_tex(m: &RawModel, t: &str) -> Option<String> {
         let mut t = t.to_string();
+        // a bare key ("all") is a texture variable reference too
+        if !t.starts_with('#') && !t.contains('/') && !t.contains(':') && m.textures.contains_key(&t) { t = format!("#{t}"); }
         for _ in 0..16 {
             match t.strip_prefix('#') { Some(k) => t = m.textures.get(k)?.clone(), None => return Some(strip(&t).to_string()) }
         }
@@ -188,7 +192,7 @@ impl<'a> Baker<'a> {
 
     /// Bake one model with a variant rotation into quads appended to `out`.
     fn bake(&mut self, model: &str, rx: i32, ry: i32, uvlock: bool, out: &mut Model) {
-        let Some(m) = self.raw(model) else { return };
+        let Some(m) = self.raw(model) else { out.missing = true; return };
         let Some(elements) = &m.elements else { return };
         let _ = m.ao;
         for el in elements {
@@ -254,7 +258,8 @@ impl<'a> Baker<'a> {
                         uvs[i] = match dir { DOWN => [p[0], 16.0 - p[2]], UP => [p[0], p[2]], NORTH => [16.0 - p[0], 16.0 - p[1]], SOUTH => [p[0], 16.0 - p[1]], WEST => [p[2], 16.0 - p[1]], _ => [16.0 - p[2], 16.0 - p[1]] };
                     }
                 }
-                let Some(tex) = face.get("texture").and_then(|t| t.as_str()).and_then(|t| Self::resolve_tex(&m, t)) else { continue };
+                let Some(tex) = face.get("texture").and_then(|t| t.as_str()).and_then(|t| Self::resolve_tex(&m, t)) else { out.missing = true; continue };
+                if !self.atlas.rects.contains_key(&tex) { out.missing = true; }
                 let (rect, layer) = self.atlas.rects.get(&tex).or_else(|| self.atlas.rects.get("missing")).copied().unwrap();
                 for u in uvs.iter_mut() {
                     // inset slightly to avoid bleeding
@@ -385,10 +390,18 @@ pub struct Assets {
     pub biome_json: HashMap<String, Value>,
     pub dimension_types: HashMap<String, DimensionType>,
     pub font: Option<Image>,
-    pub skin: Option<Image>,
-    pub hud: HashMap<String, Image>,
-    /// item id -> texture name in atlas (for hotbar icons)
+    /// textures/gui/** keyed by path below textures/gui/ without ".png" (e.g. "sprites/hud/hotbar")
+    pub gui: HashMap<String, Image>,
+    /// textures/entity/** keyed by path below textures/entity/ without ".png" (e.g. "zombie/zombie")
+    pub entity_tex: HashMap<String, Image>,
+    /// item id -> texture name in atlas (flat icons)
     pub item_icons: Vec<Option<String>>,
+    /// item id -> baked block model (3D icon / dropped mini-block), tinted with `item_tint`
+    pub item_models: Vec<Option<u32>>,
+    pub item_tint: Vec<Option<u32>>,
+    /// per block state: the blockstate file applied no model at all
+    /// 0 = has a model, 1 = the blockstate file applied no model, 2 = multipart with no matching part (renders nothing, like vanilla)
+    pub no_model: Vec<u8>,
 }
 
 impl Assets {
@@ -397,6 +410,9 @@ impl Assets {
         let atlas = build_atlas(&jar);
         let mut models: Vec<Model> = vec![Model::default()];
         let mut states = Vec::with_capacity(basalt_data::blocks::STATE_COUNT);
+        crate::lang::init(jar.files.get("assets/minecraft/lang/en_us.json").map(|v| v.as_slice()));
+        let mut no_model = Vec::with_capacity(basalt_data::blocks::STATE_COUNT);
+        let (mut item_models, mut item_tint, mut item_icons): (Vec<Option<u32>>, Vec<Option<u32>>, Vec<Option<String>>) = (Vec::new(), Vec::new(), Vec::new());
         {
             let mut baker = Baker { jar: &jar, raw: HashMap::new(), atlas: &atlas };
             let mut cache: HashMap<String, u32> = HashMap::new();
@@ -419,6 +435,8 @@ impl Assets {
                         for p in parts { if p.get("when").map(|w| cond_matches(w, st)).unwrap_or(true) { if let Some(a) = p.get("apply") { push(a); } } }
                     }
                 }
+                // a multipart state matching no part renders nothing in vanilla either (e.g. an isolated wall without post)
+                no_model.push(if !applied.is_empty() { 0 } else if bs.as_ref().map(|b| b.get("multipart").is_some()).unwrap_or(false) { 2 } else { 1 });
                 let key = format!("{applied:?}");
                 let mi = match cache.get(&key) { Some(i) => *i, None => {
                     let mut m = Model::default();
@@ -439,6 +457,50 @@ impl Assets {
                     emits_light: matches!(name, "lava" | "glowstone" | "torch" | "wall_torch" | "lantern" | "sea_lantern" | "fire" | "jack_o_lantern" | "shroomlight" | "magma_block"),
                 });
             }
+            // items: items/<name>.json → a block model (3D icon) or an item model's layer0 texture
+            for n in basalt_data::registries::ITEM.iter() {
+                let mut model_idx = None; let mut icon = None; let mut tint = None;
+                let def = jar.json(&format!("assets/minecraft/items/{n}.json"));
+                let model = def.as_ref().and_then(|d| d.get("model"));
+                // follow the first plain "minecraft:model" reachable through select/condition/range cases
+                fn find_model(v: &Value, depth: u32) -> Option<&Value> {
+                    if depth > 6 { return None; }
+                    if v.get("type").and_then(|t| t.as_str()) == Some("minecraft:model") { return Some(v); }
+                    for k in ["fallback", "on_false", "on_true"] { if let Some(m) = v.get(k).and_then(|m| find_model(m, depth + 1)) { return Some(m); } }
+                    if let Some(cs) = v.get("cases").or(v.get("entries")).and_then(|c| c.as_array()) { for c in cs { if let Some(m) = c.get("model").and_then(|m| find_model(m, depth + 1)) { return Some(m); } } }
+                    None
+                }
+                if let Some(m) = model.and_then(|m| find_model(m, 0)) {
+                    let mname = m.get("model").and_then(|x| x.as_str()).unwrap_or("");
+                    if let Some(t) = m.get("tints").and_then(|t| t.as_array()).and_then(|t| t.first()) {
+                        tint = Some(match t.get("type").and_then(|x| x.as_str()) {
+                            Some("minecraft:grass") => 0x7CBD6B, Some("minecraft:constant") => t.get("value").and_then(|v| v.as_i64()).map(|v| v as u32 & 0xFFFFFF).unwrap_or(0x48B518),
+                            _ => t.get("default").and_then(|v| v.as_i64()).map(|v| v as u32 & 0xFFFFFF).unwrap_or(0x48B518),
+                        });
+                    }
+                    if strip(mname).starts_with("block/") {
+                        let mut bm = Model::default();
+                        baker.bake(mname, 0, 0, false, &mut bm);
+                        if !bm.quads.is_empty() { models.push(bm); model_idx = Some(models.len() as u32 - 1); }
+                    }
+                    // flat icon: layer0 of the model (follow parents)
+                    if let Some(raw) = baker.raw(mname) {
+                        if let Some(t) = raw.textures.get("layer0").or(raw.textures.get("particle")) {
+                            let t = strip(t).to_string();
+                            if !t.starts_with('#') && atlas.rects.contains_key(&t) { icon = Some(t); }
+                        }
+                    }
+                }
+                item_models.push(model_idx); item_tint.push(tint); item_icons.push(icon);
+            }
+        }
+        // icons not found through the item definition: guess from texture names
+        for (i, n) in basalt_data::registries::ITEM.iter().enumerate() {
+            if item_icons[i].is_some() { continue; }
+            if atlas.rects.contains_key(&format!("item/{n}")) { item_icons[i] = Some(format!("item/{n}")); continue; }
+            for cand in [format!("block/{n}"), format!("block/{n}_top"), format!("block/{n}_side"), format!("block/{n}_front"), format!("block/{}", n.replace("_slab", "").replace("_stairs", "")), format!("block/{}s", n.replace("_slab", "").replace("_stairs", "")), format!("block/{}_planks", n.replace("_slab", "").replace("_stairs", "").replace("_fence", ""))] {
+                if atlas.rects.contains_key(&cand) { item_icons[i] = Some(cand); break; }
+            }
         }
         let uvrect = |n: &str| -> [f32; 4] {
             let (r, _) = atlas.rects.get(n).or(atlas.rects.get("missing")).copied().unwrap();
@@ -455,25 +517,26 @@ impl Assets {
                 }
             }
         }
-        let mut hud = HashMap::new();
-        for (p, d) in &jar.files { if let Some(n) = p.strip_prefix("assets/minecraft/textures/gui/sprites/hud/").and_then(|n| n.strip_suffix(".png")) { if let Ok(i) = decode_png(d) { hud.insert(n.to_string(), i); } } }
-        // item icons: prefer item texture, else a block texture
-        let item_icons = basalt_data::registries::ITEM.iter().map(|n| {
-            if atlas.rects.contains_key(&format!("item/{n}")) { return Some(format!("item/{n}")); }
-            for cand in [format!("block/{n}"), format!("block/{n}_top"), format!("block/{n}_side"), format!("block/{n}_front"), format!("block/{}", n.replace("_slab", "").replace("_stairs", "")), format!("block/{}s", n.replace("_slab", "").replace("_stairs", "")), format!("block/{}_planks", n.replace("_slab", "").replace("_stairs", "").replace("_fence", ""))] {
-                if atlas.rects.contains_key(&cand) { return Some(cand); }
-            }
-            None
-        }).collect();
+        let (mut gui, mut entity_tex) = (HashMap::new(), HashMap::new());
+        for (p, d) in &jar.files {
+            if let Some(n) = p.strip_prefix("assets/minecraft/textures/gui/").and_then(|n| n.strip_suffix(".png")) { if let Ok(i) = decode_png(d) { gui.insert(n.to_string(), i); } }
+            if let Some(n) = p.strip_prefix("assets/minecraft/textures/entity/").and_then(|n| n.strip_suffix(".png")) { if let Ok(i) = decode_png(d) { entity_tex.insert(n.to_string(), i); } }
+        }
         let _ = BLOCKS;
         Ok(Assets {
             water_still: uvrect("block/water_still"), water_flow: uvrect("block/water_flow"), lava_still: uvrect("block/lava_still"),
             grass_map: jar.png("assets/minecraft/textures/colormap/grass.png"), foliage_map: jar.png("assets/minecraft/textures/colormap/foliage.png"),
             font: jar.png("assets/minecraft/textures/font/ascii.png"),
-            skin: jar.png("assets/minecraft/textures/entity/player/wide/steve.png"),
-            atlas, models, states, biome_json, dimension_types, hud, item_icons,
+            atlas, models, states, biome_json, dimension_types, gui, entity_tex, item_icons, item_models, item_tint, no_model,
         })
     }
+
+    /// Atlas UV rect [u0, v0, u1, v1] of a named block/item texture.
+    pub fn tex_uv(&self, name: &str) -> Option<[f32; 4]> {
+        let (r, _) = self.atlas.rects.get(name)?;
+        Some([r.x as f32 / self.atlas.w as f32, r.y as f32 / self.atlas.h as f32, (r.x + r.w) as f32 / self.atlas.w as f32, (r.y + r.h) as f32 / self.atlas.h as f32])
+    }
+    pub fn item_model(&self, item: i32) -> Option<&Model> { self.item_models.get(item as usize).copied().flatten().map(|i| &self.models[i as usize]) }
 
     #[inline] pub fn info(&self, state: u16) -> &StateInfo { self.states.get(state as usize).unwrap_or(&self.states[0]) }
     #[inline] pub fn model(&self, state: u16) -> &Model { &self.models[self.info(state).model as usize] }

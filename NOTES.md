@@ -119,6 +119,25 @@ real server/client over the wire.
   - Reference values (vanilla, difficulty=easy, unarmored player): zombie hit 2.5; skeleton arrow from
     10 blocks 3.0; creeper (r 3, Fuse:0) 4.36 blocks from the player's feet → 5.157 damage and
     knockback magnitude 0.274 (impact uses distance to feet, push direction aims at the eyes).
+- basalt-client test hooks (M7; stable CLI + output, see crates/client/src/{scenario,assetgrid,bench}.rs):
+  - Scenarios: `basalt-client --addr H:P [--vanilla H:P] --scenario all|name[,name]` → one line each
+    `SCENARIO M7/<name> PASS|FAIL|SKIP <details>`, exit 1 on any FAIL. Names: edge_chunks inventory
+    crafting_table death dig dig_others(vanilla) models interp sounds menus. Shots in $BASALT_SCENARIO_SHOTS
+    (default target/scenario-shots). Wrapper: tools/client-scenarios.sh (fresh in-memory Basalt server).
+  - Visual parity: `--screenshot out.png --size WxH [--options vanilla/mcclient/options.txt] [--fov F]
+    [--render-distance N] [--gui-scale G] [--time T] [--no-gui] [--pos x,y,z] [--look yaw,pitch] [--cmd ...]`;
+    waits until no chunk arrived for 1.5 s and all sections are meshed (max 30 s). options.txt fov is
+    normalised (fov = 70 + v*40). --no-gui = F1 (no HUD, no hand).
+  - Asset coverage: `--asset-grid out.png [--blocks|--items] [--allowlist tools/asset-allowlist.txt]` →
+    out.png (+ out_N.png pages), out.json {kind, cells, pages, total, problems[], allowlisted[]}; exit 1 if
+    problems is non-empty. No server needed.
+  - Benchmark: `--bench out.json --addr H:P --render-distance N --seconds S [--bench-mode rotate|fly]
+    [--size WxH]` → JSON: fps_avg, fps_1pct_low, frame_ms{avg,p50,p90,p99,max}, mesh_ms_per_section{avg,p95},
+    sections_meshed, sections_resident, chunks_loaded, chunk_visible_latency_ms{count,avg,p95,max},
+    memory{rss_kb, gpu_section_buffers_kb}. The server must allow the view distance (Basalt: --view 32).
+  - Real client handshake order (captured through the proxy): brand custom_payload, then client_information
+    ("en_us", view, chat 0, colors 1, skin parts 0x7f, main hand 1, filtering 0, listing 1, particles 0).
+    The launcher-run real client sends an all-zero UUID in hello in offline mode.
 
 ## Test harness findings (crates/check, measured against vanilla 26.2 with the bot)
 - Command feedback is system_chat with a translatable component: `data get entity @s Health` →
