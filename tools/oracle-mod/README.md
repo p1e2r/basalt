@@ -50,3 +50,25 @@ a separate game dir `vanilla/oracle/game`, no server join. The client must reach
 One `Handler` class (`void handle(JsonObject request, JsonWriter out)`), one line in
 `OracleMod.HANDLERS`, one section in `SCHEMA.md`, and a comparer under `crates/check/src/client/`
 using `client::oracle::Oracle`.
+
+## Scripted input (control channel)
+
+The mod also runs a small TCP control channel (127.0.0.1:25789, `ORACLE_CTL_PORT`) that drives the
+**real** client: connect to a server, walk/look/jump/sneak/sprint, dig and place, open the inventory
+and click slots, read state, and log every serverbound packet with tick stamps. Protocol and logs:
+SCHEMA.md "Control channel". Two mixins (`mixin/MinecraftMixin` for the tick hook, `mixin/ConnectionMixin`
+for the packet stamp) are the only non-API hooks; `Control.java` / `PacketLog.java` only call public
+client API plus two reflective pokes (the container screen's protected `slotClicked`, the mouse-grab
+flag). Names were found with `javap -p` listings and runtime behaviour, never method bodies.
+
+```
+tools/oracle-mod/build.sh                       # rebuild after changing the mod (adds the sponge-mixin jar to the classpath)
+cargo build --release -p basalt-server -p basalt-client -p basalt-check
+target/release/basalt-check client-input        # scripted input vs basalt-client, serverbound packet diff
+target/release/basalt-check client-clicks --n 100 --seed 3   # random container clicks through the real client
+```
+
+Both harnesses launch the oracle client themselves (and stop it afterwards unless it was already
+running when they started) and start fresh Basalt servers on ports from 25700 (pid-dependent offset,
+`CHECK_PORT_BASE` overrides). `ORACLE_DIR` / `--oracle-dir` lets a second oracle build live beside the
+mesh one. By hand: `python3 -c` a socket to the port, or write ops as JSON lines.

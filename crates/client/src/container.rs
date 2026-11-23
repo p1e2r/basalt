@@ -190,7 +190,7 @@ impl Game {
     }
 
     /// Finish a drag (quick-craft) over `slots`: start, one packet per slot, end — like vanilla.
-    fn send_drag(&mut self, button: u8, visited: &[i16]) {
+    pub(crate) fn send_drag(&mut self, button: u8, visited: &[i16]) {
         let Some(crate::menu::Screen::Container(c)) = &self.screen else { return };
         let (window, state, kind) = (c.window, c.state, c.kind);
         let before = c.slots.clone();

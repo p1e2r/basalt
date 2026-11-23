@@ -7,7 +7,7 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(cd "$here/../.." && pwd)"
-oracle="${ORACLE_DIR:-$repo/vanilla/oracle}"
+oracle="${ORACLE_DIR:-$repo/vanilla/oracle}"; mkdir -p "$oracle"; oracle="$(cd "$oracle" && pwd)"
 fab="$oracle/fabric"
 mkdir -p "$fab" "$oracle/build"
 
@@ -34,9 +34,9 @@ for l in "${libs[@]}"; do
 done
 
 cp_vanilla="$(python3 "$here/launch.py" --classpath)"
-cp_all="$cp_vanilla:$fab/fabric-loader-0.20.1.jar"
+cp_all="$cp_vanilla:$fab/fabric-loader-0.20.1.jar:$fab/sponge-mixin-0.17.5+mixin.0.8.7.jar"
 rm -rf "$oracle/build/classes"; mkdir -p "$oracle/build/classes"
 javac --release 25 -nowarn -d "$oracle/build/classes" -cp "$cp_all" $(find "$here/src" -name '*.java')
-cp "$here/fabric.mod.json" "$oracle/build/classes/"
+cp "$here/fabric.mod.json" "$here/basalt-oracle.mixins.json" "$oracle/build/classes/"
 (cd "$oracle/build/classes" && jar cf "$oracle/basalt-oracle.jar" .)
 echo "built $oracle/basalt-oracle.jar"
