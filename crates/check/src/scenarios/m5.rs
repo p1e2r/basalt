@@ -184,6 +184,9 @@ pub fn undead_sun(ctx: &mut Ctx) -> Result<()> {
     fill(&bot, [c[0] - 1, Y, c[2] - 1], [c[0] + 1, Y + 1, c[2] + 1], "stone")?;
     setblock(&bot, [c[0], Y, c[2]], "air")?;
     setblock(&bot, [c[0], Y + 1, c[2]], "air")?;
+    // open sky: the vanilla world is shared and persistent, and other scenarios roof their arenas,
+    // so a leftover roof above this pit would shade the zombie (it never ignites)
+    fill(&bot, [c[0] - 1, Y + 2, c[2] - 1], [c[0] + 1, Y + 60, c[2] + 1], "air")?;
     let (eid, _) = summon(&bot, "zombie", [c[0] as f64 + 0.5, Y as f64, c[2] as f64 + 0.5], "{PersistenceRequired:1b}")?;
     let t0 = Instant::now();
     // vanilla rolls ignition per tick (~1/25 at full sky light), so allow up to 10 s

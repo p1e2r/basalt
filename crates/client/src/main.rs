@@ -14,6 +14,7 @@ mod menu;
 mod mesh;
 mod meshdump;
 mod net;
+mod particles;
 mod player;
 mod render;
 mod scenario;
@@ -220,6 +221,11 @@ pub struct Game {
     /// other players' block_destruction progress: eid → (block, stage)
     destroy: HashMap<i32, ([i32; 3], i8)>,
     fp_swing: i32,
+    pub particles: particles::Particles,
+    /// first-person equip progress (now, previous tick) and the (slot, item) it was raised for
+    pub equip: (f32, f32), equip_for: i32,
+    /// item name shown above the hotbar after selecting a different item, and its remaining ticks
+    pub held_name: (String, i32),
     step_dist: f64,
     last_place: Instant,
     last_space: Option<Instant>,
@@ -268,7 +274,7 @@ impl Game {
             dirty: HashMap::new(), in_flight: HashSet::new(), events: rx, out: otx, entities: HashMap::new(), player_names: HashMap::new(), my_eid: 0, name: o.name,
             chat: Vec::new(), chat_input: None, cmd_tree: None, sug: Sug::default(), hp: 20.0, food: 20, hotbar: Default::default(), held: 0, inventory: vec![ItemStack::default(); 46], inv_state: 0, carried: ItemStack::default(), day_time: 6000,
             spawned: false, loaded_sent: false, connected: false, keys: HashSet::new(), mouse: [false; 2], mouse_pos: (0.0, 0.0), slider_drag: None, last_tick: Instant::now(),
-            last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, step_dist: 0.0,
+            last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, particles: Default::default(), equip: (1.0, 1.0), equip_for: -1, held_name: (String::new(), 0), step_dist: 0.0,
             last_place: Instant::now(), last_space: None, debug: false, disconnected: None, death_msg: None, respawn_at: None, auto_respawn: o.auto_respawn,
             screen: Some(Screen::Title), cfg: o.cfg, sounds, last_addr: String::new(), quit: false, fullscreen_changed: false, hide_entities: false, hide_cracks: false, hide_gui: false, hide_hand: false, fixed_time: None, last_chunk_at: Instant::now(), stats: Stats::default(), clicks_sent: 0, ticks: 0,
             frames: (0, Instant::now(), 0.0),
@@ -438,7 +444,11 @@ impl Game {
                 self.sounds.play(&event, p, volume, pitch);
             }
             Event::LevelEvent { event, pos, data } => {
-                if event == 2001 { self.block_sound(data as u16, "break", [pos[0] as f64 + 0.5, pos[1] as f64 + 0.5, pos[2] as f64 + 0.5]); }
+                if event == 2001 {
+                    self.block_sound(data as u16, "break", [pos[0] as f64 + 0.5, pos[1] as f64 + 0.5, pos[2] as f64 + 0.5]);
+                    let tint = self.particle_tint(data as u16, pos);
+                    self.particles.block_break(&self.assets, data as u16, pos, tint);
+                }
             }
             Event::PlayerName { uuid, name } => { self.player_names.insert(uuid, name); }
             Event::Commands(b) => match suggest::Tree::parse(&b) { Ok(t) => self.cmd_tree = Some(t), Err(e) => log::warn!("commands packet: {e:#}") },
@@ -553,6 +563,17 @@ impl Game {
         self.ticks += 1;
         for e in self.entities.values_mut() { e.tick(); }
         if self.fp_swing >= 0 { self.fp_swing += 1; if self.fp_swing >= 6 { self.fp_swing = -1; } }
+        if !self.particles.is_empty() { self.particles.tick(&self.assets, &self.world); }
+        // switching to a different item lowers the hand, which then rises over a few ticks
+        let h = &self.hotbar[self.held as usize];
+        let now = if h.count > 0 { h.item } else { -1 };
+        if now != self.equip_for {
+            if self.ticks > 0 { self.equip.0 = 0.0; }
+            self.equip_for = now;
+            self.held_name = if now >= 0 { (crate::lang::item_name(now), 40) } else { (String::new(), 0) };
+        }
+        self.equip.1 = self.equip.0; self.equip.0 = (self.equip.0 + 0.4).min(1.0);
+        if self.held_name.1 > 0 { self.held_name.1 -= 1; }
         if self.respawn_at.map(|t| Instant::now() >= t).unwrap_or(false) { self.respawn_at = None; self.respawn(); }
         if !self.spawned || matches!(self.screen, Some(Screen::Death { .. })) { return; }
         if !self.loaded_sent && !self.world.chunks.is_empty() {
@@ -654,6 +675,7 @@ impl Game {
             let (b, f, ticks, total) = (d.block, d.face, d.ticks, d.total);
             if ticks % 4 == 0 { let st = self.world.get(b[0], b[1], b[2]); self.block_sound(st, "hit", [b[0] as f64 + 0.5, b[1] as f64 + 0.5, b[2] as f64 + 0.5]); }
             if self.fp_swing < 0 || self.fp_swing >= 3 { self.swing_arm(); }
+            { let st = self.world.get(b[0], b[1], b[2]); let tint = self.particle_tint(st, b); self.particles.block_hit(&self.assets, st, b, f, tint); }
             if ticks >= total {
                 self.player_action(2, b, f);
                 self.break_local(b);
@@ -678,9 +700,25 @@ impl Game {
         }
     }
 
+    /// Colour block particles take: the block's biome tint, except grass blocks (their chips are dirt).
+    fn particle_tint(&self, st: u16, b: [i32; 3]) -> [u8; 3] {
+        use assets::Tint;
+        let biomes = self.biomes.lock().unwrap().clone();
+        let bi = biomes.get(self.world.biome(b[0], b[1], b[2]) as usize);
+        let c = match self.assets.info(st).tint {
+            Tint::None => return [255; 3],
+            _ if basalt_data::BlockState(st as u32).name() == "grass_block" => return [255; 3],
+            Tint::Grass => bi.map(|b| b.grass).unwrap_or(0x79C05A), Tint::Foliage => bi.map(|b| b.foliage).unwrap_or(0x59AE30),
+            Tint::Water => bi.map(|b| b.water).unwrap_or(0x3F76E4), Tint::Fixed(c) => c, Tint::DryFoliage => bi.map(|b| b.dry_foliage).unwrap_or(0x7B5334),
+        };
+        [(c >> 16) as u8, (c >> 8) as u8, c as u8]
+    }
+
     fn break_local(&mut self, b: [i32; 3]) {
         let st = self.world.get(b[0], b[1], b[2]);
         self.block_sound(st, "break", [b[0] as f64 + 0.5, b[1] as f64 + 0.5, b[2] as f64 + 0.5]);
+        let tint = self.particle_tint(st, b);
+        self.particles.block_break(&self.assets, st, b, tint);
         self.world.set(b[0], b[1], b[2], 0); self.mark_block(b[0], b[1], b[2]);
     }
 
@@ -943,6 +981,13 @@ impl Game {
                 ui::item_icon(&self.assets, items, it.item, x, y, s);
                 ui::item_decorations(a, deco, it, self.max_damage(it.item), x, y, s);
             }
+            // name of a newly selected item above the hotbar: 2 s, fading over the last half second
+            if self.held_name.1 > 0 && !self.held_name.0.is_empty() && self.screen.is_none() {
+                let alpha = (self.held_name.1 * 256 / 10).min(255) as u8;
+                let ty = h - (if self.player.gamemode == 1 || self.player.gamemode == 3 { 45.0 } else { 59.0 }) * s;
+                let tw = a.text_width(&self.held_name.0, s);
+                a.text(deco, &self.held_name.0, ((w - tw) / 2.0).floor(), ty, s, [255, 255, 255, alpha]);
+            }
             // hearts + food (survival / adventure)
             if self.player.gamemode == 0 || self.player.gamemode == 2 {
                 // experience bar (level 0) and the rows above it, as laid out by vanilla
@@ -1043,7 +1088,7 @@ impl Game {
             params: [fog_start, fog_end, daylight, day_time as f32], screen: [w, h, underwater as u8 as f32, 0.0], sun: [sun[0], sun[1], sun[2], 0.0],
         };
         let cam = Vec3::new(eye[0] as f32, eye[1] as f32, eye[2] as f32);
-        let mut fd = FrameData { u, cam, vp, render_dist, extra: MeshData::default(), skinned: MeshData::default(), items3d: MeshData::default(), overlay: MeshData::default(), layers: Vec::new() };
+        let mut fd = FrameData { u, cam, vp, render_dist, extra: MeshData::default(), skinned: MeshData::default(), items3d: MeshData::default(), overlay: MeshData::default(), hand_skin: MeshData::default(), hand_items: MeshData::default(), layers: Vec::new() };
         let in_world = self.connected && self.spawned;
         if in_world {
             // block outline
@@ -1087,17 +1132,23 @@ impl Game {
                     }
                 }
             }
-            // first-person arm
-            if self.screen.is_none() && !self.hide_gui && self.player.gamemode != 3 && self.hotbar[self.held as usize].count == 0 && !self.hide_hand && std::env::var("BASALT_NOHAND").is_err() {
+            self.particles.build(&self.world, self.player.yaw, self.player.pitch, a, &mut fd.items3d);
+            // first-person arm, or the held item in its place
+            if self.screen.is_none() && !self.hide_gui && self.player.gamemode != 3 && !self.hide_hand && std::env::var("BASALT_NOHAND").is_err() {
                 let sw = if self.fp_swing >= 0 { (self.fp_swing as f32 + a) / 6.0 } else { 0.0 };
                 let (sl, bl) = self.world.light(eye[0].floor() as i32, eye[1].floor() as i32, eye[2].floor() as i32);
-                entity::first_person_arm(&self.entity_atlas, &net::offline_uuid(&self.name), cam, self.player.yaw, self.player.pitch, sw, 0.0, [sl * 17, bl * 17], &mut fd.skinned);
+                let held = &self.hotbar[self.held as usize];
+                if held.count == 0 {
+                    entity::first_person_arm(&self.entity_atlas, &net::offline_uuid(&self.name), cam, self.player.yaw, self.player.pitch, sw, 0.0, [sl * 17, bl * 17], &mut fd.hand_skin);
+                } else {
+                    let equip = (self.equip.1 + (self.equip.0 - self.equip.1) * a).clamp(0.0, 1.0);
+                    entity::first_person_item(&self.assets, held.item, cam, self.player.yaw, self.player.pitch, sw, equip, [sl * 17, bl * 17], &mut fd.hand_items);
+                }
             }
         }
         // 2D: HUD, then the open screen
         let (mut ui, mut items, mut deco) = (MeshData::default(), MeshData::default(), MeshData::default());
         if !self.hide_gui { self.build_hud(&mut ui, &mut items, &mut deco, &vp, alpha as f32); }
-        // held item in the corner of the view (flat, simple)
         fd.layers.push((ui, Tex::Ui)); fd.layers.push((items, Tex::Blocks)); fd.layers.push((deco, Tex::Ui));
         match &self.screen {
             Some(Screen::Container(c)) => {
@@ -1137,10 +1188,10 @@ impl Game {
     }
 }
 
-pub struct FrameData { u: Uniforms, cam: Vec3, vp: Mat4, render_dist: f32, extra: MeshData, skinned: MeshData, items3d: MeshData, overlay: MeshData, layers: Vec<(MeshData, Tex)> }
+pub struct FrameData { u: Uniforms, cam: Vec3, vp: Mat4, render_dist: f32, extra: MeshData, skinned: MeshData, items3d: MeshData, overlay: MeshData, hand_skin: MeshData, hand_items: MeshData, layers: Vec<(MeshData, Tex)> }
 impl FrameData {
     fn as_frame(&self, min_y: f32) -> Frame<'_> {
-        Frame { uniforms: self.u, cam: self.cam, vp: self.vp, render_dist: self.render_dist + 32.0, min_y, extra: &self.extra, skinned: &self.skinned, items3d: &self.items3d, overlay: &self.overlay, ui_layers: &self.layers }
+        Frame { uniforms: self.u, cam: self.cam, vp: self.vp, render_dist: self.render_dist + 32.0, min_y, extra: &self.extra, skinned: &self.skinned, items3d: &self.items3d, overlay: &self.overlay, hand_skin: &self.hand_skin, hand_items: &self.hand_items, ui_layers: &self.layers }
     }
 }
 
