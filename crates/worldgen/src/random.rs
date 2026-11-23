@@ -166,6 +166,44 @@ impl Rng for JavaRandom {
     fn set_seed(&mut self, seed: i64) { *self = JavaRandom::new(seed); }
 }
 
+/// "WorldgenRandom" over Xoroshiro: java.util.Random algorithms fed with the top bits
+/// of Xoroshiro outputs (used for feature decoration).
+#[derive(Clone, Debug)]
+pub struct BitXoroshiro {
+    x: Xoroshiro,
+}
+
+impl BitXoroshiro {
+    pub fn new(seed: i64) -> Self { Self { x: Xoroshiro::new(seed) } }
+    #[inline]
+    fn next(&mut self, bits: u32) -> i32 { ((self.x.next_long() as u64) >> (64 - bits)) as i32 }
+}
+
+impl Rng for BitXoroshiro {
+    fn next_long(&mut self) -> i64 { ((self.next(32) as i64) << 32).wrapping_add(self.next(32) as i64) }
+    fn next_int(&mut self) -> i32 { self.next(32) }
+    fn next_int_bounded(&mut self, bound: i32) -> i32 {
+        assert!(bound > 0);
+        if bound & bound.wrapping_neg() == bound {
+            return ((bound as i64 * self.next(31) as i64) >> 31) as i32;
+        }
+        loop {
+            let i = self.next(31);
+            let j = i % bound;
+            if i.wrapping_sub(j).wrapping_add(bound - 1) >= 0 { return j; }
+        }
+    }
+    fn next_double(&mut self) -> f64 {
+        let a = self.next(26) as i64;
+        let b = self.next(27) as i64;
+        ((a << 27) + b) as f64 * (1.0 / (1u64 << 53) as f64)
+    }
+    fn next_float(&mut self) -> f32 { self.next(24) as f32 / (1 << 24) as f32 }
+    fn next_bool(&mut self) -> bool { self.next(1) != 0 }
+    fn consume(&mut self, n: usize) { for _ in 0..n { self.next(32); } }
+    fn set_seed(&mut self, seed: i64) { self.x = Xoroshiro::new(seed); }
+}
+
 /// World-generation seeding helpers layered over any generator.
 pub fn set_large_feature_seed<R: Rng>(r: &mut R, seed: i64, x: i32, z: i32) {
     r.set_seed(seed);

@@ -104,7 +104,9 @@ fn terrain(id: u16) -> bool {
         | "gravel" | "coarse_dirt" | "podzol" | "mycelium" | "snow_block" | "powder_snow" | "packed_ice" | "ice" | "blue_ice" | "calcite"
         | "mud" | "clay" | "terracotta" | "white_terracotta" | "orange_terracotta" | "yellow_terracotta" | "brown_terracotta"
         | "red_terracotta" | "light_gray_terracotta" | "water" | "lava" | "air" | "cave_air" | "granite" | "tuff" | "copper_ore"
-        | "deepslate_iron_ore" | "raw_copper_block" | "raw_iron_block")
+        | "deepslate_iron_ore" | "raw_copper_block" | "raw_iron_block" | "diorite" | "andesite" | "coal_ore" | "deepslate_coal_ore"
+        | "iron_ore" | "deepslate_copper_ore" | "gold_ore" | "deepslate_gold_ore" | "redstone_ore" | "deepslate_redstone_ore"
+        | "diamond_ore" | "deepslate_diamond_ore" | "lapis_ore" | "deepslate_lapis_ore" | "emerald_ore" | "deepslate_emerald_ore")
 }
 
 fn main() -> Result<()> {

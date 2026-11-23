@@ -187,6 +187,13 @@ impl BiomeSource {
         leaf.unwrap()
     }
 
+    /// Distinct biomes in the order the parameter list first mentions them.
+    pub fn possible_biomes(&self) -> Vec<u8> {
+        let mut v: Vec<u8> = Vec::new();
+        for e in &self.entries { if !v.contains(&e.biome) { v.push(e.biome); } }
+        v
+    }
+
     /// Brute-force nearest entry.
     pub fn find(&self, t: &Target) -> u8 {
         let mut best = i64::MAX;

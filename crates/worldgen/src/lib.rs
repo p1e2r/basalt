@@ -10,6 +10,7 @@ pub mod aquifer;
 pub mod biome;
 pub mod carver;
 pub mod density;
+pub mod features;
 pub mod noise;
 pub mod random;
 pub mod surface;
@@ -48,6 +49,7 @@ pub enum Stage {
     Noise,
     Surface,
     Carvers,
+    Features,
 }
 
 pub(crate) struct Router {
@@ -125,6 +127,41 @@ pub struct Generator {
     /// Per biome: indices into `carvers`.
     biome_carvers: Vec<Vec<usize>>,
     trig: carver::Trig,
+    features: features::Features,
+}
+
+/// Ore placement target: the chunk being generated (writes outside it are dropped).
+struct OreChunk<'a, 'b, 'g> {
+    env: &'b mut Env<'a, 'g>,
+    blocks: &'b mut [[u16; 4096]],
+    cx: i32,
+    cz: i32,
+    floor: [i32; 256],
+}
+
+impl features::OreWorld for OreChunk<'_, '_, '_> {
+    fn get(&self, x: i32, y: i32, z: i32) -> Option<u16> {
+        let (lx, lz) = (x - self.cx * 16, z - self.cz * 16);
+        if !(0..16).contains(&lx) || !(0..16).contains(&lz) || !(MIN_Y..MIN_Y + HEIGHT).contains(&y) { return None; }
+        let yy = y - MIN_Y;
+        Some(self.blocks[(yy >> 4) as usize][(((yy & 15) << 8) | (lz << 4) | lx) as usize])
+    }
+    fn set(&mut self, x: i32, y: i32, z: i32, state: u16) {
+        let (lx, lz) = (x - self.cx * 16, z - self.cz * 16);
+        if !(0..16).contains(&lx) || !(0..16).contains(&lz) || !(MIN_Y..MIN_Y + HEIGHT).contains(&y) { return; }
+        let yy = y - MIN_Y;
+        self.blocks[(yy >> 4) as usize][(((yy & 15) << 8) | (lz << 4) | lx) as usize] = state;
+    }
+    fn ocean_floor(&mut self, x: i32, z: i32) -> i32 {
+        let (lx, lz) = (x - self.cx * 16, z - self.cz * 16);
+        if (0..16).contains(&lx) && (0..16).contains(&lz) { return self.floor[(lz * 16 + lx) as usize]; }
+        use surface::SurfaceEnv;
+        self.env.preliminary_surface(x, z)
+    }
+    fn biome(&mut self, x: i32, y: i32, z: i32) -> u8 {
+        let g = self.env.g;
+        g.surface.zoomed_biome(self.env, x, y, z)
+    }
 }
 
 /// Target for the carvers: the chunk's blocks plus aquifer and surface access.
@@ -256,9 +293,10 @@ impl Generator {
             }
             biome_carvers.push(idx);
         }
+        let features = features::Features::load(&data_dir.join("data/minecraft"), &biome_names, &biomes.possible_biomes())?;
         let surface = surface::SurfaceSystem::load(&wg, &settings, rand, &biome_names, default_block, sea_level, random::biome_zoom_seed(seed))?;
         Ok(Generator {
-            seed, biome_names, biomes, surface, carvers, biome_carvers, trig: carver::Trig::new(),
+            seed, biome_names, biomes, surface, carvers, biome_carvers, trig: carver::Trig::new(), features,
             aquifer_rand: rand.from_hash("minecraft:aquifer").fork_positional(),
             ore_rand: rand.from_hash("minecraft:ore").fork_positional(),
             sea_level,
@@ -272,7 +310,7 @@ impl Generator {
 
     /// Generate the terrain of one chunk.
     pub fn generate_chunk(&self, cx: i32, cz: i32) -> GeneratedChunk {
-        self.generate_stages(cx, cz, Stage::Carvers)
+        self.generate_stages(cx, cz, Stage::Features)
     }
 
     /// Generate up to (and including) the given stage.
@@ -293,8 +331,52 @@ impl Generator {
             if stage >= Stage::Carvers {
                 self.carve(&mut env, cx, cz, &mut blocks);
             }
+            if stage >= Stage::Features {
+                self.decorate(&mut env, cx, cz, &mut blocks, &biomes);
+            }
         }
         GeneratedChunk { blocks, biomes }
+    }
+
+    fn decorate(&self, env: &mut Env, cx: i32, cz: i32, blocks: &mut [[u16; 4096]], own: &[[u8; 64]]) {
+        // Biomes present in each chunk of the 5x5 area (for the per-chunk feature sets).
+        let mut present: HashMap<(i32, i32), Vec<bool>> = HashMap::new();
+        for dx in -2..=2 {
+            for dz in -2..=2 {
+                let b = if dx == 0 && dz == 0 { own.to_vec() } else { self.fill_biomes(env.e, cx + dx, cz + dz) };
+                let mut set = vec![false; self.biome_names.len()];
+                for sec in &b { for v in sec { set[*v as usize] = true; } }
+                present.insert((cx + dx, cz + dz), set);
+            }
+        }
+        let mut floor = [MIN_Y; 256];
+        for lx in 0..16 {
+            for lz in 0..16 {
+                let mut y = MIN_Y + HEIGHT - 1;
+                loop {
+                    if y < MIN_Y { break; }
+                    let yy = y - MIN_Y;
+                    let b = blocks[(yy >> 4) as usize][(((yy & 15) << 8) | (lz << 4) | lx) as usize];
+                    if b != self.blocks.air && b != self.default_fluid && b != self.blocks.lava && !BlockState(b as u32).is_air() { break; }
+                    y -= 1;
+                }
+                floor[(lz * 16 + lx) as usize] = y + 1;
+            }
+        }
+        let mut w = OreChunk { env, blocks, cx, cz, floor };
+        for dz in -1..=1 {
+            for dx in -1..=1 {
+                let (nx, nz) = (cx + dx, cz + dz);
+                let mut set = vec![false; self.biome_names.len()];
+                for ex in -1..=1 {
+                    for ez in -1..=1 {
+                        for (i, v) in present[&(nx + ex, nz + ez)].iter().enumerate() { if *v { set[i] = true; } }
+                    }
+                }
+                let list: Vec<u8> = set.iter().enumerate().filter(|(_, v)| **v).map(|(i, _)| i as u8).collect();
+                self.features.decorate_ores(&self.trig, self.seed, nx, nz, &list, &mut w);
+            }
+        }
     }
 
     fn carve(&self, env: &mut Env, cx: i32, cz: i32, blocks: &mut [[u16; 4096]]) {
