@@ -91,7 +91,7 @@ impl GameData {
     /// `data_dir` is the repo's `./data` (containing `reports/` and `data/`).
     pub fn load(data_dir: &Path) -> anyhow::Result<GameData> {
         let mc = data_dir.join("data/minecraft");
-        anyhow::ensure!(mc.is_dir(), "{} missing — run tools/extract-data.sh", mc.display());
+        anyhow::ensure!(mc.is_dir(), "{} missing — run `cargo xtask extract-data`", mc.display());
         let tags = Tags::load(&mc.join("tags"))?;
         let items = load_items(&data_dir.join("reports/minecraft/components/item"))?;
         let loot_tables = loot::load_tables(&mc.join("loot_table"))?;

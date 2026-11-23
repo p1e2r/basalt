@@ -22,3 +22,4 @@ basalt-nbt = { path = "../nbt" }
 basalt-data = { path = "../data" }
 basalt-world = { path = "../world" }
 basalt-game = { path = "../game" }
+basalt-paths = { path = "../paths" }

@@ -438,7 +438,8 @@ fn region_file_large_chunk_and_rewrite() {
 #[test]
 fn read_vanilla_region() {
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../vanilla/srv/world");
-    let base = if base.exists() { base } else { PathBuf::from("/Users/andrew/Downloads/rustcraft/basalt-git/vanilla/srv/world") };
+    // worktrees have no vanilla/ of their own: BASALT_VANILLA_WORLD points at the shared one
+    let base = std::env::var_os("BASALT_VANILLA_WORLD").map(PathBuf::from).filter(|_| !base.exists()).unwrap_or(base);
     let dir = [base.join("dimensions/minecraft/overworld/region"), base.join("region")].into_iter().find(|d| d.join("r.0.0.mca").exists());
     let Some(dir) = dir else { eprintln!("no vanilla world found; skipping"); return };
     let mut r = anvil::RegionFile::open_read(&dir.join("r.0.0.mca")).unwrap();

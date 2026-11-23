@@ -59,7 +59,7 @@ pub struct Args {
 }
 
 fn parse_args() -> Args {
-    let mut a = Args { data: "data".into(), addr: "127.0.0.1:25566".into(), addr_given: false, name: "Basalt".into(), jar: std::env::var("BASALT_JAR").unwrap_or_else(|_| "vanilla/client.jar".into()),
+    let mut a = Args { data: "data".into(), addr: "127.0.0.1:25566".into(), addr_given: false, name: "Basalt".into(), jar: basalt_paths::client_jar().to_string_lossy().into_owned(),
         screenshot: None, wait: 8.0, size: (1280, 720), pos: None, look: None, cmds: Vec::new(), walk: 0.0, chat: Vec::new(), click: None, clicks: Vec::new(), hold: 1.0, later: Vec::new(), attack: 0, attack_every: 0.7,
         scenario: None, vanilla: None, assets: None, asset_index: None, auto_respawn: false,
         time: None, fov: None, render_distance: None, gui_scale: None, no_gui: false, options: None, asset_grid: None, grid_items: false, allowlist: "tools/asset-allowlist.txt".into(), mesh_dump: None, mesh_out: "target/mesh-dump".into(), script: None, script_log: None,

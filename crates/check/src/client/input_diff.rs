@@ -38,8 +38,12 @@ impl Default for Opts {
             oracle_dir: "vanilla/oracle".into(),
             ctl_port: DEFAULT_CTL_PORT,
             launch: true,
-            client: "target/release/basalt-client".into(),
-            jar: "vanilla/client.jar".into(),
+            client: format!(
+                "target/release/basalt-client{}",
+                std::env::consts::EXE_SUFFIX
+            )
+            .into(),
+            jar: basalt_paths::client_jar(),
             out: "target/check".into(),
             show_log: false,
         }

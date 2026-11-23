@@ -4,13 +4,13 @@ mode, joining a server directly. Uses a separate game dir (vanilla/mcclient) so 
 own options/worlds are untouched. For testing Basalt against the real client.
 
 usage: tools/run-vanilla-client.py HOST:PORT [NAME]
-env:   MC_DIR (default ~/Library/Application Support/minecraft), MC_VERSION (26.2), JAVA
+env:   MC_DIR (default per-OS: macOS ~/Library/Application Support/minecraft, Windows %APPDATA%\\.minecraft, Linux ~/.minecraft), MC_VERSION (26.2), JAVA
 """
 import json, os, platform, subprocess, sys, zipfile
 from pathlib import Path
 
 repo = Path(__file__).resolve().parent.parent
-mc = Path(os.environ.get("MC_DIR", Path.home() / "Library/Application Support/minecraft"))
+mc = Path(os.environ.get("MC_DIR") or {"darwin": Path.home() / "Library/Application Support/minecraft", "win32": Path(os.environ.get("APPDATA", Path.home())) / ".minecraft"}.get(sys.platform, Path.home() / ".minecraft"))
 ver = os.environ.get("MC_VERSION", "26.2")
 server = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1:25565"
 name = sys.argv[2] if len(sys.argv) > 2 else "Tester"

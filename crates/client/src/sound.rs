@@ -36,19 +36,8 @@ pub struct Sounds {
     out: Option<(rodio::OutputStream, rodio::OutputStreamHandle)>,
 }
 
-/// Default launcher asset directory and index id for 26.2 (macOS layout; override with flags/env).
-pub fn default_assets() -> (PathBuf, Option<String>) {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    let mc = if cfg!(target_os = "macos") { PathBuf::from(&home).join("Library/Application Support/minecraft") }
-        else if cfg!(target_os = "windows") { PathBuf::from(std::env::var("APPDATA").unwrap_or_default()).join(".minecraft") }
-        else { PathBuf::from(&home).join(".minecraft") };
-    let dir = std::env::var("BASALT_ASSETS").map(PathBuf::from).unwrap_or_else(|_| mc.join("assets"));
-    let id = std::env::var("BASALT_ASSET_INDEX").ok().or_else(|| {
-        let v: Value = serde_json::from_slice(&std::fs::read(mc.join("versions/26.2/26.2.json")).ok()?).ok()?;
-        v["assetIndex"]["id"].as_str().map(String::from)
-    });
-    (dir, id)
-}
+/// Default launcher asset directory and index id for 26.2 (per-OS, see basalt-paths; override with flags/env).
+pub fn default_assets() -> (PathBuf, Option<String>) { basalt_paths::default_assets() }
 
 impl Sounds {
     /// Load the sound index. `audio_out`: open an output device (false in tests/headless).

@@ -6,14 +6,14 @@ No server join at launch: the mesh oracle works from the title screen; the contr
 
 usage: tools/oracle-mod/launch.py            # launch (blocks until the client exits)
        tools/oracle-mod/launch.py --classpath  # print the vanilla compile classpath and exit
-env:   MC_DIR (default ~/Library/Application Support/minecraft), MC_VERSION (26.2), JAVA,
+env:   MC_DIR (default per-OS: macOS ~/Library/Application Support/minecraft, Windows %APPDATA%\\.minecraft, Linux ~/.minecraft), MC_VERSION (26.2), JAVA,
        ORACLE_DIR (default vanilla/oracle), ORACLE_CTL_PORT (scripted-input control channel, default 25789)
 """
 import json, os, platform, subprocess, sys, zipfile
 from pathlib import Path
 
 repo = Path(__file__).resolve().parent.parent.parent
-mc = Path(os.environ.get("MC_DIR", Path.home() / "Library/Application Support/minecraft"))
+mc = Path(os.environ.get("MC_DIR") or {"darwin": Path.home() / "Library/Application Support/minecraft", "win32": Path(os.environ.get("APPDATA", Path.home())) / ".minecraft"}.get(sys.platform, Path.home() / ".minecraft"))
 ver = os.environ.get("MC_VERSION", "26.2")
 oracle = Path(os.environ.get("ORACLE_DIR", repo / "vanilla" / "oracle")).resolve()
 vj = json.loads((mc / "versions" / ver / f"{ver}.json").read_text())

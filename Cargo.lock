@@ -192,6 +192,7 @@ dependencies = [
  "basalt-data",
  "basalt-game",
  "basalt-nbt",
+ "basalt-paths",
  "basalt-protocol",
  "basalt-world",
  "env_logger",
@@ -210,6 +211,7 @@ dependencies = [
  "basalt-data",
  "basalt-game",
  "basalt-nbt",
+ "basalt-paths",
  "basalt-protocol",
  "basalt-world",
  "bytemuck",
@@ -253,6 +255,13 @@ name = "basalt-nbt"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "serde_json",
+]
+
+[[package]]
+name = "basalt-paths"
+version = "0.1.0"
+dependencies = [
  "serde_json",
 ]
 
@@ -3280,6 +3289,14 @@ name = "xml-rs"
 version = "0.8.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
+
+[[package]]
+name = "xtask"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+]
 
 [[package]]
 name = "zerocopy"

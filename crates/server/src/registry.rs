@@ -53,7 +53,7 @@ impl Registries {
     /// `data_dir` is the repo's ./data (contains data/minecraft/...).
     pub fn load(data_dir: &Path) -> Result<Registries> {
         let root: PathBuf = data_dir.join("data/minecraft");
-        anyhow::ensure!(root.is_dir(), "{} not found — run tools/extract-data.sh", root.display());
+        anyhow::ensure!(root.is_dir(), "{} not found — run `cargo xtask extract-data`", root.display());
         let mut synced = Vec::new();
         let mut ids: HashMap<&str, HashMap<String, i32>> = HashMap::new();
         for reg in SYNCED {
