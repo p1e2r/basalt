@@ -240,6 +240,28 @@ real server/client over the wire.
 - Entity rotation bytes: yaw is an unsigned-wrapping byte (256 = 360°, interpolate via shortest angle);
   **pitch is a signed byte** (-128..127) clamped to ±90° — read unsigned, a mob looking slightly up
   arrives as ~337° and its head lerps through a backflip (client: net::pitch_angle).
+- Command parsing (measured by `basalt-check --fuzz commands`): Brigadier semantics. A literal that matches the next
+  word wins, otherwise every argument child is tried; the candidate that consumed all input (then the one without
+  errors) wins. Leftover input after a complete parse → `command.unknown.argument`; an incomplete command (node not
+  executable) or an unknown first word → `command.unknown.command`; exactly one argument error → that error.
+  Entity names read like unquoted strings (`~` is not a name character, so `tp ~ ~ ~ 90` is "unknown argument", while
+  `tp 1 2` is two player names → `argument.entity.notfound.entity`). Block positions need integers when absolute
+  (`parsing.int.invalid(0.5)`), vec3 centres absolute integer x/z (+0.5). `@s[limit=1]` → `argument.entity.options.inapplicable`.
+  Time arguments: float + optional d/s/t (`368t`, `1.5` rounds to 2, `1x` → invalid unit, then `time set` tries the
+  marker branch → `commands.time.no_time_marker_found`). `/gamemode` to the current mode, `/time set noon`
+  (`commands.time.set.time_marker`), `/save-all` (`commands.save.saving` then `.success`), `/kill` (works on creative),
+  `/help <unknown>` (`commands.help.failed`), `/setblock` of the identical block (`commands.setblock.failed`),
+  `/fill` counts changed blocks (`commands.fill.failed` when 0), `/effect clear` with nothing to clear, `/enchant`
+  with level > max (`commands.enchant.failed.level(level, max)`) all behave as in crates/server/src/game/cmd.rs.
+- Digging (measured with fresh dig state, `basalt-check --fuzz dig` / `DIG scans` in the replay format): the server
+  accepts a stop when `progress_per_tick * (ticks_since_start + 1) >= 0.7` (stone by hand 104, planks 41, wool 16),
+  where progress = speed / hardness / 30 (100 without the right tool), speed /5 in air and /5 with the head in water.
+  The client's on_ground flag is ignored: a bot standing on the floor but claiming airborne digs at the ground rate,
+  one really above the floor digs 5x slower. A rejected stop is NOT forgotten (delayed destroy): the server keeps
+  tracking from the start tick and breaks whatever block is at that position once progress reaches 1.0 — also a
+  block placed there later; the tracking ends when the cell is air at a tick. (That is why probes next to the
+  threshold used to alternate accept/reject, why early stops on fast blocks still "break" ~8 ticks later, and why
+  vanilla looked 4-5 ticks faster than 0.7*T for blocks under ~23 ticks.) Infested blocks are not tool-gated (/30).
 - `commands` (clientbound): varint node count; node = u8 flags (bits 0-1 type: 0 root/1 literal/2
   argument; 0x04 executable; 0x08 redirect; 0x10 custom suggestions; 0x20 restricted), varint child
   count + indices, [varint redirect], [string name (literal/argument)], [argument: varint parser id

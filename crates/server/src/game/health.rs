@@ -50,7 +50,8 @@ impl Game {
         let dt = self.damage_type(kind);
         let Some(p) = self.players.get(&eid) else { return false };
         if p.dead || amount <= 0.0 { return false; }
-        if matches!(p.gamemode, 1 | 3) && kind != "out_of_world" { return false; }
+        // creative / spectator players are invulnerable except to the void and /kill
+        if matches!(p.gamemode, 1 | 3) && !matches!(kind, "out_of_world" | "generic_kill") { return false; }
         if p.hurt_cooldown > 0 && !bypass && kind != "starve" { return false; }
         let mut amount = amount;
         if !self.bypasses_armor(kind) {
@@ -86,10 +87,12 @@ impl Game {
             "cactus" => format!("{name} was pricked to death"), "sweet_berry_bush" => format!("{name} was poked to death by a sweet berry bush"), "generic_kill" => format!("{name} was killed"), "freeze" => format!("{name} froze to death"),
             _ => format!("{name} died"),
         };
-        let mut w = Writer::with_id(cb::PLAYER_COMBAT_KILL); w.varint(eid).nbt(&text::plain(&msg)); p.send(w);
+        // `/kill` sends vanilla's translatable death message (the other causes keep their English text for now)
+        let msg_tag = if kind == "generic_kill" { text::translate("death.attack.genericKill", vec![text::plain(&name)]) } else { text::plain(&msg) };
+        let mut w = Writer::with_id(cb::PLAYER_COMBAT_KILL); w.varint(eid).nbt(&msg_tag); p.send(w);
         // death animation for everyone else
         self.broadcast(Some(eid), || { let mut w = Writer::with_id(cb::ENTITY_EVENT); w.i32(eid).u8(3); w });
-        self.system_chat(text::plain(&msg));
+        self.system_chat(msg_tag);
         self.force_close(eid); // an open container / crafting window closes on death
         // drop the whole inventory (keepInventory off)
         let stacks: Vec<Stack> = { let p = self.players.get_mut(&eid).unwrap(); let v = p.inv.iter().skip(1).copied().filter(|s| s.count > 0).chain(std::iter::once(p.cursor).filter(|s| s.count > 0)).collect(); p.inv = [Stack::default(); 46]; p.cursor = Stack::default(); v };

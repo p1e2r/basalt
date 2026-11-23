@@ -238,7 +238,7 @@ pub fn requires_correct_tool(block_name: &str) -> bool {
         }
         "door" | "trapdoor" => n.contains("iron") || n.contains("copper"),
         "button" | "pressure_plate" => n.contains("stone") || n.contains("blackstone"),
-        "weighted_pressure_plate" | "drop_experience" | "redstone_ore" | "infested" | "infested_rotated_pillar"
+        "weighted_pressure_plate" | "drop_experience" | "redstone_ore"
         | "glazed_terracotta" | "iron_bars" | "chain" | "lantern" | "anvil" | "amethyst" | "budding_amethyst" | "coral"
         | "weathering_copper_full" | "weathering_copper_bar" | "weathering_copper_bulb" | "weathering_copper_chain"
         | "weathering_copper_chest" | "weathering_copper_door" | "weathering_copper_golem_statue"
@@ -266,6 +266,9 @@ pub fn requires_correct_tool(block_name: &str) -> bool {
         ),
     }
 }
+
+// Infested (silverfish) blocks are not tool-gated: measured on vanilla 26.2, infested_cracked_stone_bricks by hand is
+// accepted from 16 ticks = 0.7 * (0.75 * 30), i.e. the /30 divisor, not /100 (crates/check --fuzz dig).
 
 /// Names that are never tool-gated regardless of kind (wood, plants, soft blocks).
 fn is_wood_or_soft(n: &str) -> bool {

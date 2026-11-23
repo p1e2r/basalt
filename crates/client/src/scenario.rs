@@ -77,7 +77,7 @@ fn join(g: &mut Game) -> Result<()> {
 fn cmd(g: &mut Game, c: &str) { g.send_chat(&format!("/{c}")); }
 /// Teleport and wait until the client is there with chunks meshed.
 fn tp(g: &mut Game, p: [f64; 3], yaw: f32, pitch: f32) -> Result<()> {
-    cmd(g, &format!("tp @s {} {} {}", p[0], p[1], p[2]));
+    cmd(g, &format!("tp @s {:.4} {:.4} {:.4}", p[0], p[1], p[2]));
     if !wait_until(g, 8.0, |g| (g.player.pos[0] - p[0]).abs() < 0.01 && (g.player.pos[2] - p[2]).abs() < 0.01)? { bail!("teleport to {p:?} not applied"); }
     g.player.yaw = yaw; g.player.pitch = pitch;
     wait_until(g, 10.0, |g| g.world.chunks.contains_key(&((p[0].floor() as i32) >> 4, (p[2].floor() as i32) >> 4)) && g.dirty.is_empty() && g.in_flight.is_empty())?;
@@ -291,6 +291,7 @@ fn dig(c: &Ctx) -> Result<Outcome> {
         step(&mut g)?;
         g.last_dig = None;
         let old_items: std::collections::HashSet<i32> = g.entities.keys().copied().collect();
+        let had_cobble = count_item(&g.inventory, item_id("cobblestone"));
         g.mouse_button(0, true);
         let mut crack_px = 0; let mut stages = Vec::new(); let mut swung = false;
         let t0 = Instant::now();
@@ -315,7 +316,8 @@ fn dig(c: &Ctx) -> Result<Outcome> {
         if g.world.get(b[0], b[1], b[2]) != 0 { bail!("server rejected the break with {tool:?}"); }
         // by hand stone drops nothing (vanilla: needs a pickaxe); with the pickaxe it drops cobblestone
         let cobble = item_id("cobblestone");
-        let dropped = wait_until(&mut g, 1.5, |g| g.entities.iter().any(|(id, e)| !old_items.contains(id) && e.item.as_ref().map(|i| i.item == cobble).unwrap_or(false)))?;
+        // a new cobblestone item entity, or cobblestone already picked up
+        let dropped = wait_until(&mut g, 1.5, |g| g.entities.iter().any(|(id, e)| !old_items.contains(id) && e.item.as_ref().map(|i| i.item == cobble).unwrap_or(false)) || count_item(&g.inventory, cobble) > had_cobble)?;
         if tool.is_none() && dropped { bail!("stone broken by hand dropped cobblestone"); }
         if tool.is_some() && !dropped { bail!("stone broken with a pickaxe dropped nothing"); }
         details.push(format!("{}: {ticks}t (vanilla {expect}), stages {:?}, crack {crack_px}px, drop {dropped}", tool.unwrap_or("hand"), stages.len()));
@@ -368,7 +370,7 @@ fn dig_others(c: &Ctx) -> Result<Outcome> {
     let (an, bn) = (a.name.clone(), b.name.clone());
     // drop onto the terrain in creative (no fall damage), then set up the block where A landed
     for n in [&an, &bn] { cmd(&mut a, &format!("gamemode creative {n}")); }
-    cmd(&mut a, &format!("tp {an} {} {} {}", base[0] as f64 + 0.5, base[1], base[2] as f64 + 0.5));
+    cmd(&mut a, &format!("tp {an} {:.4} {:.4} {:.4}", base[0] as f64 + 0.5, base[1], base[2] as f64 + 0.5));
     let t0 = Instant::now();
     let mut ground = 0;
     while t0.elapsed().as_secs_f32() < 20.0 && ground < 20 {
@@ -379,7 +381,7 @@ fn dig_others(c: &Ctx) -> Result<Outcome> {
     let p = [a.player.pos[0].floor() as i32, a.player.pos[1].floor() as i32, a.player.pos[2].floor() as i32];
     cmd(&mut a, &format!("fill {} {} {} {} {} {} air", p[0] - 1, p[1], p[2] + 1, p[0] + 3, p[1] + 2, p[2] + 3));
     cmd(&mut a, &format!("setblock {} {} {} stone", p[0], p[1], p[2] + 2));
-    let ay = a.player.pos[1]; cmd(&mut a, &format!("tp {bn} {} {} {}", p[0] as f64 + 2.5, ay, p[2] as f64 + 0.5));
+    let ay = a.player.pos[1]; cmd(&mut a, &format!("tp {bn} {:.4} {:.4} {:.4}", p[0] as f64 + 2.5, ay, p[2] as f64 + 0.5));
     cmd(&mut a, "give @s wooden_pickaxe");
     cmd(&mut a, &format!("gamemode survival {an}"));
     let t0 = Instant::now();
@@ -415,7 +417,7 @@ fn models(c: &Ctx) -> Result<Outcome> {
     let spots: Vec<[f64; 3]> = (0..mobs.len()).map(|i| [o[0] - 7.0 + (i % 4) as f64 * 4.5, o[1], o[2] - 7.0 - (i / 4) as f64 * 5.0]).collect();
     cmd(&mut g, "kill @e[type=!player]");
     wait(&mut g, 0.5)?;
-    for (m, p) in mobs.iter().zip(&spots) { cmd(&mut g, &format!("summon {m} {} {} {} NoAI", p[0], p[1], p[2])); }
+    for (m, p) in mobs.iter().zip(&spots) { cmd(&mut g, &format!("summon {m} {} {} {} {{NoAI:1b}}", p[0], p[1], p[2])); }
     let have = |g: &Game, m: &str| g.entities.values().any(|e| crate::entity::type_name(e.kind) == m);
     if !wait_until(&mut g, 4.0, |g| mobs.iter().all(|m| have(g, m)))? {
         let missing: Vec<&&str> = mobs.iter().filter(|m| !have(&g, m)).collect();
@@ -424,7 +426,7 @@ fn models(c: &Ctx) -> Result<Outcome> {
     // a second player in view
     let mut bot = c.game("bot")?;
     join(&mut bot)?;
-    cmd(&mut bot, &format!("tp @s {} {} {}", o[0] + 2.5, o[1], o[2] - 3.0));
+    cmd(&mut bot, &format!("tp @s {:.4} {:.4} {:.4}", o[0] + 2.5, o[1], o[2] - 3.0));
     for _ in 0..150 { step(&mut bot)?; step(&mut g)?; }
     wait(&mut g, 0.5)?;
     let with = capture(&mut g)?; save(&g, &with, "models");
@@ -488,7 +490,7 @@ fn interp(c: &Ctx) -> Result<Outcome> {
     join(&mut g)?; join(&mut bot)?;
     let o = [600.5, -60.0, 0.5];
     tp(&mut g, o, 0.0, 10.0)?;
-    cmd(&mut bot, &format!("tp @s {} {} {}", o[0] - 3.0, o[1], o[2] + 4.0));
+    cmd(&mut bot, &format!("tp @s {:.4} {:.4} {:.4}", o[0] - 3.0, o[1], o[2] + 4.0));
     for _ in 0..200 { step(&mut bot)?; step(&mut g)?; }
     bot.player.yaw = -90.0; // walk towards +X
     bot.keys.insert(KeyCode::KeyW);
@@ -676,7 +678,7 @@ fn sounds(c: &Ctx) -> Result<Outcome> {
     let n = g.sounds.log.len();
     let (near, far) = (g.sounds.log[n - 2].gain, g.sounds.log[n - 1].gain);
     // server-sent sound packet: hurt a mob (Basalt M5 sends sound packets for mob hurt)
-    cmd(&mut g, "summon cow 700.5 -60 3 NoAI");
+    cmd(&mut g, "summon cow 700.5 -60 3 {NoAI:1b}");
     let have_cow = wait_until(&mut g, 3.0, |g| g.entities.values().any(|e| crate::entity::type_name(e.kind) == "cow"))?;
     let mut server_sound = None;
     if have_cow {

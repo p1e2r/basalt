@@ -72,4 +72,7 @@ pub static ALL: &[Spec] = &[
     spec!("Env", "env_magma", env::magma, Flat, Both, true, "magma hurts unless sneaking"),
     spec!("Env", "env_void", env::void, Flat, Both, true, "below the world: 4 damage per 10 ticks until death"),
     spec!("Items", "items_tracking", m4::item_tracking, Flat, Both, true, "item add_entity carries velocity; update cadence; position matches server"),
+    // appended last: a scenario's arena is placed by its index, so inserting earlier would move the others
+    spec!("M2", "m2_command_forms", m1::command_forms, Flat, Both, false, "Brigadier parsing: tp/time/gamemode/enchant/help/effect/setblock forms accepted or rejected with vanilla's keys; /kill kills creative players"),
+    spec!("M4", "m4_dig_accept", m4::dig_accept, Flat, Both, false, "stop accepted at progress*(ticks+1) >= 0.7 (stone/hand 104, wool/hand 16), on_ground flag ignored, 5x slower above the floor"),
 ];

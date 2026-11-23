@@ -132,9 +132,10 @@ impl GameData {
         (speed.unwrap_or(tool.default_mining_speed), correct.unwrap_or(false))
     }
 
-    /// Ticks to break `state` with `held` (None = hand). Efficiency/haste are ignored. Pass
-    /// `in_water = false` for players with Aqua Affinity. None = unbreakable, 0 = instant.
-    pub fn dig_ticks(&self, state: u32, held: Option<i32>, on_ground: bool, in_water: bool) -> Option<u32> {
+    /// Destroy progress per tick (vanilla: speed / hardness / 30, or / 100 without the right tool), as f32 like
+    /// vanilla; >= 1.0 means instant. None = unbreakable. `on_ground`: the player's server-side idea of standing
+    /// on the floor (the client's flag is not trusted); `in_water`: head in water without Aqua Affinity.
+    pub fn dig_progress(&self, state: u32, held: Option<i32>, on_ground: bool, in_water: bool) -> Option<f32> {
         if !BlockState::is_valid(state) {
             return None;
         }
@@ -144,7 +145,7 @@ impl GameData {
             return None;
         }
         if h == 0.0 {
-            return Some(0);
+            return Some(1.0);
         }
         let (mut speed, _) = self.tool_speed(name, held);
         if !on_ground {
@@ -154,13 +155,33 @@ impl GameData {
             speed /= 5.0;
         }
         let div = if self.can_harvest(state, held) { 30.0 } else { 100.0 };
-        // ticks = ceil(1 / (speed / hardness / div)); computed in f64 with a small epsilon so
-        // exact values like 150.0 do not round up from float error.
-        let t = h as f64 * div / speed as f64;
-        if t <= 1.0 {
+        Some(speed / h / div)
+    }
+
+    /// Whether the server accepts a stop `ticks` server ticks after the start, for progress-per-tick `d`
+    /// (from [`GameData::dig_progress`]): `d * (ticks + 1) >= 0.7`. Measured on vanilla 26.2 with fresh dig state
+    /// (crates/check `--fuzz dig` scans): stone by hand (150 ticks) first accepts at 104, planks by hand (60) at 41,
+    /// wool by hand (24) at 16. A rejected stop is not forgotten: the block still breaks when the progress since the
+    /// start reaches 1.0 (`d * (ticks + 1) >= 1`), which is how vanilla finishes blocks whose stop came early.
+    pub fn dig_accepts(d: f32, ticks: u64) -> bool {
+        d * ((ticks + 1) as f32) >= 0.7
+    }
+
+    /// Smallest `ticks` for which [`GameData::dig_accepts`] holds.
+    pub fn dig_accept_ticks(d: f32) -> u32 {
+        (0..).find(|&n| Self::dig_accepts(d, n as u64)).unwrap_or(u32::MAX)
+    }
+
+    /// Ticks to break `state` with `held` (None = hand) as the client counts them: ceil(1 / progress) (the client
+    /// sends the stop when its own progress reaches 1.0). Efficiency/haste are ignored. Pass
+    /// `in_water = false` for players with Aqua Affinity. None = unbreakable, 0 = instant.
+    pub fn dig_ticks(&self, state: u32, held: Option<i32>, on_ground: bool, in_water: bool) -> Option<u32> {
+        let d = self.dig_progress(state, held, on_ground, in_water)? as f64;
+        if d >= 1.0 {
             return Some(0);
         }
-        Some((t - 1e-3).ceil().min(u32::MAX as f64) as u32)
+        // computed in f64 with a small epsilon so exact values like 150.0 do not round up from float error
+        Some(((1.0 / d) - 1e-3).ceil().min(u32::MAX as f64) as u32)
     }
 
     /// True if breaking `state` with `held` yields drops (block doesn't need a tool, or the

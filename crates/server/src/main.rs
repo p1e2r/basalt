@@ -2,6 +2,7 @@
 //!
 //! Usage: basalt-server [--port 25565] [--world DIR | --memory] [--seed N] [--view N]
 //!                      [--gamemode survival|creative] [--compression N] [--data ./data] [--flat] [--no-spawning] [--debug]
+mod cmdparse;
 mod commands;
 mod conn;
 mod game;
