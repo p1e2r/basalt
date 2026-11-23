@@ -220,7 +220,9 @@ pub fn mesh_block(a: &Assets, biomes: &[Biome], s: &Snapshot, x: i32, y: i32, z:
             let (t1, t2) = match axis { 0 => (1, 2), 1 => (0, 2), _ => (0, 1) };
             let mut corner = [[0f32; 3]; 4]; // [ao factor, sky, block] for (-,-), (+,-), (-,+), (+,+)
             let plane = q.pos[0][axis];
-            let flush = if d[axis] > 0 { plane >= 0.9999 } else { plane <= 0.0001 };
+            // diagonal quads (tendrils, cross planes) are never on the block boundary
+            let planar = q.pos.iter().all(|p| (p[axis] - plane).abs() < 1e-4);
+            let flush = planar && if d[axis] > 0 { plane >= 0.9999 } else { plane <= 0.0001 };
             if smooth {
                 // the centre cell is always the one in front of the face; the side and diagonal cells sit in
                 // that layer for a flush face, in the block's own layer for an inset one (measured with

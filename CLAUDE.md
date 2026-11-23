@@ -58,11 +58,13 @@ Read NOTES.md for verified packet formats.
   runs the installed vanilla 26.2 client and dumps its own outputs (schema: tools/oracle-mod/SCHEMA.md;
   dumps stay in vanilla/oracle, gitignored). `basalt-check client-mesh [--seed S --n N]` generates
   scenes, runs the oracle + `basalt-client --mesh-dump`, diffs quads by geometry. Seed 1 / n 20000:
-  84,726 scenes, 1,231,508 vanilla quads; mismatching quads 1,402,649 -> 623,922 after fixing UV
-  inset, smooth light/AO (partial faces), per-quad render layer, emission, tints, shape culling,
-  uvlock. Remaining (prioritised): fluid renderer (~370k: double-sided faces, flow sprite, heights,
-  inset), inset-face smooth light (~146k), weighted model variants (~12k), sculk sensor /
-  propagule / hanging-sign geometry (~80k), uv on vein/lichen/fence (~10k).
+  84,726 scenes, 1,231,508 vanilla quads; mismatching quads 1,402,649 -> 623,922 -> 32,849 (2.7 %) after the
+  fluid renderer (heights, flow uv, overlay, culling, light), inset-face smooth light, model offsets,
+  position-seeded weighted variants and the element rotation sign fixes (rules in NOTES.md). Remaining, each
+  class < 1 % of quads: light 10.6k (sculk sensor tendrils, dried ghast, chorus flower, vault), ambient
+  occlusion on inset faces 7.9k (~10 % of vertices: a diagonal cell sometimes counts differently), uv 6.8k
+  (sculk vein, resin clump, glow lichen, fences/uvlock with x rotation), culling ~3.3k (sculk sensors,
+  trapdoors/doors, dried ghast), shade 0.9k, lever/tripwire hook/hanging sign geometry 0.5k, bamboo variants.
 
 ### Task list
 - [x] M1 client builds, joins vanilla, renders chunks
