@@ -174,6 +174,13 @@ impl Game {
             }
             _ => {}
         }
+        // permission: the command's level (commands.json) against the player's op level (admin.rs);
+        // vanilla hides commands above the player's level, so they come back as unknown
+        let level = self.op_level(eid);
+        if level < crate::commands::required_level(&self.sh.cfg.data_dir, first) {
+            self.fail(eid, err("command.unknown.command", &[]));
+            return;
+        }
         let Some(tree) = cmdparse::tree(&self.sh.cfg.data_dir) else {
             self.fail(
                 eid,
@@ -740,6 +747,22 @@ impl Game {
             path if path.starts_with("title ") => self.cmd_title(eid, p)?,
             path if path.starts_with("damage ") => self.cmd_damage(eid, p)?,
             path if path.starts_with("playsound ") => self.cmd_playsound(eid, p)?,
+            path if matches!(
+                path.split(' ').next(),
+                Some(
+                    "op" | "deop"
+                        | "whitelist"
+                        | "ban"
+                        | "ban-ip"
+                        | "pardon"
+                        | "pardon-ip"
+                        | "banlist"
+                        | "kick"
+                )
+            ) =>
+            {
+                self.cmd_admin(eid, p)?
+            }
             path if path.starts_with("gamerule ") => {
                 // only the rules Basalt acts on; others are reported as unsupported
                 let rule = p.path[1].trim_start_matches("minecraft:").to_string();
@@ -1706,6 +1729,302 @@ impl Game {
             vec![s(format!("minecraft:{sound}"))],
             &ps,
         );
+        Ok(())
+    }
+
+    /// The player's operator level (admin.rs: everyone is 4 while no ops.json exists).
+    pub(super) fn op_level(&self, eid: i32) -> u8 {
+        let Some(p) = self.players.get(&eid) else {
+            return 0;
+        };
+        self.sh
+            .admin
+            .lock()
+            .unwrap()
+            .level(&p.uuid.to_string(), &p.name)
+    }
+
+    /// Disconnect a player with a reason (play-state disconnect; the connection closes and the
+    /// player leaves through the usual path).
+    pub(super) fn kick(&mut self, eid: i32, reason: Tag) {
+        if let Some(p) = self.players.get(&eid) {
+            let mut w = Writer::with_id(cb::DISCONNECT);
+            w.nbt(&reason);
+            p.send(w);
+        }
+    }
+
+    /// Tell a player their op level (entity event 24 + level) so the client unlocks op features.
+    pub(super) fn send_op_level(&self, eid: i32) {
+        let lvl = self.op_level(eid);
+        if let Some(p) = self.players.get(&eid) {
+            let mut w = Writer::with_id(cb::ENTITY_EVENT);
+            w.i32(eid).u8(24 + lvl.min(4));
+            p.send(w);
+        }
+    }
+
+    /// op, deop, whitelist, ban, ban-ip, pardon, pardon-ip, banlist, kick (vanilla reply keys).
+    fn cmd_admin(&mut self, eid: i32, p: &Parsed) -> R<()> {
+        let cmd = p.path[0].clone();
+        let reason = if p.has("reason") {
+            p.arg("reason").to_string()
+        } else {
+            "Banned by an operator.".into()
+        };
+        // targets as (uuid, name): online players, or offline names via the offline uuid
+        let targets = |g: &mut Game, sel: &str| -> R<Vec<(String, String, Option<i32>)>> {
+            match g.resolve(eid, sel, false) {
+                Ok(t) => Ok(t
+                    .into_iter()
+                    .filter_map(|t| {
+                        if let Target::Player(e) = t {
+                            g.players
+                                .get(&e)
+                                .map(|p| (p.uuid.to_string(), p.name.clone(), Some(e)))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()),
+                Err(_) if !sel.starts_with('@') => Ok(vec![(
+                    crate::conn::offline_uuid(sel).to_string(),
+                    sel.to_string(),
+                    None,
+                )]),
+                Err(e) => Err(e),
+            }
+        };
+        match cmd.as_str() {
+            "op" | "deop" => {
+                let ts = targets(self, p.arg("targets"))?;
+                let mut changed = 0;
+                for (u, n, e) in &ts {
+                    let ok = {
+                        let mut a = self.sh.admin.lock().unwrap();
+                        let r = if cmd == "op" { a.op(u, n) } else { a.deop(u) };
+                        a.save();
+                        r
+                    };
+                    if ok {
+                        changed += 1;
+                        self.ok(eid, &format!("commands.{cmd}.success"), vec![s(n)]);
+                        if let Some(e) = e {
+                            self.send_op_level(*e);
+                        }
+                    }
+                }
+                if changed == 0 {
+                    return Err(err(&format!("commands.{cmd}.failed"), &[]));
+                }
+            }
+            "whitelist" => {
+                let sub = p.path.get(1).cloned().unwrap_or_default();
+                match sub.as_str() {
+                    "on" | "off" => {
+                        let on = sub == "on";
+                        let was = {
+                            let mut a = self.sh.admin.lock().unwrap();
+                            let w = a.whitelist_on;
+                            a.whitelist_on = on;
+                            w
+                        };
+                        if was == on {
+                            return Err(err(
+                                if on {
+                                    "commands.whitelist.alreadyOn"
+                                } else {
+                                    "commands.whitelist.alreadyOff"
+                                },
+                                &[],
+                            ));
+                        }
+                        self.ok(
+                            eid,
+                            if on {
+                                "commands.whitelist.enabled"
+                            } else {
+                                "commands.whitelist.disabled"
+                            },
+                            vec![],
+                        );
+                    }
+                    "list" => {
+                        let names: Vec<String> = self
+                            .sh
+                            .admin
+                            .lock()
+                            .unwrap()
+                            .whitelist
+                            .iter()
+                            .map(|w| w.1.clone())
+                            .collect();
+                        if names.is_empty() {
+                            self.ok(eid, "commands.whitelist.none", vec![]);
+                        } else {
+                            self.ok(
+                                eid,
+                                "commands.whitelist.list",
+                                vec![s(names.len()), s(names.join(", "))],
+                            );
+                        }
+                    }
+                    "reload" => self.ok(eid, "commands.whitelist.reloaded", vec![]),
+                    "add" | "remove" => {
+                        let ts = targets(self, p.arg("targets"))?;
+                        let mut changed = 0;
+                        for (u, n, _) in &ts {
+                            let ok = {
+                                let mut a = self.sh.admin.lock().unwrap();
+                                let has = a.whitelist.iter().any(|w| &w.0 == u);
+                                let r = if sub == "add" {
+                                    if !has {
+                                        a.whitelist.push((u.clone(), n.clone()));
+                                    }
+                                    !has
+                                } else {
+                                    a.whitelist.retain(|w| &w.0 != u);
+                                    has
+                                };
+                                a.save();
+                                r
+                            };
+                            if ok {
+                                changed += 1;
+                                self.ok(
+                                    eid,
+                                    &format!("commands.whitelist.{sub}.success"),
+                                    vec![s(n)],
+                                );
+                            }
+                        }
+                        if changed == 0 {
+                            return Err(err(&format!("commands.whitelist.{sub}.failed"), &[]));
+                        }
+                    }
+                    _ => return Err(err("command.unknown.argument", &[])),
+                }
+            }
+            "ban" | "pardon" => {
+                let ts = targets(self, p.arg("targets"))?;
+                let mut changed = 0;
+                for (u, n, e) in &ts {
+                    let ok = {
+                        let mut a = self.sh.admin.lock().unwrap();
+                        let has = a.banned.iter().any(|b| &b.0 == u);
+                        let r = if cmd == "ban" {
+                            if !has {
+                                a.banned.push((u.clone(), n.clone(), reason.clone()));
+                            }
+                            !has
+                        } else {
+                            a.banned.retain(|b| &b.0 != u);
+                            has
+                        };
+                        a.save();
+                        r
+                    };
+                    if !ok {
+                        continue;
+                    }
+                    changed += 1;
+                    if cmd == "ban" {
+                        self.ok(eid, "commands.ban.success", vec![s(n), s(&reason)]);
+                        if let Some(e) = e {
+                            self.kick(
+                                *e,
+                                text::translate(
+                                    "multiplayer.disconnect.banned.reason",
+                                    vec![text::plain(&reason)],
+                                ),
+                            );
+                        }
+                    } else {
+                        self.ok(eid, "commands.pardon.success", vec![s(n)]);
+                    }
+                }
+                if changed == 0 {
+                    return Err(err(&format!("commands.{cmd}.failed"), &[]));
+                }
+            }
+            "ban-ip" | "pardon-ip" => {
+                let ip = p.arg("target").to_string();
+                if !ip
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || c == '.' || c == ':')
+                {
+                    return Err(err(
+                        if cmd == "ban-ip" {
+                            "commands.banip.invalid"
+                        } else {
+                            "commands.pardonip.invalid"
+                        },
+                        &[],
+                    ));
+                }
+                let ok = {
+                    let mut a = self.sh.admin.lock().unwrap();
+                    let has = a.banned_ips.iter().any(|b| b.0 == ip);
+                    let r = if cmd == "ban-ip" {
+                        if !has {
+                            a.banned_ips.push((ip.clone(), reason.clone()));
+                        }
+                        !has
+                    } else {
+                        a.banned_ips.retain(|b| b.0 != ip);
+                        has
+                    };
+                    a.save();
+                    r
+                };
+                let k = if cmd == "ban-ip" { "banip" } else { "pardonip" };
+                if !ok {
+                    return Err(err(&format!("commands.{k}.failed"), &[]));
+                }
+                if cmd == "ban-ip" {
+                    self.ok(eid, "commands.banip.success", vec![s(&ip), s(&reason)]);
+                } else {
+                    self.ok(eid, "commands.pardonip.success", vec![s(&ip)]);
+                }
+            }
+            "banlist" => {
+                let lines: Vec<(String, String)> = {
+                    let a = self.sh.admin.lock().unwrap();
+                    a.banned
+                        .iter()
+                        .map(|b| (b.1.clone(), b.2.clone()))
+                        .chain(a.banned_ips.iter().map(|b| (b.0.clone(), b.1.clone())))
+                        .collect()
+                };
+                if lines.is_empty() {
+                    self.ok(eid, "commands.banlist.none", vec![]);
+                } else {
+                    self.ok(eid, "commands.banlist.list", vec![s(lines.len())]);
+                    for (who, why) in lines {
+                        self.ok(
+                            eid,
+                            "commands.banlist.entry",
+                            vec![s(who), s("Server"), s(why)],
+                        );
+                    }
+                }
+            }
+            "kick" => {
+                let why = if p.has("reason") {
+                    p.arg("reason").to_string()
+                } else {
+                    "Kicked by an operator".into()
+                };
+                let ts = targets(self, p.arg("targets"))?;
+                for (_, n, e) in &ts {
+                    if let Some(e) = e {
+                        self.kick(*e, text::plain(&why));
+                        self.ok(eid, "commands.kick.success", vec![s(n), s(&why)]);
+                    }
+                }
+            }
+            _ => {}
+        }
         Ok(())
     }
 

@@ -399,3 +399,52 @@ pub fn command_effects(ctx: &mut Ctx) -> Result<()> {
     ctx.note(log.join(" | "));
     Ok(())
 }
+
+/// Admin files (Basalt only: changes ops/bans): without ops.json everyone is an operator; /op
+/// creates ops.json and from then on a non-op is refused op commands; ops survive a restart;
+/// /ban kicks and refuses the player, /pardon lets them back in; /whitelist on refuses others.
+pub fn admin(ctx: &mut Ctx) -> Result<()> {
+    let addr = ctx.addr();
+    let a = ctx.bot()?;
+    let key = |bot: &Bot, c: &str| -> Result<String> { Ok(bot.cmd_reply(c)?.first().map(|l| l.key.clone().unwrap_or_default()).unwrap_or_default()) };
+    let lvl4 = a.wait_until(Duration::from_secs(3), |s| s.op_level == 4);
+    let got = a.st().op_level;
+    ctx.check(lvl4, format!("without ops.json the player should be level 4 (got {got})"));
+    let k = key(&a, &format!("op {}", a.name))?;
+    ctx.check(k == "commands.op.success", format!("op: {k}"));
+    let b = Bot::connect(&addr, "AdminB")?;
+    b.wait_ticks(10);
+    let k = key(&b, "time set day")?;
+    ctx.check(k == "command.unknown.command", format!("non-op got {k:?} for /time"));
+    let bl = b.st().op_level;
+    ctx.check(bl == 0, format!("non-op level {bl}"));
+    let k = key(&a, "op AdminB")?;
+    ctx.check(k == "commands.op.success", format!("op AdminB: {k}"));
+    ctx.check(b.wait_until(Duration::from_secs(2), |s| s.op_level == 4), "op level not updated on /op");
+    let k = key(&a, "deop AdminB")?;
+    ctx.check(k == "commands.deop.success", format!("deop: {k}"));
+    // ban kicks and refuses
+    let k = key(&a, "ban AdminB griefing")?;
+    ctx.check(k == "commands.ban.success", format!("ban: {k}"));
+    ctx.check(b.wait_until(Duration::from_secs(3), |s| s.disconnected.is_some()), "banned player not kicked");
+    ctx.check(Bot::connect(&addr, "AdminB").is_err(), "banned player could rejoin");
+    let k = key(&a, "pardon AdminB")?;
+    ctx.check(k == "commands.pardon.success", format!("pardon: {k}"));
+    ctx.check(Bot::connect(&addr, "AdminB").is_ok(), "pardoned player refused");
+    // whitelist
+    ctx.check(key(&a, "whitelist on")? == "commands.whitelist.enabled", "whitelist on");
+    ctx.check(Bot::connect(&addr, "AdminC").is_err(), "unlisted player joined with the whitelist on");
+    ctx.check(key(&a, "whitelist add AdminC")? == "commands.whitelist.add.success", "whitelist add");
+    ctx.check(Bot::connect(&addr, "AdminC").is_ok(), "whitelisted player refused");
+    ctx.check(key(&a, "whitelist off")? == "commands.whitelist.disabled", "whitelist off");
+    // ops survive a restart (ops.json)
+    drop(a); drop(b);
+    ctx.restart()?;
+    let a2 = ctx.bot()?;
+    let _ = a2;
+    let c = Bot::connect(&ctx.addr(), "AdminD")?;
+    c.wait_ticks(10);
+    let cl = c.st().op_level;
+    ctx.check(cl == 0, format!("after restart a new player is level {cl} (ops.json kept?)"));
+    Ok(())
+}

@@ -17,6 +17,8 @@ pub struct Shared {
     pub online: AtomicUsize,
     pub next_eid: AtomicI32,
     pub game: std::sync::Mutex<mpsc::Sender<ToGame>>,
+    /// ops / whitelist / bans (admin.rs)
+    pub admin: std::sync::Mutex<crate::admin::Lists>,
 }
 
 pub fn offline_uuid(name: &str) -> Uuid {
@@ -80,6 +82,21 @@ async fn login(mut c: Conn, sh: Arc<Shared>, proto: i32, peer: std::net::SocketA
         disconnect_login(&mut c, "Invalid username").await?; return Ok(());
     }
     let uuid = offline_uuid(&name);
+    // bans, whitelist, a full server (vanilla's messages)
+    let refused = sh.admin.lock().unwrap().refuse(&uuid.to_string(), &name, &peer.ip().to_string());
+    if let Some((key, reason)) = refused {
+        let mut w = Writer::with_id(lcb::LOGIN_DISCONNECT);
+        let with = if key.ends_with(".reason") { serde_json::json!([reason]) } else { serde_json::json!([]) };
+        w.str(&serde_json::json!({ "translate": key, "with": with }).to_string());
+        c.send(&w).await?;
+        return Ok(());
+    }
+    if sh.online.load(Ordering::Relaxed) >= sh.cfg.max_players && sh.admin.lock().unwrap().level(&uuid.to_string(), &name) < 1 {
+        let mut w = Writer::with_id(lcb::LOGIN_DISCONNECT);
+        w.str(&serde_json::json!({ "translate": "multiplayer.disconnect.server_full" }).to_string());
+        c.send(&w).await?;
+        return Ok(());
+    }
     if sh.cfg.compression >= 0 {
         let mut w = Writer::with_id(lcb::LOGIN_COMPRESSION); w.varint(sh.cfg.compression); c.send(&w).await?;
         c.set_threshold(sh.cfg.compression);

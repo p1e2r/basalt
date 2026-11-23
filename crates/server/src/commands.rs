@@ -146,6 +146,21 @@ pub fn build_packet(data_dir: &Path, names: &[&str]) -> Option<Vec<u8>> {
     Some(w.buf)
 }
 
+/// Permission level a top-level command needs (commands.json `permissions`: moderators 1,
+/// gamemasters 2, admins 3, owners 4; none = 0). Cached after the first call.
+pub fn required_level(data_dir: &Path, name: &str) -> u8 {
+    static LEVELS: std::sync::OnceLock<HashMap<String, u8>> = std::sync::OnceLock::new();
+    let m = LEVELS.get_or_init(|| {
+        let Some(json) = std::fs::read(data_dir.join("reports/commands.json")).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) else { return HashMap::new() };
+        let Some(top) = json["children"].as_object() else { return HashMap::new() };
+        top.iter().map(|(k, v)| {
+            let lvl = match v["permissions"]["permission"]["level"].as_str() { Some("moderators") => 1, Some("gamemasters") => 2, Some("admins") => 3, Some("owners") => 4, _ => 0 };
+            (k.clone(), lvl)
+        }).collect()
+    });
+    m.get(name).copied().unwrap_or(2)
+}
+
 /// Answer for an `ask_server` suggestion request: `(start, length, suggestions)` over the text
 /// (the client sends it with the leading slash). Only the places our tree uses ask_server.
 pub fn suggest(text: &str) -> (i32, i32, Vec<String>) {

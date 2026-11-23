@@ -210,7 +210,8 @@ impl Game {
         let s = states[dim::OVERWORLD].take().expect("overworld generator");
         let player_type = registry_id(reg::ENTITY_TYPE, "player").unwrap_or(0);
         let data = sh.data.clone();
-        let mut g = Game { sh, world: s.world, gen: s.gen, players: s.players, tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir, data, commands_body: None, weather: Weather::default(), items: s.items, mobs: s.mobs, arrows: s.arrows, fallers: s.fallers, gravity_checks: s.gravity_checks, random_tick_speed: 3, difficulty: 1, orbs: s.orbs, bes: s.bes, path_budget: 0, no_spawning: false, rng: rand::rngs::StdRng::from_entropy(), cur: dim::OVERWORLD, parked: states, cmd_dim: None, portals: s.portals, portal_quiet: false };
+        let sh_difficulty = sh.cfg.difficulty;
+        let mut g = Game { sh, world: s.world, gen: s.gen, players: s.players, tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir, data, commands_body: None, weather: Weather::default(), items: s.items, mobs: s.mobs, arrows: s.arrows, fallers: s.fallers, gravity_checks: s.gravity_checks, random_tick_speed: 3, difficulty: sh_difficulty, orbs: s.orbs, bes: s.bes, path_budget: 0, no_spawning: false, rng: rand::rngs::StdRng::from_entropy(), cur: dim::OVERWORLD, parked: states, cmd_dim: None, portals: s.portals, portal_quiet: false };
         g.no_spawning = g.sh.cfg.no_spawning;
         g.commands_body = crate::commands::build_packet(&g.sh.cfg.data_dir, crate::commands::IMPLEMENTED);
         if g.commands_body.is_none() { log::warn!("no reports/commands.json: using the built-in command tree"); }
@@ -224,7 +225,7 @@ impl Game {
     fn load_level(&mut self) {
         let Some(d) = &self.dir else { return };
         if let Ok(s) = std::fs::read_to_string(d.join("basalt.json")) {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) { self.day_time = v["day_time"].as_i64().unwrap_or(1000); self.difficulty = v["difficulty"].as_u64().unwrap_or(1).min(3) as u8; }
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) { self.day_time = v["day_time"].as_i64().unwrap_or(1000); self.difficulty = v["difficulty"].as_u64().unwrap_or(self.sh.cfg.difficulty as u64).min(3) as u8; }
         }
     }
     fn save_level(&mut self) {
@@ -482,6 +483,9 @@ impl Game {
         w.bool(false).u8(0);
         p.send(w);
         let mut w = Writer::with_id(cb::CHANGE_DIFFICULTY); w.u8(self.difficulty).bool(false); p.send(w);
+        // op level (entity event 24 + level), from ops.json (admin.rs)
+        let lvl = self.sh.admin.lock().unwrap().level(&p.uuid.to_string(), &p.name);
+        let mut w = Writer::with_id(cb::ENTITY_EVENT); w.i32(p.eid).u8(24 + lvl.min(4)); p.send(w);
         Self::send_abilities(&p);
         let mut w = Writer::with_id(cb::SET_HELD_SLOT); w.varint(p.held as i32); p.send(w);
         let mut w = Writer::with_id(cb::UPDATE_RECIPES); w.varint(0).varint(0); p.send(w);

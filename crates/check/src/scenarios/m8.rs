@@ -313,9 +313,9 @@ pub fn portal_travel(ctx: &mut Ctx) -> Result<()> {
     ctx.metric("nether_exit_portal_blocks", portals_here as f64, 0.0);
     // the exact spot depends on the nether terrain there, which earlier runs on the shared vanilla
     // server may have changed (first run: x and y identical to vanilla): compare loosely
-    ctx.note(format!("arrival x {}", p[0]));   // varies run to run on the shared vanilla world
-    // known gap: where a new exit portal is built (vanilla 26.2 picked y 89 / z 38.5 where Basalt
-    // picks y 113 / z 43.5 on the shared world, 2026-11-24) — noted, not compared yet
+    ctx.note(format!("arrival x {}", p[0])); // varies run to run on the shared vanilla world
+                                             // known gap: where a new exit portal is built (vanilla 26.2 picked y 89 / z 38.5 where Basalt
+                                             // picks y 113 / z 43.5 on the shared world, 2026-11-24) — noted, not compared yet
     ctx.note(format!("arrival y {} z {}", p[1], p[2]));
     ctx.metric(
         "nether_arrival_centred",
