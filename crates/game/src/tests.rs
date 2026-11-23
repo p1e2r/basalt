@@ -6,7 +6,7 @@ fn gd() -> &'static GameData {
     static G: OnceLock<GameData> = OnceLock::new();
     G.get_or_init(|| {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
-        GameData::load(&dir).expect("load ./data (run tools/extract-data.sh)")
+        GameData::load(&dir).expect("load ./data (run `cargo xtask extract-data`)")
     })
 }
 

@@ -21,7 +21,7 @@ Not affiliated with Mojang or Microsoft. No Mojang code or assets are included:
 
 ## Build
 ```sh
-./tools/extract-data.sh      # needs Java 25+, downloads the official server jar
+cargo xtask extract-data     # needs Java 25+, downloads the official server jar (macOS, Windows, Linux)
 cargo build --release
 ./target/release/basalt-server
 ./target/release/basalt-client --jar /path/to/26.2/client.jar --server 127.0.0.1:25565

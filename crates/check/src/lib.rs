@@ -22,5 +22,5 @@ pub fn data_dir() -> std::path::PathBuf { std::env::var("BASALT_DATA").map(Into:
 /// Gameplay rules (dig times etc.) from ./data, loaded once.
 pub fn game_data() -> Arc<basalt_game::GameData> {
     static G: OnceLock<Arc<basalt_game::GameData>> = OnceLock::new();
-    G.get_or_init(|| Arc::new(basalt_game::GameData::load(&data_dir()).expect("loading game data (run tools/extract-data.sh)"))).clone()
+    G.get_or_init(|| Arc::new(basalt_game::GameData::load(&data_dir()).expect("loading game data (run `cargo xtask extract-data`)"))).clone()
 }

@@ -128,7 +128,7 @@ real server/client over the wire.
   (`echo "op Basalt" > vanilla/srv/console.fifo`).
 - Real client harness (macOS, uses the launcher's installed 26.2): `tools/run-vanilla-client.py HOST:PORT [NAME]`
   (offline, own game dir vanilla/mcclient, quick-play join; log in vanilla/mcclient/logs/latest.log).
-  `swift tools/mc-window-shot.swift out.png` captures only the Minecraft window.
+  `cargo xtask window-screenshot out.png` captures only the Minecraft window (any OS; macOS uses tools/mc-window-shot.swift).
   Proxy it through `basalt-probe proxy 127.0.0.1:25570 127.0.0.1:<server> DIR` to record both directions.
 - Entity data (set_entity_data: varint eid, then {u8 index, varint serializer, value}..., 0xff):
   0 shared flags (byte, ser 0: 0x01 on fire, 0x02 crouch, 0x08 sprint), 1 air supply (varint, ser 1;
@@ -139,7 +139,7 @@ real server/client over the wire.
 - Item stack components on the wire: damage (type 3) = varint; enchantments (type 13) = varint n,
   {varint enchantment id (synced enchantment registry order), varint level}.
 - basalt-probe proxy does not handle compression: run the Basalt side with --compression -1 when proxying.
-- Window-only video of the real client: `swift tools/mc-window-bounds.swift` → crop the avfoundation
+- Window-only video of the real client: `cargo xtask window-bounds` → crop the avfoundation
   screen capture to those bounds (×2 on Retina) inside the ffmpeg filter so only the window is saved.
 - LpVec3 (velocity in add_entity / set_entity_motion): single 0 byte if all |v| < 2^-15; else
   scale = ceil(max |v|), bits = (scale&3) | (scale>3)<<2 | x15<<3 | y15<<18 | z15<<33 where

@@ -18,6 +18,7 @@ basalt-nbt = { path = "../nbt" }
 basalt-data = { path = "../data" }
 basalt-game = { path = "../game" }
 basalt-world = { path = "../world" }
+basalt-paths = { path = "../paths" }
 wgpu = { version = "22", default-features = false, features = ["wgsl", "vulkan-portability", "metal", "dx12", "webgl"] }
 winit = { version = "0.30", default-features = false, features = ["x11", "rwh_06"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
@@ -28,6 +29,8 @@ pollster = "0.3"
 serde.workspace = true
 # pure-Rust Ogg Vorbis decoder for the launcher asset store sounds
 lewton = "0.10"
+# local date/time for the world list ("dd/mm/yyyy, HH.MM")
+jiff = { version = "1", default-features = false, features = ["std", "tz-system"] }
 
 # audio output: on by default on macOS/Windows; on Linux behind `--features audio` (needs ALSA headers)
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]

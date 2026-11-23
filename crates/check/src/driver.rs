@@ -163,7 +163,7 @@ pub fn try_main() -> Option<i32> {
         let json_path = out.join("affected-scenarios.json");
         let _ = std::fs::remove_file(&json_path);
         let ids: Vec<String> = scen.iter().map(|e| e.id.clone()).collect();
-        let exe = std::env::current_exe().unwrap_or_else(|_| "target/release/basalt-check".into());
+        let exe = std::env::current_exe().unwrap_or_else(|_| format!("target/release/basalt-check{}", std::env::consts::EXE_SUFFIX).into());
         let mut c = Command::new(exe);
         c.arg("--filter").arg(ids.join(",")).arg("--jobs").arg(a.opts.jobs.to_string()).arg("--json").arg(&json_path).arg("--out").arg(&out);
         if let Some(v) = &vanilla { c.arg("--diff").arg("--vanilla").arg(v).arg("--vanilla-dir").arg(&a.vdir); }
@@ -231,7 +231,7 @@ pub fn try_main() -> Option<i32> {
             if pass && a.opts.replay.is_none() { cache.store_pass(&key_of(e, &a), &detail); }
             rows.push(RunRow { id: e.id.clone(), kind: "script", result, secs: t.elapsed().as_secs_f64(), detail });
         } else if e.id == "client_mesh" {
-            let exe = std::env::current_exe().unwrap_or_else(|_| "target/release/basalt-check".into());
+            let exe = std::env::current_exe().unwrap_or_else(|_| format!("target/release/basalt-check{}", std::env::consts::EXE_SUFFIX).into());
             eprintln!("== client-mesh (oracle block-meshing parity)");
             let o = Command::new(exe).arg("client-mesh").arg("--out").arg(&out).output();
             let txt = o.map(|o| String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr)).unwrap_or_default();

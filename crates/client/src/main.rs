@@ -25,6 +25,7 @@ mod status;
 mod suggest;
 mod ui;
 mod world;
+mod worlds;
 
 use anyhow::{Context, Result};
 use assets::{Assets, Biome};
@@ -58,7 +59,7 @@ pub struct Args {
 }
 
 fn parse_args() -> Args {
-    let mut a = Args { data: "data".into(), addr: "127.0.0.1:25566".into(), addr_given: false, name: "Basalt".into(), jar: std::env::var("BASALT_JAR").unwrap_or_else(|_| "vanilla/client.jar".into()),
+    let mut a = Args { data: "data".into(), addr: "127.0.0.1:25566".into(), addr_given: false, name: "Basalt".into(), jar: basalt_paths::client_jar().to_string_lossy().into_owned(),
         screenshot: None, wait: 8.0, size: (1280, 720), pos: None, look: None, cmds: Vec::new(), walk: 0.0, chat: Vec::new(), click: None, clicks: Vec::new(), hold: 1.0, later: Vec::new(), attack: 0, attack_every: 0.7,
         scenario: None, vanilla: None, assets: None, asset_index: None, auto_respawn: false,
         time: None, fov: None, render_distance: None, gui_scale: None, no_gui: false, options: None, asset_grid: None, grid_items: false, allowlist: "tools/asset-allowlist.txt".into(), mesh_dump: None, mesh_out: "target/mesh-dump".into(), script: None, script_log: None,
@@ -241,6 +242,10 @@ pub struct Game {
     ping_chan: (mpsc::Sender<status::PingResult>, mpsc::Receiver<status::PingResult>),
     pub icon_slots: HashMap<String, usize>,
     pub ping_rounds: u32,
+    /// singleplayer: the world list, the integrated server and the world being played
+    pub worlds: Vec<worlds::WorldEntry>,
+    pub integrated: Option<worlds::Integrated>,
+    pub sp_world: Option<worlds::WorldEntry>,
     step_dist: f64,
     last_place: Instant,
     last_space: Option<Instant>,
@@ -289,7 +294,7 @@ impl Game {
             dirty: HashMap::new(), in_flight: HashSet::new(), events: rx, out: otx, entities: HashMap::new(), player_names: HashMap::new(), my_eid: 0, name: o.name,
             chat: Vec::new(), chat_input: None, cmd_tree: None, sug: Sug::default(), hp: 20.0, food: 20, hotbar: Default::default(), held: 0, inventory: vec![ItemStack::default(); 46], inv_state: 0, carried: ItemStack::default(), day_time: 6000,
             spawned: false, loaded_sent: false, connected: false, keys: HashSet::new(), mouse: [false; 2], mouse_pos: (0.0, 0.0), slider_drag: None, last_tick: Instant::now(),
-            last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, sprinting: false, particles: Default::default(), equip: (1.0, 1.0), equip_for: -1, held_name: (String::new(), 0), splash: String::new(), menu_t0: Instant::now(), pings: HashMap::new(), ping_chan: mpsc::channel(), icon_slots: HashMap::new(), ping_rounds: 0, step_dist: 0.0,
+            last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, sprinting: false, particles: Default::default(), equip: (1.0, 1.0), equip_for: -1, held_name: (String::new(), 0), splash: String::new(), menu_t0: Instant::now(), pings: HashMap::new(), ping_chan: mpsc::channel(), icon_slots: HashMap::new(), ping_rounds: 0, worlds: Vec::new(), integrated: None, sp_world: None, step_dist: 0.0,
             last_place: Instant::now(), last_space: None, debug: false, disconnected: None, death_msg: None, respawn_at: None, auto_respawn: o.auto_respawn,
             screen: Some(Screen::Title), cfg: o.cfg, sounds, last_addr: String::new(), quit: false, fullscreen_changed: false, hide_entities: false, hide_cracks: false, hide_gui: false, hide_hand: false, fixed_time: None, last_chunk_at: Instant::now(), stats: Stats::default(), clicks_sent: 0, ticks: 0,
             frames: (0, Instant::now(), 0.0),
@@ -1215,6 +1220,78 @@ impl Game {
         fd
     }
 
+    /// Start the integrated server for a world; `poll_integrated` connects once it listens.
+    pub(crate) fn play_world(&mut self, mut w: worlds::WorldEntry) {
+        self.leave_world();
+        w.meta.last_played = worlds::now();
+        let _ = worlds::save_meta(&w.dir, &w.meta);
+        match worlds::Integrated::start(&w) {
+            Ok(i) => { self.integrated = Some(i); self.sp_world = Some(w); self.screen = Some(Screen::Message { text: lang::tr("selectWorld.data_read", &[]) }); }
+            Err(e) => { self.screen = Some(Screen::Connecting { addr: String::new(), error: Some(format!("{e:#}")) }); }
+        }
+    }
+
+    pub(crate) fn poll_integrated(&mut self) {
+        if self.connected { return; }
+        let Some(i) = self.integrated.as_mut() else { return };
+        match i.poll() {
+            Ok(Some(port)) => { self.connect(&format!("127.0.0.1:{port}")); }
+            Ok(None) => {}
+            Err(e) => { self.integrated = None; self.sp_world = None; self.screen = Some(Screen::Connecting { addr: String::new(), error: Some(format!("{e:#}")) }); }
+        }
+    }
+
+    /// Leave the current world: for singleplayer take the world icon, then save and stop the
+    /// integrated server ("Saving world").
+    pub(crate) fn leave_world(&mut self) {
+        if let Some(w) = self.sp_world.take() {
+            if self.spawned { self.save_world_icon(&w); }
+            self.screen = Some(Screen::Message { text: lang::tr("menu.savingLevel", &[]) });
+            let _ = self.render(1.0, None);
+            self.disconnect();
+            if let Some(i) = self.integrated.take() { i.stop(); }
+        } else {
+            self.disconnect();
+        }
+    }
+
+    /// 64x64 centre crop of the current view (no GUI) as <world>/icon.png, like vanilla's world icon.
+    fn save_world_icon(&mut self, w: &worlds::WorldEntry) {
+        let (screen, hide) = (self.screen.take(), self.hide_gui);
+        self.hide_gui = true;
+        let shot = self.capture(1.0);
+        self.screen = screen; self.hide_gui = hide;
+        let Ok(rgb) = shot else { return };
+        let (sw, sh) = (self.gpu.size.0 as usize, self.gpu.size.1 as usize);
+        let side = sw.min(sh);
+        let (ox, oy) = ((sw - side) / 2, (sh - side) / 2);
+        let mut out = vec![0u8; 64 * 64 * 4];
+        for y in 0..64 { for x in 0..64 {
+            let (px, py) = (ox + x * side / 64, oy + y * side / 64);
+            let i = (py * sw + px) * 3;
+            out[(y * 64 + x) * 4..(y * 64 + x) * 4 + 4].copy_from_slice(&[rgb[i], rgb[i + 1], rgb[i + 2], 255]);
+        } }
+        if let Ok(f) = std::fs::File::create(w.dir.join("icon.png")) {
+            let mut e = png::Encoder::new(std::io::BufWriter::new(f), 64, 64);
+            e.set_color(png::ColorType::Rgba); e.set_depth(png::BitDepth::Eight);
+            if let Ok(mut wr) = e.write_header() { let _ = wr.write_image_data(&out); }
+        }
+        self.icon_slots.remove(&format!("world:{}", w.folder));
+    }
+
+    /// Load world icons into icon slots (when the world list opens).
+    pub(crate) fn load_world_icons(&mut self) {
+        for w in self.worlds.clone() {
+            let key = format!("world:{}", w.folder);
+            if self.icon_slots.contains_key(&key) { continue; }
+            let Some(img) = std::fs::read(w.dir.join("icon.png")).ok().and_then(|b| assets::decode_png(&b).ok()).filter(|i| i.w == 64 && i.h == 64) else { continue };
+            let n = self.icon_slots.len();
+            if n >= 32 { break; }
+            self.icon_slots.insert(key, n);
+            self.gpu.set_icon(n, &img.rgba);
+        }
+    }
+
     pub(crate) fn ping_chan_tx(&self) -> mpsc::Sender<status::PingResult> { self.ping_chan.0.clone() }
 
     /// Behind menus: the blurred world in game, the blurred spinning panorama elsewhere.
@@ -1241,6 +1318,7 @@ impl Game {
 
     /// Advance simulation to `now`; returns interpolation alpha.
     fn update(&mut self) -> f64 {
+        self.poll_integrated();
         self.pump();
         let mut n = 0;
         while self.last_tick.elapsed() >= Duration::from_millis(50) && n < 10 { self.last_tick += Duration::from_millis(50); self.tick(); n += 1; }
@@ -1451,6 +1529,7 @@ fn load_sounds(args: &Args, audio_out: bool) -> sound::Sounds {
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,wgpu_core=warn,wgpu_hal=warn,naga=warn")).init();
     let args = parse_args();
+    let _ = worlds::DATA_DIR.set(args.data.clone());
     let t = Instant::now();
     let assets = Arc::new(Assets::load(&args.jar).with_context(|| format!("loading assets from {} (pass --jar path/to/26.2.jar)", args.jar))?);
     log::info!("assets loaded in {:.2?}: {} models, atlas {}x{}", t.elapsed(), assets.models.len(), assets.atlas.w, assets.atlas.h);

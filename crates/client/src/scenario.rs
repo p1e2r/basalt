@@ -14,7 +14,7 @@ use winit::keyboard::KeyCode;
 const W: u32 = 854;
 const H: u32 = 480;
 
-pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list"];
+pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer"];
 
 enum Outcome { Pass(String), Skip(String) }
 
@@ -40,7 +40,7 @@ pub fn run(args: &Args, assets: Arc<Assets>, name: &str) -> Result<bool> {
         let t = Instant::now();
         let r = match s {
             "edge_chunks" => edge_chunks(&ctx), "inventory" => inventory(&ctx), "crafting_table" => crafting_table(&ctx), "death" => death(&ctx),
-            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx),
+            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx),
             other => Err(anyhow!("unknown scenario {other} (known: {})", ALL.join(", "))),
         };
         let secs = t.elapsed().as_secs_f32();
@@ -982,4 +982,62 @@ fn server_list(c: &Ctx) -> Result<Outcome> {
     if g.ping_rounds != rounds + 1 { bail!("Refresh did not re-ping"); }
     if !wait_until(&mut g, 8.0, done)? { bail!("refresh pings did not finish"); }
     Ok(Outcome::Pass(format!("{basalt}; closed port fails; {vanilla}; refresh ok")))
+}
+
+/// Singleplayer through the integrated server: create a world (superflat), play, change a block,
+/// save and quit (icon taken, server stopped), play again (block kept), rename, back up, delete.
+fn singleplayer(c: &Ctx) -> Result<Outcome> {
+    let mut g = c.game_at("sp", None)?;
+    wait(&mut g, 0.2)?;
+    for w in crate::worlds::list() { let _ = crate::worlds::delete(&w.dir); }
+    press_widget(&mut g, "singleplayer")?;
+    if !matches!(g.screen, Some(Screen::CreateWorld { .. })) { bail!("no worlds should open Create New World"); }
+    for _ in 0..20 { tap(&mut g, KeyCode::Backspace, None)?; }
+    type_text(&mut g, "Test World")?;
+    press_widget(&mut g, "worldtype")?;
+    let img = capture(&mut g)?; save(&g, &img, "sp_create");
+    press_widget(&mut g, "create")?;
+    let t0 = Instant::now();
+    if !wait_until(&mut g, 60.0, |g| g.spawned && g.screen.is_none())? { bail!("did not join the integrated server (screen {:?})", g.screen.as_ref().map(|_| ())); }
+    let join = t0.elapsed().as_secs_f32();
+    wait_until(&mut g, 10.0, settled)?;
+    let p = g.player.pos;
+    let b = [p[0].floor() as i32 + 2, p[1].floor() as i32, p[2].floor() as i32];
+    cmd(&mut g, &format!("setblock {} {} {} gold_block", b[0], b[1], b[2]));
+    if !wait_until(&mut g, 3.0, |g| basalt_data::BlockState(g.world.get(b[0], b[1], b[2]) as u32).name() == "gold_block")? { bail!("setblock in singleplayer failed"); }
+    tap(&mut g, KeyCode::Escape, None)?;
+    if !g.widgets().iter().any(|w| w.id == "lan") { bail!("singleplayer pause menu has no Open to LAN"); }
+    let img = capture(&mut g)?; save(&g, &img, "sp_pause");
+    press_widget(&mut g, "disconnect")?;
+    if g.integrated.is_some() || g.connected || !matches!(g.screen, Some(Screen::Title)) { bail!("Save and Quit did not stop the integrated server and return to the title"); }
+    let worlds = crate::worlds::list();
+    let Some(w) = worlds.first() else { bail!("world not listed after quitting") };
+    if w.meta.name != "Test World" || !w.meta.flat { bail!("world meta wrong: {:?}", w.meta); }
+    if !w.dir.join("icon.png").exists() { bail!("no world icon written"); }
+    // play again: the block is still there
+    press_widget(&mut g, "singleplayer")?;
+    if !matches!(g.screen, Some(Screen::Worlds { .. })) { bail!("world list did not open"); }
+    let img = capture(&mut g)?; save(&g, &img, "sp_list");
+    press_widget(&mut g, "world0")?;
+    press_widget(&mut g, "play")?;
+    if !wait_until(&mut g, 60.0, |g| g.spawned && g.screen.is_none())? { bail!("did not rejoin the world"); }
+    wait_until(&mut g, 10.0, settled)?;
+    if !wait_until(&mut g, 5.0, |g| basalt_data::BlockState(g.world.get(b[0], b[1], b[2]) as u32).name() == "gold_block")? { bail!("block not saved across restart"); }
+    tap(&mut g, KeyCode::Escape, None)?;
+    press_widget(&mut g, "disconnect")?;
+    // rename, back up, delete
+    press_widget(&mut g, "singleplayer")?;
+    press_widget(&mut g, "world0")?;
+    press_widget(&mut g, "edit")?;
+    for _ in 0..20 { tap(&mut g, KeyCode::Backspace, None)?; }
+    type_text(&mut g, "Renamed")?;
+    press_widget(&mut g, "backup")?;
+    press_widget(&mut g, "save")?;
+    if crate::worlds::list().first().map(|w| w.meta.name.as_str()) != Some("Renamed") { bail!("rename not saved"); }
+    if std::fs::read_dir(crate::worlds::backups_dir()).map(|d| d.count()).unwrap_or(0) == 0 { bail!("no backup made"); }
+    press_widget(&mut g, "world0")?;
+    press_widget(&mut g, "delete")?;
+    press_widget(&mut g, "confirm")?;
+    if !crate::worlds::list().is_empty() { bail!("world not deleted"); }
+    Ok(Outcome::Pass(format!("created + joined in {join:.1}s, block kept across save/quit/rejoin, icon written, rename/backup/delete ok")))
 }

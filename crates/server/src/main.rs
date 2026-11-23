@@ -29,11 +29,14 @@ pub struct Config {
     pub debug: bool,
     /// Disable natural mob spawning (summoned mobs still work).
     pub no_spawning: bool,
+    /// Integrated server for the client's singleplayer: bind 127.0.0.1 only, and stop (saving)
+    /// on a "stop" line or end of stdin, so the parent can shut it down on any OS.
+    pub local: bool,
 }
 
 fn parse_args() -> Config {
     let mut c = Config { port: 25565, world_dir: Some("world".into()), seed: 12345, view_distance: 10, max_players: 20,
-        motd: "A Basalt server".into(), gamemode: 0, compression: 256, data_dir: "data".into(), flat: false, no_spawning: false, debug: false };
+        motd: "A Basalt server".into(), gamemode: 0, compression: 256, data_dir: "data".into(), flat: false, no_spawning: false, debug: false, local: false };
     let mut it = std::env::args().skip(1);
     while let Some(k) = it.next() {
         let mut v = || it.next().unwrap_or_default();
@@ -50,6 +53,7 @@ fn parse_args() -> Config {
             "--flat" => c.flat = true,
             "--debug" => c.debug = true,
             "--no-spawning" => c.no_spawning = true,
+            "--local" => c.local = true,
             other => eprintln!("unknown argument {other}"),
         }
     }
@@ -65,6 +69,7 @@ fn main() -> Result<()> {
     let plains = registries.id("minecraft:worldgen/biome", "minecraft:plains").unwrap_or(0) as u8;
     let (tx, rx) = mpsc::channel();
     let port = cfg.port;
+    let local = cfg.local;
     let sh = Arc::new(conn::Shared { cfg, registries, data, online: AtomicUsize::new(0), next_eid: AtomicI32::new(1), game: std::sync::Mutex::new(tx) });
     let stop = Arc::new(AtomicBool::new(false));
     let generator: Arc<dyn gen::Generator> = if sh.cfg.flat { Arc::new(gen::Flat::new(plains)) } else {
@@ -79,10 +84,24 @@ fn main() -> Result<()> {
 
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     rt.block_on(async move {
-        let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
+        let listener = tokio::net::TcpListener::bind((if local { "127.0.0.1" } else { "0.0.0.0" }, port)).await?;
+        let port = listener.local_addr()?.port();
         log::info!("Basalt listening on port {port}");
+        // --local: the parent process stops us through stdin
+        let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
+        // without --local the sender must stay alive, or `changed()` would end the loop at once
+        let _keep = if local { None } else { Some(stop_tx.clone()) };
+        if local {
+            tokio::spawn(async move {
+                use tokio::io::AsyncBufReadExt;
+                let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+                while let Ok(Some(l)) = lines.next_line().await { if l.trim() == "stop" { break; } }
+                let _ = stop_tx.send(true);
+            });
+        }
         loop {
             tokio::select! {
+                _ = stop_rx.changed() => { log::info!("stopping (stdin)"); break; }
                 a = listener.accept() => {
                     let (s, _) = a?;
                     let sh = sh.clone();
