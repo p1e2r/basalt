@@ -13,7 +13,7 @@ use ids::play::clientbound as cb;
 use ids::play::serverbound as sb;
 
 #[derive(Debug, Clone, Default)]
-pub struct ItemStack { pub count: i32, pub item: i32 }
+pub struct ItemStack { pub count: i32, pub item: i32, pub damage: i32 }
 
 pub enum Event {
     Registries { biomes: Vec<String>, dimension_types: Vec<String> },
@@ -132,8 +132,12 @@ fn read_slot(r: &mut Reader) -> Result<ItemStack> {
     if count <= 0 { return Ok(ItemStack::default()); }
     let item = r.varint()?;
     let (add, rem) = (r.varint()?, r.varint()?);
-    if add != 0 || rem != 0 { return Err(anyhow!("component patch (item {item})")); }
-    Ok(ItemStack { count, item })
+    // network component patches have no length prefix: only the ones we understand can be skipped
+    let damage_ty = basalt_data::registry_id(basalt_data::registries::DATA_COMPONENT_TYPE, "damage").unwrap_or(3);
+    let mut damage = 0;
+    for _ in 0..add { let ty = r.varint()?; if ty == damage_ty { damage = r.varint()?; } else { return Err(anyhow!("component {ty} on item {item}")); } }
+    for _ in 0..rem { r.varint()?; }
+    Ok(ItemStack { count, item, damage })
 }
 
 /// Skip a compact ("low precision") vec3 as used for entity velocity.

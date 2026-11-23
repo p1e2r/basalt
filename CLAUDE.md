@@ -49,7 +49,7 @@ Read NOTES.md for verified packet formats.
       hardness/tool dig times (server validates), loot-table drops as item entities + pickup/merge/
       despawn, Q-drop, all container_click modes, 2x2 + crafting table crafting, armor slots,
       health/hunger/saturation/regen/starve, fall damage, eating, death (drops inventory) + respawn.
-      Missing: tool durability, armor damage reduction, non-food use_item (buckets etc.), death
+      Tool durability (damage component, persisted). Missing: armor damage reduction (needs M5 combat), non-food use_item (buckets etc.), death
       screen in basalt-client (auto-respawns), human-driven real-client inventory test.
 - [ ] M5 mobs   - [ ] M6 world logic   - [ ] M7 client parity
 - [ ] M8 Nether/End, portals, structures

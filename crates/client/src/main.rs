@@ -724,7 +724,7 @@ fn run_screenshot(args: &Args, assets: Arc<Assets>, out: &str) -> Result<()> {
         println!("{grid}");
     }
     let p = &g.player;
-    let inv: Vec<String> = g.inventory.iter().enumerate().filter(|(_, s)| s.count > 0).map(|(i, s)| format!("{i}:{}x{}", basalt_data::registries::ITEM.get(s.item as usize).unwrap_or(&"?"), s.count)).collect();
+    let inv: Vec<String> = g.inventory.iter().enumerate().filter(|(_, s)| s.count > 0).map(|(i, s)| format!("{i}:{}x{}{}", basalt_data::registries::ITEM.get(s.item as usize).unwrap_or(&"?"), s.count, if s.damage > 0 { format!("(dmg {})", s.damage) } else { String::new() })).collect();
     println!("state: hp {} food {} gamemode {} inv [{}]", g.hp, g.food, g.player.gamemode, inv.join(" "));
     println!("screenshot {out}: pos {:.2},{:.2},{:.2} chunks {} sections {} entities {}", p.pos[0], p.pos[1], p.pos[2], g.world.chunks.len(), g.gpu.sections.len(), g.entities.len());
     Ok(())

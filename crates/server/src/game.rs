@@ -23,7 +23,7 @@ pub enum ToGame {
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Debug)]
-pub struct Stack { pub item: i32, pub count: i32 }
+pub struct Stack { pub item: i32, pub count: i32, pub damage: i32 }
 
 struct Player {
     eid: i32,
@@ -155,7 +155,7 @@ impl Game {
     }
     fn save_player(&self, p: &Player) {
         let Some(d) = &self.dir else { return };
-        let inv: Vec<_> = p.inv.iter().enumerate().filter(|(_, s)| s.count > 0).map(|(i, s)| serde_json::json!([i, s.item, s.count])).collect();
+        let inv: Vec<_> = p.inv.iter().enumerate().filter(|(_, s)| s.count > 0).map(|(i, s)| serde_json::json!([i, s.item, s.count, s.damage])).collect();
         let j = serde_json::json!({ "pos": p.pos, "yaw": p.yaw, "pitch": p.pitch, "gamemode": p.gamemode, "held": p.held, "inv": inv, "flying": p.flying,
             "health": p.health, "food": p.food, "saturation": p.saturation, "dead": p.dead });
         let _ = std::fs::create_dir_all(d.join("players"));
@@ -172,7 +172,7 @@ impl Game {
         p.health = v["health"].as_f64().unwrap_or(20.0) as f32; p.food = v["food"].as_i64().unwrap_or(20) as i32;
         p.saturation = v["saturation"].as_f64().unwrap_or(5.0) as f32; p.dead = v["dead"].as_bool().unwrap_or(false);
         for e in v["inv"].as_array().into_iter().flatten() {
-            if let (Some(i), Some(item), Some(count)) = (e[0].as_u64(), e[1].as_i64(), e[2].as_i64()) { if (i as usize) < 46 { p.inv[i as usize] = Stack { item: item as i32, count: count as i32 }; } }
+            if let (Some(i), Some(item), Some(count)) = (e[0].as_u64(), e[1].as_i64(), e[2].as_i64()) { if (i as usize) < 46 { p.inv[i as usize] = Stack { item: item as i32, count: count as i32, damage: e[3].as_i64().unwrap_or(0) as i32 }; } }
         }
     }
 
@@ -485,7 +485,7 @@ impl Game {
                 let n = if status == 3 { s.count } else { 1 };
                 p.inv[slot].count -= n; if p.inv[slot].count <= 0 { p.inv[slot] = Stack::default(); }
                 Self::send_window(p);
-                self.throw_item(eid, Stack { item: s.item, count: n }, false);
+                self.throw_item(eid, Stack { item: s.item, count: n, damage: 0 }, false);
                 return;
             }
             5 => { if let Some(p) = self.players.get_mut(&eid) { p.using = None; } return; }
@@ -530,6 +530,7 @@ impl Game {
         self.broadcast_chunk((b[0] >> 4, b[2] >> 4), Some(eid), || { let mut w = Writer::with_id(cb::LEVEL_EVENT); w.i32(2001).position(b[0], b[1], b[2]).i32(old as i32).bool(false); w });
         if !creative {
             if let Some(p) = self.players.get_mut(&eid) { p.exhaustion += 0.005; }
+            if basalt_game::hardness(BlockState(old).name()) > 0.0 { self.wear_held(eid, 1); }
             let drops = if self.data.can_harvest(old, held) { self.data.block_drops(old, held, false, 0, &mut self.rng) } else { Vec::new() };
             self.drop_at_block(b, drops);
             // doors: the other half goes too
@@ -538,6 +539,24 @@ impl Game {
                 if BlockState(self.world.get_block(b[0], b[1] + oy, b[2])).block().name == BlockState(old).block().name { self.set_block(b[0], b[1] + oy, b[2], 0); }
             }
         }
+    }
+
+    /// Use up durability of the held tool (swords take 2 for blocks); breaks it at max damage.
+    fn wear_held(&mut self, eid: i32, amount: i32) {
+        let Some(p) = self.players.get(&eid) else { return };
+        let slot = 36 + p.held; let s = p.inv[slot];
+        if s.count <= 0 { return; }
+        let Some(info) = self.data.item(s.item) else { return };
+        if info.max_damage <= 0 { return; }
+        let amount = if info.name.ends_with("_sword") { amount * 2 } else { amount };
+        let p = self.players.get_mut(&eid).unwrap();
+        p.inv[slot].damage += amount;
+        if p.inv[slot].damage >= info.max_damage {
+            p.inv[slot] = Stack::default();
+            // entity event 47: main-hand item broke (sound + particles)
+            let mut w = Writer::with_id(cb::ENTITY_EVENT); w.i32(eid).u8(47); p.send(w);
+        }
+        Self::send_window(self.players.get_mut(&eid).unwrap());
     }
 
     fn place(&mut self, eid: i32, b: [i32; 3], face: usize, cursor: [f32; 3]) {
@@ -622,7 +641,7 @@ impl Game {
             }
             "give" => {
                 let (item, count) = (args.get(1).copied().unwrap_or(""), args.get(2).and_then(|c| c.parse().ok()).unwrap_or(1));
-                match registry_id(reg::ITEM, item) { Some(id) => { let left = self.give_stack(eid, Stack { item: id, count }); if left > 0 { self.throw_item(eid, Stack { item: id, count: left }, false); } reply(self, format!("Gave {count} {item}")); } None => reply(self, format!("Unknown item {item}")) }
+                match registry_id(reg::ITEM, item) { Some(id) => { let left = self.give_stack(eid, Stack { item: id, count, damage: 0 }); if left > 0 { self.throw_item(eid, Stack { item: id, count: left, damage: 0 }, false); } reply(self, format!("Gave {count} {item}")); } None => reply(self, format!("Unknown item {item}")) }
             }
             "time" => {
                 let v = match args.get(2).copied().or(args.get(1).copied()) { Some("day") => Some(1000), Some("noon") => Some(6000), Some("night") => Some(13000), Some("midnight") => Some(18000), Some(n) => n.parse().ok(), None => None };
@@ -708,8 +727,13 @@ impl Game {
     }
 }
 
+/// Data component type id of `minecraft:damage`.
+fn damage_component() -> i32 { registry_id(reg::DATA_COMPONENT_TYPE, "damage").unwrap_or(3) }
+
 pub(crate) fn write_slot(w: &mut Writer, s: Stack) {
-    if s.count <= 0 { w.varint(0); } else { w.varint(s.count).varint(s.item).varint(0).varint(0); }
+    if s.count <= 0 { w.varint(0); return; }
+    w.varint(s.count).varint(s.item);
+    if s.damage > 0 { w.varint(1).varint(0).varint(damage_component()).varint(s.damage); } else { w.varint(0).varint(0); }
 }
 
 /// Creative / untrusted slot: count, item, then length-prefixed component patches (ignored).
@@ -718,9 +742,13 @@ fn read_slot(r: &mut Reader) -> Result<Stack> {
     if count <= 0 { return Ok(Stack::default()); }
     let item = r.varint()?;
     let (add, rem) = (r.varint()?, r.varint()?);
-    for _ in 0..add { let _ty = r.varint()?; let len = r.varint()?; r.take(len.max(0) as usize)?; }
+    let mut damage = 0;
+    for _ in 0..add {
+        let ty = r.varint()?; let len = r.varint()?; let body = r.take(len.max(0) as usize)?;
+        if ty == damage_component() { damage = Reader::new(body).varint().unwrap_or(0).max(0); }
+    }
     for _ in 0..rem { r.varint()?; }
-    Ok(Stack { item, count: count.min(99) })
+    Ok(Stack { item, count: count.min(99), damage })
 }
 
 /// Items whose block has a different name.
