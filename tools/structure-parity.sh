@@ -38,10 +38,12 @@ TEMPLES_42="-85,-109 197,149 -126,-232 -115,246 -140,-234 244,148 -84,181 9,-209
 TEMPLES_1="5,112 -150,19 -153,49"
 MESA_12345="-168,110"
 SHBLOCKS_12345="-35,-103 110,23 293,-3"
+MONBLOCKS_12345="38,-115 138,-16 110,-85 77,-119 148,-47 37,-152 140,-72 15,-157 75,-148 166,-157 -153,198 -247,-46 235,108 149,-219 256,-84 -168,211"
 SITES=("12345 32 0 0" "42 32 0 0" "1 32 0 0" "12345 8 10 55" "12345 8 -146 37" "12345 8 -66 -98" "12345 8 91 75" "12345 8 75 -23" "12345 8 17 -60" "12345 2 171 6" "42 2 144 -51"
   "12345 2 -223 -312 temples" "42 2 -115 246 temples" "42 2 -140 -234 temples" "42 2 -85 -109 temples"
   "12345 2 -110 -55 temples" "12345 2 -113 72 temples" "42 2 82 228 temples" "1 2 -150 19 temples"
-  "12345 6 -168 110 mesa" "12345 8 -35 -103 shblocks" "12345 8 110 23 shblocks" "12345 8 293 -3 shblocks")
+  "12345 6 -168 110 mesa" "12345 8 -35 -103 shblocks" "12345 8 110 23 shblocks" "12345 8 293 -3 shblocks"
+  "12345 3 38 -115 monblocks" "12345 3 148 -47 monblocks" "12345 3 -168 211 monblocks" "12345 3 235 108 monblocks")
 [ $QUICK = 1 ] && SITES=("12345 8 10 55" "42 32 0 0")
 KNOWN=${CHECK_KNOWN:-crates/check/known-divergences.txt}
 cargo build --release -q -p basalt-worldgen --example structures 2>&1 | tail -5
@@ -57,6 +59,7 @@ for site in "${SITES[@]}"; do
     case $multi in
       mesa) eval "list=\$MESA_$seed" ;;
       shblocks) eval "list=\$SHBLOCKS_$seed" ;;
+      monblocks) eval "list=\$MONBLOCKS_$seed" ;;
       *) eval "list=\$TEMPLES_$seed" ;;
     esac
     gen=(tools/structure-sites.sh "$seed" "$multi" "$R" $list)
@@ -69,7 +72,7 @@ for site in "${SITES[@]}"; do
   cases=$((cases+1))
   log=$OUT/structure-parity-$seed-$CX-$CZ.txt
   # Blocks are measured where Basalt places pieces (jigsaw + template structures).
-  CENTER=$CX,$CZ BLOCK_TYPES=${BLOCK_TYPES:-village,pillager,trail,trial,ancient,shipwreck,ruined,ocean,igloo,swamp,desert,jungle} MAX_CHUNKS=${MAX_CHUNKS:-150} \
+  CENTER=$CX,$CZ BLOCK_TYPES=${BLOCK_TYPES:-village,pillager,trail,trial,ancient,shipwreck,ruined,ocean,igloo,swamp,desert,jungle,monument} MAX_CHUNKS=${MAX_CHUNKS:-150} \
     ./target/release/examples/structures compare "$dir/world/dimensions/minecraft/overworld/region" "$R" "$seed" > "$log" 2>&1
   # Mineshafts span many chunks: measured in their own pass (own chunk cap) on the large sites,
   # so they don't take the chunk budget of the other types.
@@ -107,7 +110,7 @@ for l in open(log):
         if t not in kn: new.append(t)
 FLOOR = {"village": 98.5, "pillager": 98.5, "ancient": 95.0, "trial": 99.0, "igloo": 97.0, "swamp": 97.0,
          "desert": 75.0, "jungle": 85.0, "mineshaft_mesa": 10.0, "mineshaft": 86.0,
-         "stronghold": 58.0}
+         "stronghold": 58.0, "monument": 70.0}
 for l in open(log):
     m = re.match(r"BLOCKS (\S+)\s+([\d.]+)% of (\d+)", l)
     if not m or int(m.group(3)) < 200: continue

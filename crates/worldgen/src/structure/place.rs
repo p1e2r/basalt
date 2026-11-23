@@ -551,6 +551,7 @@ fn place_piece(g: &Generator, s: &Structures, p: &Piece, reg: &mut Region, clip:
         PieceKind::Mineshaft { piece, mesa } => {
             super::mineshaft::place(reg, clip, piece, *mesa, &s.mineshaft_blocking, r)
         }
+        PieceKind::Monument { o } => super::monument::place(reg, clip, p.bb, *o, r),
         PieceKind::Stronghold { piece } => super::stronghold::place(reg, clip, piece, r),
         PieceKind::Temple { jungle, origin, o } => {
             super::temple::place_temple(reg, clip, *jungle, *origin, *o, r)

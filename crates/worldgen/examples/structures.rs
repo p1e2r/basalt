@@ -327,6 +327,20 @@ fn main() -> Result<()> {
                     if !g.is_structure_chunk(set, cx, cz) {
                         continue;
                     }
+                    if std::env::var_os("SCAN_NEAR").is_some() {
+                        // candidates with a biome of the structure within 24 blocks (measuring)
+                        let near = (-24..=40).step_by(8).any(|dx| {
+                            (-24..=40).step_by(8).any(|dz| {
+                                let (x, z) = (cx * 16 + dx, cz * 16 + dz);
+                                let y = g.first_free(x, z, false);
+                                s.defs[def].biomes[g.biome_at(x, y, z) as usize]
+                            })
+                        });
+                        if near {
+                            out.push((cx * cx + cz * cz, cx, cz));
+                        }
+                        continue;
+                    }
                     if let Some(st) = g.select_start(set, cx, cz, false) {
                         if st.def == def {
                             out.push((cx * cx + cz * cz, cx, cz));
@@ -762,6 +776,38 @@ fn main() -> Result<()> {
                     all[0],
                     all[all.len() / 2]
                 );
+            }
+        }
+        "mfeat" => {
+            // mfeat SEED CX,CZ...: start rotation draw + WG surface heights around a chunk (rows z
+            // -16..32 step 8, columns x -16..32 step 8 from the chunk corner) + the biome there
+            use basalt_worldgen::random::{set_large_feature_seed, JavaRandom, Rng};
+            let seed: i64 = args[2].parse()?;
+            let g = basalt_worldgen::Generator::new(seed);
+            for c in &args[3..] {
+                let v: Vec<i32> = c.split(',').map(|x| x.parse().unwrap()).collect();
+                let mut rr = JavaRandom::new(0);
+                set_large_feature_seed(&mut rr, seed, v[0], v[1]);
+                let rot = rr.next_int_bounded(4);
+                let mut hs = Vec::new();
+                for dz in (-16..=32).step_by(8) {
+                    let mut row = Vec::new();
+                    for dx in (-16..=32).step_by(8) {
+                        row.push(g.first_free(v[0] * 16 + dx, v[1] * 16 + dz, false));
+                    }
+                    hs.push(row);
+                }
+                println!("{c} rot={rot} {:?}", hs);
+                for dz in (-16..=32).step_by(8) {
+                    let mut row = String::new();
+                    for dx in (-16..=32).step_by(8) {
+                        let (x, z) = (v[0] * 16 + dx, v[1] * 16 + dz);
+                        let y = g.first_free(x, z, false) - 1;
+                        let b = &g.biome_names[g.biome_at(x, y, z) as usize];
+                        row += &format!(" {:>12}", b.trim_start_matches("minecraft:"));
+                    }
+                    println!("   {row}");
+                }
             }
         }
         "h" => {
