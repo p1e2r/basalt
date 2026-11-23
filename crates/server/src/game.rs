@@ -146,6 +146,8 @@ pub struct Game {
     gravity_checks: Vec<(u64, [i32; 3])>,
     /// gamerule random_tick_speed (vanilla default 3)
     random_tick_speed: i32,
+    /// 0 peaceful, 1 easy, 2 normal, 3 hard (saved in basalt.json; Basalt's default is Easy)
+    pub(crate) difficulty: u8,
     orbs: HashMap<i32, xporb::Orb>,
     /// container block entities of loaded chunks (chests, barrels, furnaces)
     bes: HashMap<[i32; 3], container::Be>,
@@ -189,7 +191,7 @@ impl Game {
         let world = World::new(dir.as_ref().map(|d| d.join("region")));
         let player_type = registry_id(reg::ENTITY_TYPE, "player").unwrap_or(0);
         let data = sh.data.clone();
-        let mut g = Game { sh, world, gen: GenPool::new(gen), players: HashMap::new(), tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir, data, commands_body: None, weather: Weather::default(), items: HashMap::new(), mobs: HashMap::new(), arrows: HashMap::new(), fallers: HashMap::new(), gravity_checks: Vec::new(), random_tick_speed: 3, orbs: HashMap::new(), bes: HashMap::new(), path_budget: 0, no_spawning: false, rng: rand::rngs::StdRng::from_entropy() };
+        let mut g = Game { sh, world, gen: GenPool::new(gen), players: HashMap::new(), tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir, data, commands_body: None, weather: Weather::default(), items: HashMap::new(), mobs: HashMap::new(), arrows: HashMap::new(), fallers: HashMap::new(), gravity_checks: Vec::new(), random_tick_speed: 3, difficulty: 1, orbs: HashMap::new(), bes: HashMap::new(), path_budget: 0, no_spawning: false, rng: rand::rngs::StdRng::from_entropy() };
         g.no_spawning = g.sh.cfg.no_spawning;
         g.commands_body = crate::commands::build_packet(&g.sh.cfg.data_dir, crate::commands::IMPLEMENTED);
         if g.commands_body.is_none() { log::warn!("no reports/commands.json: using the built-in command tree"); }
@@ -203,14 +205,14 @@ impl Game {
     fn load_level(&mut self) {
         let Some(d) = &self.dir else { return };
         if let Ok(s) = std::fs::read_to_string(d.join("basalt.json")) {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) { self.day_time = v["day_time"].as_i64().unwrap_or(1000); }
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) { self.day_time = v["day_time"].as_i64().unwrap_or(1000); self.difficulty = v["difficulty"].as_u64().unwrap_or(1).min(3) as u8; }
         }
     }
     fn save_level(&mut self) {
         if let Err(e) = self.world.save_all() { log::error!("saving world: {e:#}"); }
         let Some(d) = &self.dir else { return };
         let _ = std::fs::create_dir_all(d.join("players"));
-        let _ = std::fs::write(d.join("basalt.json"), serde_json::json!({ "day_time": self.day_time, "seed": self.sh.cfg.seed }).to_string());
+        let _ = std::fs::write(d.join("basalt.json"), serde_json::json!({ "day_time": self.day_time, "seed": self.sh.cfg.seed, "difficulty": self.difficulty }).to_string());
         for p in self.players.values() { self.save_player(p); }
         self.save_mobs();
     }
@@ -437,7 +439,7 @@ impl Game {
             .bool(false).bool(true).bool(false).varint(dim_type).str("minecraft:overworld").i64(self.hashed_seed())
             .u8(p.gamemode).i8(-1).bool(false).bool(self.sh.cfg.flat).bool(false).varint(0).varint(63).bool(false).u8(0);
         p.send(w);
-        let mut w = Writer::with_id(cb::CHANGE_DIFFICULTY); w.u8(combat::DIFFICULTY).bool(false); p.send(w);
+        let mut w = Writer::with_id(cb::CHANGE_DIFFICULTY); w.u8(self.difficulty).bool(false); p.send(w);
         Self::send_abilities(&p);
         let mut w = Writer::with_id(cb::SET_HELD_SLOT); w.varint(p.held as i32); p.send(w);
         let mut w = Writer::with_id(cb::UPDATE_RECIPES); w.varint(0).varint(0); p.send(w);

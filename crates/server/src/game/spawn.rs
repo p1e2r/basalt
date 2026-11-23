@@ -39,7 +39,7 @@ impl Game {
         let pls: Vec<([f64; 3], u8)> = self.players.values().filter(|p| !p.dead).map(|p| (p.pos, p.gamemode)).collect();
         for (ppos, gm) in pls {
             if gm == 3 { continue; }
-            if self.count_near(ppos, true) < HOSTILE_CAP { self.try_spawn_monsters(ppos); }
+            if self.difficulty > 0 && self.count_near(ppos, true) < HOSTILE_CAP { self.try_spawn_monsters(ppos); }
             if self.tick % 400 == 0 && self.count_near(ppos, false) < PASSIVE_CAP { for _ in 0..4 { self.try_spawn_animals(ppos); } }
         }
     }

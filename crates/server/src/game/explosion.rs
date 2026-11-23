@@ -72,7 +72,7 @@ impl Game {
             let kb = [d[0] / dl * impact, d[1] / dl * impact, d[2] / dl * impact];
             if is_player {
                 let creative = self.players.get(&eid).map(|p| matches!(p.gamemode, 1 | 3)).unwrap_or(true);
-                let dmg = basalt_game::difficulty_scaled(dmg, super::combat::DIFFICULTY);
+                let dmg = basalt_game::difficulty_scaled(dmg, self.difficulty);
                 self.hurt_by(eid, dmg, kind, DamageSource { cause: src_eid, direct: src_eid, killer: source.as_ref().map(|s| s.1.clone()), hurt_yaw: None });
                 if !creative { player_kb.push((eid, kb)); }
             } else {

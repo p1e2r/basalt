@@ -161,6 +161,7 @@ impl Game {
 
     /// Hunger, regeneration, starvation, eating. Once per tick per player.
     pub(super) fn tick_survival(&mut self) {
+        let difficulty = self.difficulty;
         let ids: Vec<i32> = self.players.keys().copied().collect();
         for eid in ids {
             let mut changed = false;
@@ -182,7 +183,8 @@ impl Game {
                 } else if p.food >= 18 && p.health < MAX_HEALTH {
                     if p.regen_timer >= 80 { p.health = (p.health + 1.0).min(MAX_HEALTH); p.exhaustion += 6.0; p.regen_timer = 0; changed = true; }
                 } else if p.food == 0 {
-                    if p.regen_timer >= 80 { p.regen_timer = 0; if p.health > 10.0 { starve = true; } } // easy difficulty: down to 5 hearts
+                    // starving: easy stops at 5 hearts, normal at half a heart, hard kills
+                    if p.regen_timer >= 80 { p.regen_timer = 0; if p.health > [20.0, 10.0, 1.0, 0.0][difficulty as usize] { starve = true; } }
                 } else { p.regen_timer = 0; }
                 if let Some((slot, left)) = p.using.as_mut() {
                     if *left > 0 { *left -= 1; }

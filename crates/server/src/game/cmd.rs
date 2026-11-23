@@ -68,6 +68,8 @@ const TIME_MARKERS: &[(&str, i64)] = &[
     ("midnight", 18000),
 ];
 
+const DIFFS: [&str; 4] = ["peaceful", "easy", "normal", "hard"];
+
 impl Game {
     fn resource_exists(&self, registry: &str, id: &str) -> bool {
         let short = registry.trim_start_matches("minecraft:");
@@ -663,6 +665,30 @@ impl Game {
             }
             path if path.starts_with("experience ") || path.starts_with("xp ") => {
                 self.cmd_experience(eid, p)?
+            }
+            "difficulty" => {
+                let k = DIFFS[self.difficulty as usize];
+                self.ok(
+                    eid,
+                    "commands.difficulty.query",
+                    vec![text::translate(&format!("options.difficulty.{k}"), vec![])],
+                );
+            }
+            path if path.starts_with("difficulty ") => {
+                // peaceful/easy/normal/hard are literals in the command tree
+                let name = p.path[1].to_lowercase();
+                let Some(d) = DIFFS.iter().position(|x| *x == name) else {
+                    return Err(err("argument.difficulty.invalid", &[&name]));
+                };
+                let tr = |k: &str| text::translate(&format!("options.difficulty.{k}"), vec![]);
+                if d as u8 == self.difficulty {
+                    return Err(err(
+                        "commands.difficulty.failure",
+                        &[&format!("options.difficulty.{name}")],
+                    ));
+                }
+                self.set_difficulty(d as u8);
+                self.ok(eid, "commands.difficulty.success", vec![tr(&name)]);
             }
             path if path.starts_with("gamerule ") => {
                 // only the rules Basalt acts on; others are reported as unsupported
@@ -1312,6 +1338,9 @@ impl Game {
         let Some(kind) = super::mob::MobKind::from_name(&id) else {
             return Err(err("commands.summon.failed", &[]));
         };
+        if kind.hostile() && self.difficulty == 0 {
+            return Err(err("commands.summon.failed.peaceful", &[]));
+        }
         let yaw = self.players[&eid].yaw;
         let extra = p.arg("nbt").to_lowercase();
         let color = extra.split("color:").nth(1).and_then(|c| {
@@ -1436,6 +1465,29 @@ impl Game {
     /// /experience (alias /xp) add|set|query, points or levels, with vanilla's reply keys.
     /// /experience (alias /xp) add|set|query, points or levels, with vanilla's reply keys and
     /// vanilla's model (level + float progress; the point counter only grows with added points).
+    /// Change the world difficulty: tell everyone; peaceful removes hostile mobs.
+    pub(super) fn set_difficulty(&mut self, d: u8) {
+        self.difficulty = d.min(3);
+        let dd = self.difficulty;
+        self.broadcast(None, || {
+            let mut w = Writer::with_id(cb::CHANGE_DIFFICULTY);
+            w.u8(dd).bool(false);
+            w
+        });
+        if dd == 0 {
+            let hostile: Vec<i32> = self
+                .mobs
+                .values()
+                .filter(|m| m.kind.hostile())
+                .map(|m| m.eid)
+                .collect();
+            for e in hostile {
+                self.mobs.remove(&e);
+                self.untrack(e);
+            }
+        }
+    }
+
     fn cmd_experience(&mut self, eid: i32, p: &Parsed) -> R<()> {
         use super::container::{add_points, xp_cost};
         let op = p.path[1].as_str();

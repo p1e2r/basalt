@@ -7,8 +7,6 @@ use basalt_data::{registries as reg, registry_id};
 use basalt_protocol::{ids::play::clientbound as cb, Writer};
 use rand::Rng;
 
-/// Difficulty sent to clients (change_difficulty) and used for mob damage scaling: Easy.
-pub const DIFFICULTY: u8 = 1;
 
 impl Game {
     /// Push a player: the client applies set_entity_motion for its own entity.
@@ -171,7 +169,7 @@ impl Game {
 
     /// Mob melee hit on a player.
     pub(super) fn mob_melee(&mut self, mob: &super::mob::Mob, target: i32) {
-        let dmg = basalt_game::difficulty_scaled(mob.kind.stats().attack, DIFFICULTY);
+        let dmg = basalt_game::difficulty_scaled(mob.kind.stats().attack, self.difficulty);
         let Some(p) = self.players.get(&target) else { return };
         let (dx, dz) = (p.pos[0] - mob.pos[0], p.pos[2] - mob.pos[2]);
         let l = (dx * dx + dz * dz).sqrt().max(1e-6);

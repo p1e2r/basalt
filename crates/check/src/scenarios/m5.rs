@@ -251,3 +251,46 @@ pub fn xp_command(ctx: &mut Ctx) -> Result<()> {
     ctx.note(log.join(" | "));
     Ok(())
 }
+
+/// /difficulty: query/set/unchanged replies, change_difficulty, zombie melee damage per difficulty
+/// (easy 2.5, normal 3, hard 4.5 vanilla), monsters refused in peaceful. Always leaves Easy (the
+/// vanilla server is shared).
+pub fn difficulty(ctx: &mut Ctx) -> Result<()> {
+    let r = difficulty_inner(ctx);
+    if let Ok(bot) = ctx.bot() { let _ = bot.cmd_reply("difficulty easy"); }
+    r
+}
+
+fn difficulty_inner(ctx: &mut Ctx) -> Result<()> {
+    let (bot, o) = roofed(ctx, 12, 5)?;
+    let key = |bot: &Bot, c: &str| -> Result<String> { Ok(bot.cmd_reply(c)?.first().map(|l| format!("{} {:?}", l.key.clone().unwrap_or_default(), l.args)).unwrap_or_default()) };
+    bot.cmd_reply("difficulty easy")?;
+    let q = key(&bot, "difficulty")?;
+    let same = key(&bot, "difficulty easy")?;
+    ctx.note(format!("query {q}; unchanged {same}"));
+    ctx.metric("query_is_easy", q.contains("options.difficulty.easy") as u8 as f64, 0.0);
+    ctx.metric("unchanged_fails", same.starts_with("commands.difficulty.failure") as u8 as f64, 0.0);
+    let z = (o[2] + 2) as f64 + 0.5;
+    for (name, want) in [("normal", 2u8), ("hard", 3)] {
+        let k = key(&bot, &format!("difficulty {name}"))?;
+        ctx.metric(&format!("set_{name}_ok"), k.starts_with("commands.difficulty.success") as u8 as f64, 0.0);
+        let got = bot.wait_until(Duration::from_secs(2), |s| s.difficulty == Some(want));
+        if !got { ctx.note(format!("{name}: reply {k}, last change_difficulty {:?}", bot.st().difficulty)); }
+        ctx.metric(&format!("packet_{name}"), got as u8 as f64, 0.0);
+        let t0 = Instant::now();
+        let (eid, _) = summon(&bot, "zombie", [o[0] as f64 + 6.5, Y as f64, z], "{PersistenceRequired:1b}")?;
+        if !bot.wait_until(Duration::from_secs(15), |s| s.damage.iter().any(|d| d.0 >= t0 && d.1 == "mob_attack")) { bail!("zombie never hit on {name}"); }
+        bot.wait_ticks(2);
+        let dm = hits(&bot, t0, "mob_attack");
+        ctx.metric(&format!("zombie_hit_{name}"), dm[0] as f64, 0.01);
+        bot.cmd_reply(&format!("kill {}", bot.st().entities.get(&eid).map(|e| e.uuid.to_string()).unwrap_or_default()))?;
+        bot.cmd_reply("effect give @s instant_health 1 5")?;
+        bot.wait_ticks(10);
+    }
+    let k = key(&bot, "difficulty peaceful")?;
+    ctx.metric("set_peaceful_ok", k.starts_with("commands.difficulty.success") as u8 as f64, 0.0);
+    let s = key(&bot, &format!("summon zombie {} {} {}", o[0] + 6, Y, o[2] + 2))?;
+    ctx.note(format!("peaceful summon: {s}"));
+    ctx.metric("peaceful_summon_refused", s.starts_with("commands.summon.failed.peaceful") as u8 as f64, 0.0);
+    Ok(())
+}

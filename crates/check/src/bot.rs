@@ -124,6 +124,8 @@ pub struct State {
     pub xp_total: i32,
     /// entities removed by remove_entities (with their last known state), oldest first
     pub removed: Vec<Entity>,
+    /// last change_difficulty (0 peaceful .. 3 hard)
+    pub difficulty: Option<u8>,
     out: UnboundedSender<Vec<u8>>,
     last_sent: ([f64; 3], f32, f32, bool),
     ticks_since_pos: u32,
@@ -217,7 +219,7 @@ impl Bot {
             spawned: false, loaded_sent: false, dead: false, death_msg: None, health: 20.0, food: 20, saturation: 5.0, air: 300, ticks_frozen: 0, flags: 0,
             effects: HashMap::new(), inv: vec![Stack::default(); 46], cursor: Stack::default(), held: 0, state_id: 0, cont_log: Vec::new(), screen: None, container: Vec::new(),
             chat: Vec::new(), entities: HashMap::new(), players: HashMap::new(), world: World::default(), teleports: Vec::new(), plog: Vec::new(),
-            counts: HashMap::new(), ticks: 0, disconnected: None, damage: Vec::new(), health_log: Vec::new(), taken: Vec::new(), explosions: Vec::new(), op_level: 0, entity_events: Vec::new(), registries: HashMap::new(), block_updates: 0, screen_title: String::new(), props: HashMap::new(), prop_log: Vec::new(), block_events: Vec::new(), sounds: Vec::new(), xp_total: 0, removed: Vec::new(),
+            counts: HashMap::new(), ticks: 0, disconnected: None, damage: Vec::new(), health_log: Vec::new(), taken: Vec::new(), explosions: Vec::new(), op_level: 0, entity_events: Vec::new(), registries: HashMap::new(), block_updates: 0, screen_title: String::new(), props: HashMap::new(), prop_log: Vec::new(), block_events: Vec::new(), sounds: Vec::new(), xp_total: 0, removed: Vec::new(), difficulty: None,
             out: otx, last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input: 0, seq: 0,
         }));
         let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -533,6 +535,7 @@ fn handle(s: &mut State, id: i32, data: &[u8]) -> Result<()> {
         cb::CONTAINER_SET_DATA => { let w = r.varint()?; let id = r.i16()?; let v = r.i16()?; if s.screen.as_ref().map(|x| x.0) == Some(w) { s.props.insert(id, v); s.prop_log.push((Instant::now(), id, v)); } }
         cb::BLOCK_EVENT => { let (x, y, z) = r.position()?; let t = r.u8()?; let v = r.u8()?; s.block_events.push((Instant::now(), [x, y, z], t, v)); }
         cb::SOUND => { let id = r.varint()?; if id > 0 { s.sounds.push((Instant::now(), id - 1)); } }
+        cb::CHANGE_DIFFICULTY => { s.difficulty = Some(r.u8()?); }
         cb::SET_EXPERIENCE => { let _p = r.f32()?; let _l = r.varint()?; s.xp_total = r.varint()?; }
         cb::BLOCK_UPDATE => { let (x, y, z) = r.position()?; let st = r.varint()?; s.world.set(x, y, z, st as u32); s.block_updates += 1; }
         cb::SECTION_BLOCKS_UPDATE => {
