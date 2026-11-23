@@ -1508,6 +1508,27 @@ impl Game {
         } else {
             format!("minecraft:{spec}")
         };
+        // ids / tags are validated against the registry (data files), whatever the generator
+        let rel = full
+            .trim_start_matches('#')
+            .trim_start_matches("minecraft:");
+        let dir = if full.starts_with('#') {
+            "tags/worldgen/structure"
+        } else {
+            "worldgen/structure"
+        };
+        let known = !rel.is_empty()
+            && self
+                .sh
+                .cfg
+                .data_dir
+                .join("data/minecraft")
+                .join(dir)
+                .join(format!("{rel}.json"))
+                .is_file();
+        if !known {
+            return Err(err("commands.locate.structure.invalid", &[&full]));
+        }
         match found {
             Err(()) => Err(err("commands.locate.structure.invalid", &[&full])),
             Ok(None) => Err(err("commands.locate.structure.not_found", &[&full])),

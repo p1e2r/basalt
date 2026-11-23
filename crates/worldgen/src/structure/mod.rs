@@ -5,7 +5,11 @@
 //! Every rule here was derived from the data files and checked against structure starts saved
 //! by the vanilla server (see the `structures` example); rules are listed in NOTES.md.
 
-#![allow(clippy::type_complexity, clippy::needless_range_loop, clippy::result_unit_err)]
+#![allow(
+    clippy::type_complexity,
+    clippy::needless_range_loop,
+    clippy::result_unit_err
+)]
 
 pub mod jigsaw;
 pub mod place;
