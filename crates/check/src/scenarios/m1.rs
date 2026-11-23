@@ -296,3 +296,66 @@ pub fn persistence(ctx: &mut Ctx) -> Result<()> {
     ctx.check(ctx.block_is(&bot, rock, "air")?, "broken block came back");
     Ok(())
 }
+
+/// Two-block blocks, connection shapes, support checks and trapdoor/shift rules, measured against vanilla (differential).
+pub fn place_shapes(ctx: &mut Ctx) -> Result<()> {
+    let bot = ctx.bot()?;
+    let o = ctx.arena(&bot, 14, 10, 6)?;
+    ctx.stand(&bot, o[0] + 4, o[2] + 3, "creative")?;
+    for i in ["stone", "oak_door", "red_bed", "lilac"] { give(&bot, i, 4)?; }
+    let y = ARENA_Y + 1;
+    let floor = |x: i32, z: i32| [o[0] + x, y - 1, o[2] + z];
+    let at = |x: i32, z: i32| [o[0] + x, y, o[2] + z];
+    let place = |item: &str, against: [i32; 3], face: u8, yaw: f32| -> Result<()> {
+        hold(&bot, item)?;
+        bot.look(yaw, 20.0); bot.wait_ticks(2);
+        bot.place_at(against, face, [0.5, 1.0, 0.5]);
+        bot.wait_ticks(4); Ok(())
+    };
+    let mut results: Vec<(String, bool)> = Vec::new();
+    let mut want = |ctx: &mut Ctx, bot: &Bot, name: &str, p: [i32; 3], state: &str| -> Result<()> {
+        let ok = ctx.block_is(bot, p, state)?;
+        ctx.check(ok, format!("{name}: want {state}, server has {}", crate::query::basalt_block(bot, p).unwrap_or_default()));
+        results.push((name.into(), ok)); Ok(())
+    };
+    // door: both halves, hinge default left, facing = look direction
+    place("oak_door", floor(2, 1), 1, 0.0)?;
+    want(ctx, &bot, "door lower", at(2, 1), "oak_door[facing=south,half=lower,hinge=left,open=false,powered=false]")?;
+    want(ctx, &bot, "door upper", [at(2, 1)[0], y + 1, at(2, 1)[2]], "oak_door[facing=south,half=upper,hinge=left,open=false,powered=false]")?;
+    // a plain click toggles the door instead of placing the held block
+    hold(&bot, "stone")?; bot.place_at(at(2, 1), 3, [0.5, 0.5, 1.0]); bot.wait_ticks(4);
+    want(ctx, &bot, "door opened", at(2, 1), "oak_door[facing=south,half=lower,hinge=left,open=true,powered=false]")?;
+    // bed: head one block ahead
+    place("red_bed", floor(5, 1), 1, 0.0)?;
+    want(ctx, &bot, "bed foot", at(5, 1), "red_bed[facing=south,occupied=false,part=foot]")?;
+    want(ctx, &bot, "bed head", at(5, 2), "red_bed[facing=south,occupied=false,part=head]")?;
+    // tall flower
+    setblock(&bot, floor(7, 1), "grass_block")?;
+    place("lilac", floor(7, 1), 1, 0.0)?;
+    want(ctx, &bot, "lilac lower", at(7, 1), "lilac[half=lower]")?;
+    want(ctx, &bot, "lilac upper", [at(7, 1)[0], y + 1, at(7, 1)[2]], "lilac[half=upper]")?;
+    bot.cmd("clear"); bot.wait_ticks(4);
+    for i in ["oak_fence", "cobblestone_wall", "glass_pane", "torch", "oak_trapdoor"] { give(&bot, i, 4)?; }
+    // fence / wall / pane connect to neighbours and to each other
+    place("oak_fence", floor(3, 5), 1, 0.0)?;
+    place("oak_fence", floor(4, 5), 1, 0.0)?;
+    want(ctx, &bot, "fence west", at(3, 5), "oak_fence[east=true,north=false,south=false,waterlogged=false,west=false]")?;
+    want(ctx, &bot, "fence east", at(4, 5), "oak_fence[east=false,north=false,south=false,waterlogged=false,west=true]")?;
+    place("cobblestone_wall", floor(6, 5), 1, 0.0)?;
+    place("cobblestone_wall", floor(7, 5), 1, 0.0)?;
+    want(ctx, &bot, "wall straight", at(6, 5), "cobblestone_wall[east=low,north=none,south=none,up=true,waterlogged=false,west=none]")?;
+    place("glass_pane", floor(6, 6), 1, 0.0)?;
+    want(ctx, &bot, "pane next to wall", at(6, 6), "glass_pane[east=false,north=true,south=false,waterlogged=false,west=false]")?;
+    // trapdoor faces the player when clicked on top of a block
+    place("oak_trapdoor", floor(8, 3), 1, 0.0)?;
+    want(ctx, &bot, "trapdoor faces the player", at(8, 3), "oak_trapdoor[facing=north,half=bottom,open=false,powered=false,waterlogged=false]")?;
+    // torch on top of a fence post, and clicked on the side of a fence: whether each is accepted is compared with vanilla (no fixed expectation)
+    place("torch", at(3, 5), 1, 0.0)?;
+    let on_post = ctx.block_is(&bot, [at(3, 5)[0], y + 1, at(3, 5)[2]], "torch")?;
+    ctx.metric("torch_on_fence_post", on_post as i32 as f64, 0.0);
+    place("torch", at(4, 5), 5, 0.0)?;
+    let side = ctx.block_is(&bot, at(5, 5), "torch")?;
+    ctx.metric("torch_beside_fence", side as i32 as f64, 0.0);
+    for (i, (_, ok)) in results.iter().enumerate() { ctx.metric(&format!("place_shapes_{i}"), *ok as i32 as f64, 0.0); }
+    Ok(())
+}

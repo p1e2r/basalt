@@ -597,7 +597,8 @@ impl Game {
                 if (keep && !BlockState(old).is_air()) || old == state {
                     return Err(err("commands.setblock.failed", &[]));
                 }
-                self.set_block(b[0], b[1], b[2], state);
+                // reshaped for its neighbours and with neighbour updates, like vanilla's /setblock
+                self.set_block_shaped(b[0], b[1], b[2], state);
                 self.ok(
                     eid,
                     "commands.setblock.success",
