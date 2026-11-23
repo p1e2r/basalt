@@ -124,6 +124,7 @@ fn main() -> Result<()> {
     let mut bio_conf: HashMap<(String, String), u64> = HashMap::new();
     let mut gen_time = 0f64;
     let mut chunks = 0;
+    let mut pair_count = 0;
     for cx in cx0 - rad..=cx0 + rad {
         for cz in cz0 - rad..=cz0 + rad {
             let Some(v) = read_chunk(dir, cx, cz)? else { continue };
@@ -147,6 +148,14 @@ fn main() -> Result<()> {
                     if terrain(ours) && terrain(theirs) {
                         blk_n += 1;
                         if ours == theirs { blk_ok += 1; } else {
+                            if let Ok(pair) = std::env::var("PAIR") {
+                                let (pa, pb) = pair.split_once(',').unwrap();
+                                if BlockState(ours as u32).name() == pa && BlockState(theirs as u32).name() == pb && pair_count < 30 {
+                                    pair_count += 1;
+                                    let bi = &v.biomes[si * 64 + (((i >> 8) & 15) >> 2 << 4) + ((i >> 4 & 15) >> 2 << 2) + ((i & 15) >> 2)];
+                                    println!("  {pair} at {} {} {} ({bi})", cx * 16 + (i & 15) as i32, (si * 16 + (i >> 8)) as i32 + MIN_Y, cz * 16 + ((i >> 4) & 15) as i32);
+                                }
+                            }
                             *blk_conf.entry((BlockState(ours as u32).name().to_string(), BlockState(theirs as u32).name().to_string())).or_default() += 1;
                         }
                     }
@@ -193,6 +202,6 @@ fn main() -> Result<()> {
     println!("blocks (terrain, exact):  {:.3}% of {blk_n}", pct(blk_ok, blk_n));
     let mut kv: Vec<_> = blk_conf.into_iter().collect();
     kv.sort_by(|a, b| b.1.cmp(&a.1));
-    for ((a, b), n) in kv.iter().take(12) { println!("    ours {a} vanilla {b}: {n}"); }
+    for ((a, b), n) in kv.iter().take(std::env::var("TOP").ok().and_then(|t| t.parse().ok()).unwrap_or(12)) { println!("    ours {a} vanilla {b}: {n}"); }
     Ok(())
 }

@@ -11,6 +11,7 @@ pub mod biome;
 pub mod density;
 pub mod noise;
 pub mod random;
+pub mod surface;
 
 use aquifer::{Aquifer, AquiferNodes, Fluid};
 use anyhow::{anyhow, Context, Result};
@@ -18,6 +19,7 @@ use basalt_data::BlockState;
 use density::{Eval, Graph, GraphBuilder, Mode, Node, NodeId};
 use random::{PosFactory, Rng, Xoroshiro};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub const MIN_Y: i32 = -64;
@@ -37,6 +39,13 @@ impl GeneratedChunk {
         let yy = (y - MIN_Y) as usize;
         self.blocks[yy >> 4][((yy & 15) << 8) | (z << 4) | x]
     }
+}
+
+/// Generation stages, in order.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum Stage {
+    Noise,
+    Surface,
 }
 
 pub(crate) struct Router {
@@ -109,6 +118,32 @@ pub struct Generator {
     interp_args: Vec<NodeId>,
     pub biome_names: Vec<String>,
     biomes: biome::BiomeSource,
+    surface: surface::SurfaceSystem,
+}
+
+/// Environment handed to the surface rules.
+struct Env<'a, 'g> {
+    g: &'a Generator,
+    e: &'a mut Eval<'g>,
+    aq: &'a mut Aquifer,
+    cache: HashMap<(i32, i32, i32), u8>,
+    last: Option<u32>,
+}
+
+impl surface::SurfaceEnv for Env<'_, '_> {
+    fn noise_biome(&mut self, qx: i32, qy: i32, qz: i32) -> u8 {
+        if let Some(b) = self.cache.get(&(qx, qy, qz)) { return *b; }
+        self.e.set_mode(Mode::Direct);
+        let t = self.g.climate(self.e, qx * 4, qy * 4, qz * 4);
+        let (b, leaf) = self.g.biomes.search(&t, self.last);
+        self.last = Some(leaf);
+        self.cache.insert((qx, qy, qz), b);
+        b
+    }
+    fn preliminary_surface(&mut self, x: i32, z: i32) -> i32 {
+        self.e.set_mode(Mode::Direct);
+        self.aq.preliminary_surface(self.e, x, z)
+    }
 }
 
 /// Default location of the data generator output.
@@ -155,14 +190,17 @@ impl Generator {
         };
         let biome_names = biome_names(data_dir)?;
         let biomes = biome::BiomeSource::load(data_dir, &biome_names)?;
+        let default_block = state_from_json(&settings["default_block"])?;
+        let sea_level = settings["sea_level"].as_i64().unwrap_or(63) as i32;
+        let surface = surface::SurfaceSystem::load(&wg, &settings, rand, &biome_names, default_block, sea_level, random::biome_zoom_seed(seed))?;
         Ok(Generator {
-            seed, biome_names, biomes,
+            seed, biome_names, biomes, surface,
             aquifer_rand: rand.from_hash("minecraft:aquifer").fork_positional(),
             ore_rand: rand.from_hash("minecraft:ore").fork_positional(),
-            sea_level: settings["sea_level"].as_i64().unwrap_or(63) as i32,
+            sea_level,
             aquifers_enabled: settings["aquifers_enabled"].as_bool().unwrap_or(true),
             ore_veins_enabled: settings["ore_veins_enabled"].as_bool().unwrap_or(true),
-            default_block: state_from_json(&settings["default_block"])?,
+            default_block,
             default_fluid: state_from_json(&settings["default_fluid"])?,
             graph, router, blocks, interp_args,
         })
@@ -170,9 +208,25 @@ impl Generator {
 
     /// Generate the terrain of one chunk.
     pub fn generate_chunk(&self, cx: i32, cz: i32) -> GeneratedChunk {
+        self.generate_stages(cx, cz, Stage::Surface)
+    }
+
+    /// Generate up to (and including) the given stage.
+    pub fn generate_stages(&self, cx: i32, cz: i32, stage: Stage) -> GeneratedChunk {
         let mut e = Eval::new(&self.graph);
-        let blocks = self.fill_noise(&mut e, cx, cz);
+        let mut aq = Aquifer::new(self.router.aq, self.aquifer_rand, self.sea_level, self.aquifers_enabled);
+        let mut blocks = self.fill_noise(&mut e, &mut aq, cx, cz);
         let biomes = self.fill_biomes(&mut e, cx, cz);
+        if stage >= Stage::Surface {
+            let mut cache = HashMap::new();
+            for (si, sec) in biomes.iter().enumerate() {
+                for (j, b) in sec.iter().enumerate() {
+                    cache.insert((cx * 4 + (j & 3) as i32, si as i32 * 4 + (j >> 4) as i32 + MIN_Y / 4, cz * 4 + ((j >> 2) & 3) as i32), *b);
+                }
+            }
+            let mut env = Env { g: self, e: &mut e, aq: &mut aq, cache, last: None };
+            self.surface.build(&mut env, cx, cz, &mut blocks);
+        }
         GeneratedChunk { blocks, biomes }
     }
 
@@ -230,7 +284,7 @@ impl Generator {
     }
 
     /// Noise stage: stone / water / lava / air (+ ore veins).
-    pub fn fill_noise(&self, e: &mut Eval, cx: i32, cz: i32) -> Vec<[u16; 4096]> {
+    pub fn fill_noise(&self, e: &mut Eval, aq: &mut Aquifer, cx: i32, cz: i32) -> Vec<[u16; 4096]> {
         let x0 = cx * 16;
         let z0 = cz * 16;
         const CW: i32 = 4;
@@ -254,7 +308,6 @@ impl Generator {
                 }
             }
         }
-        let mut aq = Aquifer::new(self.router.aq, self.aquifer_rand, self.sea_level, self.aquifers_enabled);
         let mut out = vec![[self.blocks.air; 4096]; SECTIONS];
         let bl = self.blocks;
         for lx in 0..16i32 {
