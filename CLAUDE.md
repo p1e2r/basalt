@@ -91,11 +91,11 @@ Read NOTES.md for verified packet formats.
 - [ ] M8 Nether/End, portals, structures
 - [ ] M9 redstone  - [ ] M10 enchant/anvil/brewing/smithing/XP  - [ ] M11 villagers/raids/AI
 - [ ] M12 bosses/endgame  - [ ] M13 commands/datapacks/advancements/scoreboards
-- [ ] M14 client polish  - [ ] M15 online-mode/encryption/chat signing
+- [ ] M14 client polish
 - [ ] M16 lossless vanilla worlds + admin files  - [ ] M17 performance  - [~] M18 tests/CI/docs/plugins
       (done: crates/check harness, check-all.sh, CI workflow; todo: --client group (visual/asset/input/UI/perf), docs, plugins)
 - Server gaps: survival drops go straight to inventory (no item entities), no container_click /
-  crafting, no mobs, no fluids/redstone ticking, no online-mode auth. Real-client walking/
+  crafting, no mobs, no fluids/redstone ticking (Basalt is offline-mode only by design). Real-client walking/
   breaking driven by a human not yet verified (only bot-driven).
 - Known client gaps: no entity models (boxes only), survival dig time not hardness-based,
   no inventory screen, no sounds, edge chunks without loaded neighbours are not meshed.
@@ -144,7 +144,6 @@ Read NOTES.md for verified packet formats.
 13. Full commands + datapacks/functions, advancements, scoreboards.
 14. Client polish: all screens, particles, animations, lighting/AO, sky, sounds/music,
     resource packs, keybinds.
-15. Online-mode auth, encryption, chat signing.
 16. Lossless vanilla world compatibility + server admin files (server.properties, ops,
     whitelist, bans).
 17. Performance: multithreading, lighting engine, LOD.
