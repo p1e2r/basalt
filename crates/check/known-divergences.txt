@@ -3,23 +3,15 @@
 # These are reported on every run but only classes NOT listed here fail (`new=` in the RESULT line).
 # Fixing a divergence: fix it, rerun the harness, delete the line. Seeds/sizes: default seed 1, default case counts.
 clicks state/table/mode1
+# dig: one case where vanilla applied the airborne rate (31 ticks) to a bot that only claimed to be airborne while standing
+# on the floor (the usual claim-only cases agree: both servers use the ground rate); not reproduced by scans
+dig threshold/basalt-accepts-too-early/dry+air
 # commands: armor_stand/villager are not implemented entities (clean `commands.summon.failed`); the setblock class is state drift
 # between the two arenas (vanilla water flows, entities differ), not a parsing difference
 commands outcome/summon/vanilla-ok-vs-basalt-fail
 commands outcome/setblock/vanilla-fail-vs-basalt-ok
 commands outcome/setblock/vanilla-ok-vs-basalt-fail
 commands outcome/fill/vanilla-ok-vs-basalt-fail
-dig threshold/basalt-accepts-too-early/dry
-dig threshold/basalt-accepts-too-late/dry
-dig threshold/basalt-accepts-too-late/dry+air
-dig never-breaks/hand
-dig never-breaks/sword
-dig threshold/basalt-accepts-too-late/water
-dig never-breaks/axe
-dig never-breaks/hoe
-dig never-breaks/shovel
-dig threshold/basalt-accepts-too-early/water
-dig threshold/basalt-accepts-too-late/water+air
 place placed/door/extra
 place placed/wall/prop
 place neighbor/other
@@ -110,4 +102,3 @@ place target-changed/slab
 place target-changed/torch
 worldgen seed=42 site=2,-3,2
 worldgen seed=2026 site=0,0,3
-dig threshold/basalt-accepts-too-early/dry+air

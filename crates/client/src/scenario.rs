@@ -390,7 +390,7 @@ fn models(c: &Ctx) -> Result<Outcome> {
     let spots: Vec<[f64; 3]> = (0..mobs.len()).map(|i| [o[0] - 7.0 + (i % 4) as f64 * 4.5, o[1], o[2] - 7.0 - (i / 4) as f64 * 5.0]).collect();
     cmd(&mut g, "kill @e[type=!player]");
     wait(&mut g, 0.5)?;
-    for (m, p) in mobs.iter().zip(&spots) { cmd(&mut g, &format!("summon {m} {} {} {} NoAI", p[0], p[1], p[2])); }
+    for (m, p) in mobs.iter().zip(&spots) { cmd(&mut g, &format!("summon {m} {} {} {} {{NoAI:1b}}", p[0], p[1], p[2])); }
     let have = |g: &Game, m: &str| g.entities.values().any(|e| crate::entity::type_name(e.kind) == m);
     if !wait_until(&mut g, 4.0, |g| mobs.iter().all(|m| have(g, m)))? {
         let missing: Vec<&&str> = mobs.iter().filter(|m| !have(&g, m)).collect();
@@ -651,7 +651,7 @@ fn sounds(c: &Ctx) -> Result<Outcome> {
     let n = g.sounds.log.len();
     let (near, far) = (g.sounds.log[n - 2].gain, g.sounds.log[n - 1].gain);
     // server-sent sound packet: hurt a mob (Basalt M5 sends sound packets for mob hurt)
-    cmd(&mut g, "summon cow 700.5 -60 3 NoAI");
+    cmd(&mut g, "summon cow 700.5 -60 3 {NoAI:1b}");
     let have_cow = wait_until(&mut g, 3.0, |g| g.entities.values().any(|e| crate::entity::type_name(e.kind) == "cow"))?;
     let mut server_sound = None;
     if have_cow {
