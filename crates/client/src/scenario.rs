@@ -444,7 +444,10 @@ fn models(c: &Ctx) -> Result<Outcome> {
     wait(&mut g, 1.0)?;
     let wi = capture(&mut g)?; g.hide_entities = true; let wo = capture(&mut g)?; g.hide_entities = false;
     save(&g, &wi, "item_entity");
-    let item_px = { let e = g.entities.values().find(|e| crate::entity::type_name(e.kind) == "item").unwrap(); let p = g.project(e.pos).unwrap_or((0.0, 0.0)); diff_count(&wi, &wo, p.0 as i32 - 60, p.1 as i32 - 60, p.0 as i32 + 60, p.1 as i32 + 30) };
+    // the thrown stack, not the pig's loot: pick the item entity nearest to us
+    let me = g.player.pos;
+    let item_px = { let e = g.entities.values().filter(|e| crate::entity::type_name(e.kind) == "item")
+        .min_by(|a, b| { let d = |e: &crate::entity::Entity| (0..3).map(|k| (e.pos[k] - me[k]).powi(2)).sum::<f64>(); d(a).partial_cmp(&d(b)).unwrap() }).unwrap(); let p = g.project(e.pos).unwrap_or((0.0, 0.0)); diff_count(&wi, &wo, p.0 as i32 - 60, p.1 as i32 - 60, p.0 as i32 + 60, p.1 as i32 + 30) };
     if item_px < 20 { bail!("dropped item not drawn ({item_px} px)"); }
     // arrow geometry exists (no /summon arrow needed)
     let mut m = crate::mesh::MeshData::default();
