@@ -69,3 +69,11 @@ real server/client over the wire.
 - Item stack components on the wire: damage (type 3) = varint; enchantments (type 13) = varint n,
   {varint enchantment id (synced enchantment registry order), varint level}.
 - basalt-probe proxy does not handle compression: run the Basalt side with --compression -1 when proxying.
+- LpVec3 (velocity in add_entity / set_entity_motion): single 0 byte if all |v| < 2^-15; else
+  scale = ceil(max |v|), bits = (scale&3) | (scale>3)<<2 | x15<<3 | y15<<18 | z15<<33 where
+  c15 = round((c/scale*0.5+0.5)*32766); written as u8, u8, u32 BE (low 48 bits), + varint(scale>>2)
+  if scale>3. (Round-trips vanilla bytes; see protocol buf.rs test.)
+- Vanilla item tracking (measured): add_entity carries the initial velocity (block drop: (±0.1, 0.2,
+  ±0.1)); then move_entity_pos (i16 deltas of the last sent position ×4096, + bool onGround) and
+  set_entity_motion every 20 ticks and on landing; entity_position_sync when a delta overflows.
+  Items: gravity 0.04 before moving, drag 0.98, ground friction slipperiness×0.98, bounce vy×-0.5.

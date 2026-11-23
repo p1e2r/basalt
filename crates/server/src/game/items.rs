@@ -1,4 +1,10 @@
-//! Item entities: spawning, simple physics, merging, pickup, despawn.
+//! Item entities: spawning, vanilla-matching physics, merging, pickup, despawn, and tracking.
+//!
+//! Tracking follows what a vanilla 26.2 server sends for items (measured with the proxy): the
+//! initial velocity rides in add_entity and the client simulates; the server then sends a
+//! position delta (move_entity_pos, quantized to 1/4096 of the last *sent* position) plus
+//! set_entity_motion when the velocity changed, every 20 ticks or when the item lands/lifts off,
+//! and a full entity_position_sync only when the delta doesn't fit in an i16.
 use super::{NO_ENCH, Game, Stack};
 use basalt_protocol::{ids::play::clientbound as cb, Writer};
 use basalt_world::props;
@@ -15,8 +21,16 @@ pub struct ItemEntity {
     pub pickup_delay: u32,
     pub age: u32,
     pub on_ground: bool,
-    sent_pos: [f64; 3],
+    track: Track,
 }
+
+/// What viewers were last told about an entity (shared by every viewer, like vanilla's ServerEntity).
+pub struct Track { pos_q: [i64; 3], vel: [f64; 3], on_ground: bool, ticks: u32 }
+
+/// Vanilla's tracker update interval for item entities.
+const ITEM_UPDATE_INTERVAL: u32 = 20;
+
+fn quantize(v: f64) -> i64 { (v * 4096.0).round() as i64 }
 
 const DESPAWN_TICKS: u32 = 6000;
 
@@ -26,7 +40,8 @@ impl Game {
     pub(super) fn spawn_item(&mut self, pos: [f64; 3], vel: [f64; 3], stack: Stack, pickup_delay: u32) {
         if stack.count <= 0 { return; }
         let eid = self.sh.next_eid.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let e = ItemEntity { eid, uuid: Uuid::new_v4(), pos, vel, stack, pickup_delay, age: 0, on_ground: false, sent_pos: pos };
+        let track = Track { pos_q: [quantize(pos[0]), quantize(pos[1]), quantize(pos[2])], vel, on_ground: false, ticks: 0 };
+        let e = ItemEntity { eid, uuid: Uuid::new_v4(), pos, vel, stack, pickup_delay, age: 0, on_ground: false, track };
         self.items.insert(eid, e);
         self.sync_item_viewers();
     }
@@ -56,7 +71,10 @@ impl Game {
 
     fn item_add_packets(&self, e: &ItemEntity) -> (Writer, Writer) {
         let mut a = Writer::with_id(cb::ADD_ENTITY);
-        a.varint(e.eid).uuid(e.uuid).varint(self.item_type()).f64(e.pos[0]).f64(e.pos[1]).f64(e.pos[2]).u8(0).u8(0).u8(0).u8(0).varint(0);
+        // initial velocity goes with the spawn so the client can simulate the pop from the start
+        // spawn at the shared tracking base so later deltas line up for late viewers too
+        let b = e.track.pos_q.map(|c| c as f64 / 4096.0);
+        a.varint(e.eid).uuid(e.uuid).varint(self.item_type()).f64(b[0]).f64(b[1]).f64(b[2]).lpvec3(e.track.vel).u8(0).u8(0).u8(0).varint(0);
         let mut m = Writer::with_id(cb::SET_ENTITY_DATA);
         // index 8 = item stack (serializer 7), then terminator
         m.varint(e.eid).u8(8).varint(7);
@@ -100,22 +118,33 @@ impl Game {
         let ids: Vec<i32> = self.items.keys().copied().collect();
         let mut dead = Vec::new();
         for id in &ids {
-            let (pos, vel, ground) = { let e = &self.items[id]; (e.pos, e.vel, e.on_ground) };
+            let (pos, vel) = { let e = &self.items[id]; (e.pos, e.vel) };
             // unloaded chunk: freeze
             if self.world.chunk((pos[0].floor() as i32) >> 4, (pos[2].floor() as i32) >> 4).is_none() { continue; }
+            // vanilla item order: buoyancy or gravity, move with collision, then drag/friction
             let mut v = vel; let mut p = pos;
-            v[1] -= 0.04;
+            let in_water = props::props(self.world.get_block(p[0].floor() as i32, (p[1] + 0.1).floor() as i32, p[2].floor() as i32)).has_fluid();
+            if in_water { if v[1] < 0.06 { v[1] += 5.0e-4; } v[0] *= 0.99; v[2] *= 0.99; } else { v[1] -= 0.04; }
             // stuck inside a block: push up
             if self.solid(p[0], p[1] + 0.1, p[2]) { p[1] = p[1].floor() + 1.0; v[1] = 0.0; }
             let ny = p[1] + v[1];
             let mut on_ground = false;
-            if v[1] < 0.0 && self.solid(p[0], ny, p[2]) { p[1] = ny.floor() + 1.0; v[1] = 0.0; on_ground = true; } else { p[1] = ny; }
+            if v[1] < 0.0 && self.solid(p[0], ny, p[2]) { p[1] = ny.floor() + 1.0; v[1] = 0.0; on_ground = true; }
+            else if v[1] > 0.0 && self.solid(p[0], ny + 0.25, p[2]) { v[1] = 0.0; }
+            else { p[1] = ny; }
             for ax in [0usize, 2] {
                 let mut q = p; q[ax] += v[ax];
-                if self.solid(q[0], q[1] + 0.05, q[2]) { v[ax] = 0.0; } else { p[ax] = q[ax]; }
+                let edge = q[ax] + 0.125 * v[ax].signum();
+                let mut probe = q; probe[ax] = edge;
+                if self.solid(probe[0], probe[1] + 0.05, probe[2]) { v[ax] = 0.0; } else { p[ax] = q[ax]; }
             }
-            let f = if on_ground || ground { 0.6 * 0.98 } else { 0.98 };
+            let slip = if on_ground {
+                match basalt_data::BlockState(self.world.get_block(p[0].floor() as i32, (p[1] - 0.99).floor() as i32, p[2].floor() as i32)).name() {
+                    "ice" | "packed_ice" | "frosted_ice" => 0.98, "blue_ice" => 0.989, "slime_block" => 0.8, _ => 0.6 }
+            } else { 1.0 };
+            let f = slip * 0.98;
             v[0] *= f; v[2] *= f; v[1] *= 0.98;
+            if on_ground && v[1] < 0.0 { v[1] *= -0.5; }
             if p[1] < basalt_world::MIN_Y as f64 - 64.0 { dead.push(*id); continue; }
             let e = self.items.get_mut(id).unwrap();
             e.pos = p; e.vel = v; e.on_ground = on_ground; e.age += 1;
@@ -164,19 +193,33 @@ impl Game {
                 let e = self.items.get_mut(&item_id).unwrap(); e.stack.count = left;
             }
         }
-        // movement updates
-        if self.tick % 2 == 0 {
-            let mut syncs = Vec::new();
-            for e in self.items.values_mut() {
-                if (0..3).any(|k| (e.pos[k] - e.sent_pos[k]).abs() > 1e-3) {
-                    e.sent_pos = e.pos;
-                    let mut w = Writer::with_id(cb::ENTITY_POSITION_SYNC);
-                    w.varint(e.eid).f64(e.pos[0]).f64(e.pos[1]).f64(e.pos[2]).f64(e.vel[0]).f64(e.vel[1]).f64(e.vel[2]).f32(0.0).f32(0.0).bool(e.on_ground);
-                    syncs.push((e.eid, w));
-                }
+        // tracking: deltas + motion every 20 ticks or on landing/lift-off, like vanilla
+        let mut out: Vec<(i32, Vec<Writer>)> = Vec::new();
+        for e in self.items.values_mut() {
+            let t = &mut e.track;
+            t.ticks += 1;
+            let ground_changed = e.on_ground != t.on_ground;
+            if t.ticks % ITEM_UPDATE_INTERVAL != 0 && !ground_changed { continue; }
+            let mut ws = Vec::new();
+            let q = [quantize(e.pos[0]), quantize(e.pos[1]), quantize(e.pos[2])];
+            let d = [q[0] - t.pos_q[0], q[1] - t.pos_q[1], q[2] - t.pos_q[2]];
+            if d.iter().any(|c| c.abs() > i16::MAX as i64) {
+                let mut w = Writer::with_id(cb::ENTITY_POSITION_SYNC);
+                w.varint(e.eid).f64(e.pos[0]).f64(e.pos[1]).f64(e.pos[2]).f64(e.vel[0]).f64(e.vel[1]).f64(e.vel[2]).f32(0.0).f32(0.0).bool(e.on_ground);
+                ws.push(w); t.pos_q = q;
+            } else if d != [0; 3] || ground_changed {
+                let mut w = Writer::with_id(cb::MOVE_ENTITY_POS); w.varint(e.eid).i16(d[0] as i16).i16(d[1] as i16).i16(d[2] as i16).bool(e.on_ground);
+                ws.push(w); t.pos_q = q;
             }
-            for (id, w) in syncs { for p in self.players.values() { if p.seen_items.contains(&id) { p.send(Writer { buf: w.buf.clone() }); } } }
+            let dv: f64 = (0..3).map(|k| (e.vel[k] - t.vel[k]).powi(2)).sum();
+            let was_still = t.vel == [0.0; 3];
+            if dv > 1.0e-7 || (was_still && e.vel != [0.0; 3]) {
+                let mut w = Writer::with_id(cb::SET_ENTITY_MOTION); w.varint(e.eid).lpvec3(e.vel); ws.push(w); t.vel = e.vel;
+            }
+            t.on_ground = e.on_ground;
+            if !ws.is_empty() { out.push((e.eid, ws)); }
         }
+        for (id, ws) in out { for p in self.players.values() { if p.seen_items.contains(&id) { for w in &ws { p.send(Writer { buf: w.buf.clone() }); } } } }
         if self.tick % 10 == 0 { self.sync_item_viewers(); }
     }
 }

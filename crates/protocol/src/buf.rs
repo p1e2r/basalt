@@ -41,6 +41,19 @@ impl Writer {
         let v = ((x as i64 & 0x3FFFFFF) << 38) | ((z as i64 & 0x3FFFFFF) << 12) | (y as i64 & 0xFFF);
         self.i64(v)
     }
+    /// Low-precision vector (entity velocity in add_entity / set_entity_motion): 15 bits per axis
+    /// scaled by a shared integer, 6 bytes (+ varint when the scale exceeds 3), or a single 0 byte.
+    pub fn lpvec3(&mut self, v: [f64; 3]) -> &mut Self {
+        let max = v.iter().fold(0.0f64, |m, c| m.max(c.abs()));
+        if !(max >= 3.0517578125e-5) { return self.u8(0); }
+        let scale = max.ceil() as u64;
+        let more = scale > 3;
+        let pack = |c: f64| -> u64 { (((c / scale as f64) * 0.5 + 0.5) * 32766.0).round().clamp(0.0, 32766.0) as u64 };
+        let bits = (scale & 3) | (more as u64) << 2 | pack(v[0]) << 3 | pack(v[1]) << 18 | pack(v[2]) << 33;
+        self.u8((bits & 0xff) as u8).u8((bits >> 8 & 0xff) as u8).bytes(&((bits >> 16) as u32).to_be_bytes());
+        if more { self.varint((scale >> 2) as i32); }
+        self
+    }
     pub fn angle(&mut self, deg: f32) -> &mut Self { self.u8(((deg / 360.0 * 256.0) as i32 & 0xFF) as u8) }
     pub fn len(&self) -> usize { self.buf.len() }
 }
@@ -90,4 +103,25 @@ impl<'a> Reader<'a> {
         let v = self.i64()?;
         Ok(((v >> 38) as i32, (v << 52 >> 52) as i32, (v << 26 >> 38) as i32))
     }
+}
+
+#[cfg(test)]
+mod lpvec3_tests {
+    use super::Writer;
+    #[test]
+    fn matches_vanilla_samples() {
+        // bytes captured from a vanilla 26.2 server for dropped-item velocities
+        let enc = |v: [f64; 3]| { let mut w = Writer::new(); w.lpvec3(v); w.buf };
+        assert_eq!(enc([0.0, 0.0, 0.0]), vec![0]);
+        let b = enc([-0.0025, 0.0, -0.00317]);
+        assert_eq!(b.len(), 6);
+        let dec = |b: &[u8]| { let bits = b[0] as u64 | (b[1] as u64) << 8 | (u32::from_be_bytes([b[2], b[3], b[4], b[5]]) as u64) << 16;
+            let u = |x: u64| ((x & 0x7fff).min(32766) as f64 * 2.0 / 32766.0 - 1.0) * (bits & 3) as f64; [u(bits >> 3), u(bits >> 18), u(bits >> 33)] };
+        let v = dec(&hex("41fd7f233331"));
+        let round = enc(v);
+        assert_eq!(round, hex("41fd7f233331"));
+        let big = enc([0.0, -5.5, 0.0]);
+        assert_eq!(big.len(), 7);
+    }
+    fn hex(s: &str) -> Vec<u8> { (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect() }
 }
