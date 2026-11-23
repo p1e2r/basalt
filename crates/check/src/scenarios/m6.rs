@@ -34,6 +34,75 @@ pub fn weather(ctx: &mut Ctx) -> Result<()> {
     Ok(())
 }
 
+/// Random ticks with `random_tick_speed` raised to 1000 for a few seconds (restored to 3 after):
+/// wheat on moist farmland grows to age 7, dirt next to lit grass turns into grass, grass under a
+/// solid block turns into dirt, leaves far from logs decay, sugar cane / cactus grow to 3 high,
+/// an oak sapling grows into a tree. Outcomes only (the rates are random).
+pub fn random_ticks(ctx: &mut Ctx) -> Result<()> {
+    use crate::runner::ARENA_Y;
+    let bot = ctx.bot()?;
+    let o = ctx.arena(&bot, 16, 16, 14)?;
+    ctx.stand(&bot, o[0] + 1, o[2] + 1, "creative")?;
+    let y = ARENA_Y;
+    bot.cmd_reply("time set noon")?;
+    // wheat: 3x3 farmland around water, age 0
+    let f = [o[0] + 3, o[2] + 3];
+    fill(&bot, [f[0] - 2, y, f[1] - 2], [f[0] + 2, y, f[1] + 2], "farmland[moisture=7]")?;
+    setblock(&bot, [f[0], y, f[1]], "water")?;
+    for (dx, dz) in [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] { setblock(&bot, [f[0] + dx, y + 1, f[1] + dz], "wheat[age=0]")?; }
+    // grass spread: dirt row next to a grass block; grass decay: grass under stone
+    let g = [o[0] + 9, o[2] + 3];
+    fill(&bot, [g[0], y, g[1]], [g[0] + 3, y, g[1]], "dirt")?;
+    setblock(&bot, [g[0], y, g[1]], "grass_block")?;
+    setblock(&bot, [g[0], y, g[1] + 3], "grass_block")?;
+    setblock(&bot, [g[0], y + 1, g[1] + 3], "stone")?;
+    // leaves with no log nearby (distance 7, not persistent)
+    let l = [o[0] + 13, y + 4, o[2] + 3];
+    setblock(&bot, l, "oak_leaves[distance=7,persistent=false]")?;
+    let lp = [o[0] + 13, y + 4, o[2] + 5];
+    setblock(&bot, lp, "oak_leaves[distance=7,persistent=true]")?;
+    // sugar cane on sand by water, cactus on sand
+    let c = [o[0] + 3, o[2] + 10];
+    // the arena floor may have air below it (vanilla's arena is high up): support the sand
+    setblock(&bot, [c[0], y - 1, c[1]], "stone")?;
+    setblock(&bot, [c[0] + 4, y - 1, c[1]], "stone")?;
+    setblock(&bot, [c[0], y, c[1]], "sand")?;
+    setblock(&bot, [c[0] + 1, y, c[1]], "water")?;
+    setblock(&bot, [c[0], y + 1, c[1]], "sugar_cane")?;
+    setblock(&bot, [c[0] + 4, y, c[1]], "sand")?;
+    setblock(&bot, [c[0] + 4, y + 1, c[1]], "cactus")?;
+    // sapling on grass (dirt below is fine), space above
+    let s0 = [o[0] + 11, o[2] + 11];
+    setblock(&bot, [s0[0], y, s0[1]], "grass_block")?;
+    setblock(&bot, [s0[0], y + 1, s0[1]], "oak_sapling")?;
+    bot.cmd_reply("gamerule random_tick_speed 1000")?;
+    let done = bot.wait_until(Duration::from_secs(20), |s| {
+        let wheat = s.world.state_string(f[0] - 1, y + 1, f[1] - 1).contains("age=7");
+        wheat && s.world.name(g[0] + 3, y, g[1]) == "grass_block" && s.world.name(l[0], l[1], l[2]) == "air"
+            && s.world.name(c[0], y + 3, c[1]) == "sugar_cane" && s.world.name(c[0] + 4, y + 3, c[1]) == "cactus" && s.world.name(s0[0], y + 1, s0[1]).ends_with("_log")
+    });
+    bot.cmd_reply("gamerule random_tick_speed 3")?;
+    let s = bot.st();
+    let grown = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)].iter().filter(|(dx, dz)| s.world.state_string(f[0] + dx, y + 1, f[1] + dz).contains("age=7")).count();
+    let spread = (1..4).filter(|k| s.world.name(g[0] + k, y, g[1]) == "grass_block").count();
+    let covered_dirt = s.world.name(g[0], y, g[1] + 3) == "dirt";
+    let decayed = s.world.name(l[0], l[1], l[2]) == "air";
+    let persistent_kept = s.world.name(lp[0], lp[1], lp[2]) == "oak_leaves";
+    let cane = (1..5).filter(|k| s.world.name(c[0], y + k, c[1]) == "sugar_cane").count();
+    let cactus = (1..5).filter(|k| s.world.name(c[0] + 4, y + k, c[1]) == "cactus").count();
+    let tree = s.world.name(s0[0], y + 1, s0[1]).ends_with("_log");
+    drop(s);
+    ctx.check(done, format!("not everything grew: wheat {grown}/8, grass spread {spread}/3, leaves decayed {decayed}, cane {cane}, cactus {cactus}, tree {tree}"));
+    ctx.metric("grass_spread", spread as f64, 1.0);
+    ctx.metric("grass_covered_to_dirt", covered_dirt as u8 as f64, 0.0);
+    ctx.metric("leaves_decayed", decayed as u8 as f64, 0.0);
+    ctx.metric("persistent_leaves_kept", persistent_kept as u8 as f64, 0.0);
+    ctx.metric("sugar_cane_height", cane as f64, 0.0);
+    ctx.metric("cactus_height", cactus as f64, 0.0);
+    ctx.metric("sapling_tree", tree as u8 as f64, 0.0);
+    Ok(())
+}
+
 /// Gravity blocks: a block of sand set in the air turns into a falling_block entity, lands and
 /// becomes a block again; removing the support of a column drops the whole column; sand landing on
 /// a torch breaks into an item; concrete powder landing in water hardens. Ticks are server ticks

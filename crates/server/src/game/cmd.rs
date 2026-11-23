@@ -660,6 +660,32 @@ impl Game {
                 self.set_weather(kind, ticks);
                 self.ok(eid, &format!("commands.weather.set.{kind}"), vec![]);
             }
+            path if path.starts_with("gamerule ") => {
+                // only the rules Basalt acts on; others are reported as unsupported
+                let rule = p.path[1].trim_start_matches("minecraft:").to_string();
+                if rule != "random_tick_speed" {
+                    return Err(err(
+                        "basalt:Gamerule not supported by Basalt yet:",
+                        &[&rule],
+                    ));
+                }
+                if p.has("value") {
+                    let v: i32 = p.arg("value").parse().unwrap_or(3);
+                    self.random_tick_speed = v.max(0);
+                    self.ok(
+                        eid,
+                        "commands.gamerule.set",
+                        vec![basalt_nbt::Tag::String(rule), s(v)],
+                    );
+                } else {
+                    let v = self.random_tick_speed;
+                    self.ok(
+                        eid,
+                        "commands.gamerule.query",
+                        vec![basalt_nbt::Tag::String(rule), s(v)],
+                    );
+                }
+            }
             "clear" | "clear targets" | "clear targets item" | "clear targets item maxCount" => {
                 self.cmd_clear(eid, p)?
             }

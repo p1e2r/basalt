@@ -13,6 +13,7 @@ mod inv;
 mod items;
 mod mob;
 mod path;
+mod randomtick;
 mod spawn;
 mod track;
 
@@ -139,6 +140,8 @@ pub struct Game {
     /// falling_block entities and pending gravity checks (due tick, block)
     fallers: HashMap<i32, falling::Faller>,
     gravity_checks: Vec<(u64, [i32; 3])>,
+    /// gamerule random_tick_speed (vanilla default 3)
+    random_tick_speed: i32,
     /// container block entities of loaded chunks (chests, barrels, furnaces)
     bes: HashMap<[i32; 3], container::Be>,
     path_budget: u32,
@@ -186,7 +189,7 @@ impl Game {
         let world = World::new(dir.as_ref().map(|d| d.join("region")));
         let player_type = registry_id(reg::ENTITY_TYPE, "player").unwrap_or(0);
         let data = sh.data.clone();
-        let mut g = Game { sh, world, gen: GenPool::new(gen), players: HashMap::new(), tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir, data, commands_body: None, weather: Weather::default(), items: HashMap::new(), mobs: HashMap::new(), arrows: HashMap::new(), fallers: HashMap::new(), gravity_checks: Vec::new(), bes: HashMap::new(), path_budget: 0, no_spawning: false, rng: rand::rngs::StdRng::from_entropy() };
+        let mut g = Game { sh, world, gen: GenPool::new(gen), players: HashMap::new(), tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir, data, commands_body: None, weather: Weather::default(), items: HashMap::new(), mobs: HashMap::new(), arrows: HashMap::new(), fallers: HashMap::new(), gravity_checks: Vec::new(), random_tick_speed: 3, bes: HashMap::new(), path_budget: 0, no_spawning: false, rng: rand::rngs::StdRng::from_entropy() };
         g.no_spawning = g.sh.cfg.no_spawning;
         g.commands_body = crate::commands::build_packet(&g.sh.cfg.data_dir, crate::commands::IMPLEMENTED);
         if g.commands_body.is_none() { log::warn!("no reports/commands.json: using the built-in command tree"); }
@@ -814,6 +817,7 @@ impl Game {
         self.tick_mobs();
         self.tick_arrows();
         self.tick_falling();
+        self.tick_random();
         self.tick_spawning();
         self.broadcast_mob_moves();
         if self.tick % 10 == 5 { self.sync_viewers(); }
