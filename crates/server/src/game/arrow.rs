@@ -118,6 +118,9 @@ impl Game {
                 let push = { let h = (d[0] * d[0] + d[2] * d[2]).sqrt().max(1e-6); [d[0] / h * 0.6, d[2] / h * 0.6] };
                 if is_player {
                     let yaw = (-push[0]).atan2(-push[1]).to_degrees() as f32;
+                    // arrows shot by mobs scale with difficulty (easy: min(d/2+1, d)); a player's own arrows don't
+                    let from_mob = a.owner.map(|o| self.mobs.contains_key(&o)).unwrap_or(false);
+                    let dmg = if from_mob { basalt_game::difficulty_scaled(dmg as f32, super::combat::DIFFICULTY) as f64 } else { dmg };
                     self.hurt_by(target, dmg as f32, "arrow", DamageSource { cause: a.owner, direct: Some(id), killer: owner_name, hurt_yaw: Some(yaw) });
                     self.knock_player(target, [push[0], 0.1, push[1]]);
                 } else {

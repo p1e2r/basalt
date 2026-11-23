@@ -106,7 +106,9 @@ impl Game {
         let eye = [m.pos[0], m.eye_y(), m.pos[2]];
         if m.kind.undead() && self.is_day() && !m.in_water {
             let (sky, _) = self.world.light(eye[0].floor() as i32, eye[1].floor() as i32, eye[2].floor() as i32);
-            if sky >= 15 && self.rng.gen_range(0..30) < 8 { m.fire_ticks = m.fire_ticks.max(160); }
+            // vanilla: ignite with probability (brightness - 0.4) * 2 / 30 per tick (≈4% in full sun), and only
+            // when not already burning (re-arming every tick kept the 20-tick burn damage from ever landing)
+            if sky >= 15 && m.fire_ticks <= 0 && self.rng.gen_range(0.0f32..30.0) < 1.2 { m.fire_ticks = 160; }
         }
         if super::mob::is_lava(&self.world, m.pos[0], m.pos[1] + 0.1, m.pos[2]) { m.fire_ticks = m.fire_ticks.max(300); self.hurt_held_mob(m, 4.0, "lava"); if !m.alive() { return true; } }
         if m.in_water && m.fire_ticks > 0 { m.fire_ticks = 0; }
@@ -120,6 +122,8 @@ impl Game {
         let (mut goal, mut speed_mod, mut jump) = (None::<[f64; 3]>, 1.0f64, false);
         let mut look: Option<[f64; 3]> = None;
         if !m.no_ai { self.think(m, &mut goal, &mut speed_mod, &mut jump, &mut look); if !m.alive() { return false; } }
+        // a creeper's fuse runs in its tick, not its AI goals: a NoAI one that is ignited still blows up
+        else if m.kind == MobKind::Creeper && m.ai.ignited { self.creeper_tick(m); if !m.alive() { return false; } }
         // ---- steering along the path
         let mut accel = [0.0, 0.0];
         if let Some(g) = goal {
@@ -327,7 +331,7 @@ impl Game {
             if want > 0 { self.play_sound("entity.creeper.primed", 5, m.pos, 1.0, 0.5); }
         }
         m.ai.fuse = (m.ai.fuse + m.ai.swell_dir).max(0);
-        if m.ai.fuse >= 30 {
+        if m.ai.fuse >= m.ai.custom_fuse.unwrap_or(30) {
             m.dead = Some(100); // gone without the death animation
             let pos = [m.pos[0], m.pos[1], m.pos[2]];
             self.explode(pos, 3.0, Some((m.eid, "Creeper".into())), true);

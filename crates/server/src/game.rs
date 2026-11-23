@@ -88,6 +88,8 @@ struct Player {
     air: i32,
     fire_ticks: i32,
     ticks_frozen: i32,
+    /// consecutive ticks standing in fire (vanilla ignites you after 20)
+    fire_exposure: i32,
     /// effect id -> (amplifier, ticks left; -1 = infinite)
     effects: HashMap<i32, (u8, i32)>,
     prev_tick_pos: [f64; 3],
@@ -355,7 +357,7 @@ impl Game {
             dead: false, health: 20.0, food: 20, saturation: 5.0, exhaustion: 0.0, fall_start: None, hurt_cooldown: 0, regen_timer: 0,
             using: None, sprinting: false, jump_held: false, dig_start: None, cursor: Stack::default(), craft_result: Stack::default(),
             table_grid: [Stack::default(); 9], window: inv::Window::Inventory, next_window: 0, state_id: 0, drag: (0, Vec::new()), seen_items: HashSet::new(),
-            air: env::MAX_AIR, fire_ticks: 0, ticks_frozen: 0, effects: HashMap::new(), prev_tick_pos: [0.0; 3], seen: HashSet::new(), last_attack_tick: 0,
+            air: env::MAX_AIR, fire_ticks: 0, ticks_frozen: 0, fire_exposure: 0, effects: HashMap::new(), prev_tick_pos: [0.0; 3], seen: HashSet::new(), last_attack_tick: 0,
         };
         self.load_player(&mut p);
         let dims = self.sh.registries.entries("minecraft:dimension_type");
@@ -413,7 +415,9 @@ impl Game {
         let Some(p) = self.players.get(&eid) else { return };
         let (cx, cz) = p.chunk(); let view = p.view;
         let mut want: Vec<(i32, i32)> = Vec::new();
-        for dx in -view..=view { for dz in -view..=view { if dx * dx + dz * dz <= view * view + view { want.push((cx + dx, cz + dz)); } } }
+        // vanilla's shape (measured: view 4 -> 117 chunks): the square of radius view+1 without its four corner chunks
+        let r = view + 1;
+        for dx in -r..=r { for dz in -r..=r { if !(dx.abs() == r && dz.abs() == r) { want.push((cx + dx, cz + dz)); } } }
         let want_set: HashSet<_> = want.iter().copied().collect();
         let to_unload: Vec<_> = p.loaded.iter().copied().filter(|c| !want_set.contains(c)).collect();
         let center_changed = p.center != (cx, cz);
@@ -781,6 +785,7 @@ impl Game {
                             m.no_ai = extra.contains("noai");
                             m.sheared = extra.contains("sheared");
                             m.ai.ignited = extra.contains("ignited");
+                            m.ai.custom_fuse = extra.split("fuse:").nth(1).and_then(|f| f.split(|c: char| !c.is_ascii_digit()).next().and_then(|n| n.parse().ok()));
                             if let Some(c) = color { m.sheep_color = c & 15; }
                         });
                         reply(self, format!("Summoned new {} (eid {id})", k.display()));

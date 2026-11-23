@@ -80,6 +80,8 @@ pub struct Ai {
     pub fuse: i32,
     pub swell_dir: i32,
     pub ignited: bool,
+    /// `/summon ... {Fuse:N}` override of the 30-tick creeper fuse
+    pub custom_fuse: Option<i32>,
     /// Skeleton bow draw progress (ticks), None = not drawing.
     pub draw: Option<u32>,
     pub look_at: Option<i32>,

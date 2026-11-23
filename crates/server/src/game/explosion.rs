@@ -54,7 +54,7 @@ impl Game {
         // ---- entities
         let range = r * 2.0;
         let src_eid = source.as_ref().map(|s| s.0);
-        let kind = "explosion";
+        let kind = if src_eid.is_some() { "player_explosion" } else { "explosion" };
         let mut player_kb: Vec<(i32, [f64; 3])> = Vec::new();
         let victims: Vec<(i32, bool, [f64; 3], [f64; 6])> = self.players.values().filter(|p| !p.dead && p.gamemode != 3).map(|p| (p.eid, true, p.pos, [p.pos[0] - 0.3, p.pos[1], p.pos[2] - 0.3, p.pos[0] + 0.3, p.pos[1] + 1.8, p.pos[2] + 0.3]))
             .chain(self.mobs.values().filter(|m| m.alive()).map(|m| (m.eid, false, m.pos, m.aabb()))).collect();

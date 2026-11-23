@@ -143,7 +143,7 @@ impl Player {
         let slip = match basalt_data::BlockState(below as u32).name() { "ice" | "packed_ice" | "frosted_ice" => 0.98, "blue_ice" => 0.989, "slime_block" => 0.8, _ => 0.6 };
         let friction = if self.on_ground { slip * 0.91 } else { 0.91 };
         let speed = 0.1 * if sprint { 1.3 } else { 1.0 };
-        let acc = if self.on_ground { speed * (0.21600002 / (friction * friction * friction)) } else if sprint { 0.026 } else { 0.02 };
+        let acc = if self.on_ground { ground_accel(speed, slip) } else if sprint { 0.026 } else { 0.02 };
         accel_dir(acc, &mut self.vel);
         // climbing
         let fs = basalt_data::BlockState(feet as u32);
@@ -177,6 +177,11 @@ impl Player {
         for i in [0, 2] { if self.vel[i].abs() < 0.003 { self.vel[i] = 0.0; } }
     }
 }
+
+/// Per-tick acceleration on the ground: movement speed scaled by the block's slipperiness cubed
+/// (0.6³ = 0.216 on normal blocks, so plain walking accelerates by exactly the movement speed).
+/// The extra 0.91 air-drag factor belongs only to the velocity damping, not here (it made walking 36% too fast).
+pub fn ground_accel(speed: f64, slip: f64) -> f64 { speed * (0.21600002 / (slip * slip * slip)) }
 
 pub struct Hit { pub block: [i32; 3], pub face: u8, pub point: [f64; 3], pub boxes: Vec<[f64; 6]> }
 
@@ -221,4 +226,17 @@ pub fn raycast(a: &Assets, w: &World, origin: [f64; 3], dir: [f64; 3], reach: f6
         if let Some((bt, _)) = &best { if *bt < t - 1.8 { break; } }
     }
     best.map(|b| b.1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ground_accel;
+    #[test]
+    fn walking_accelerates_by_the_movement_speed() {
+        assert!((ground_accel(0.1, 0.6) - 0.1).abs() < 1e-6);
+        // terminal walking speed: v = a / (1 - slip*0.91) → 4.3 blocks/s on normal ground
+        let v = ground_accel(0.1, 0.6) / (1.0 - 0.6 * 0.91) * 20.0;
+        assert!((v - 4.4).abs() < 0.2, "walk speed {v}");
+        assert!(ground_accel(0.1, 0.98) < ground_accel(0.1, 0.6), "ice accelerates more slowly");
+    }
 }

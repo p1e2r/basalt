@@ -164,7 +164,12 @@ impl Game {
             let conduit = check_conduit && self.near_active_conduit(p);
             // --- suffocation: eye-level points inside a full solid block
             let eye = p.pos[1] + if p.sneaking { 1.27 } else { 1.62 };
-            let suffocating = vulnerable && [(-0.24, -0.24), (0.24, -0.24), (-0.24, 0.24), (0.24, 0.24)].iter().any(|(dx, dz)| {
+            // a one-block gap (solid only at head height) makes the player crawl: no suffocation. Needs the feet block solid too.
+            let feet_blocked = [(-0.24, -0.24), (0.24, -0.24), (-0.24, 0.24), (0.24, 0.24)].iter().any(|(dx, dz)| {
+                let s = self.world.get_block((p.pos[0] + dx).floor() as i32, p.pos[1].floor() as i32, (p.pos[2] + dz).floor() as i32);
+                let pr = props::props(s); pr.blocks_motion() && pr.opacity >= 15
+            });
+            let suffocating = vulnerable && feet_blocked && [(-0.24, -0.24), (0.24, -0.24), (-0.24, 0.24), (0.24, 0.24)].iter().any(|(dx, dz)| {
                 let s = self.world.get_block((p.pos[0] + dx).floor() as i32, eye.floor() as i32, (p.pos[2] + dz).floor() as i32);
                 let pr = props::props(s); pr.blocks_motion() && pr.opacity >= 15
             });
@@ -210,7 +215,7 @@ impl Game {
             let was_burning = p.fire_ticks > 0;
             if in_water { p.fire_ticks = 0; }
             if in_lava && !in_water { p.fire_ticks = p.fire_ticks.max(300); }
-            if fire_block > 0.0 && !in_water { p.fire_ticks = p.fire_ticks.max(160); }
+            if fire_block > 0.0 && !in_water { p.fire_exposure += 1; if p.fire_exposure >= 20 { p.fire_ticks = p.fire_ticks.max(160); } } else { p.fire_exposure = 0; }
             let burn_tick = p.fire_ticks > 0 && p.fire_ticks % 20 == 0;
             if p.fire_ticks > 0 { p.fire_ticks -= if fire_res { 4 } else { 1 }; p.fire_ticks = p.fire_ticks.max(0); }
             let burning_changed = was_burning != (p.fire_ticks > 0);
@@ -225,7 +230,8 @@ impl Game {
             if drown { self.hurt(eid, 2.0, "drown"); }
             if freeze_hit { self.hurt(eid, freeze_dmg, "freeze"); }
             if in_lava && !fire_res { self.hurt(eid, 4.0, "lava"); }
-            if fire_block > 0.0 && !fire_res { self.hurt(eid, fire_block, "in_fire"); }
+            // vanilla starts fire damage after the same 20-tick exposure delay as ignition
+            if fire_block > 0.0 && !fire_res && self.players[&eid].fire_exposure >= 20 { self.hurt(eid, fire_block, "in_fire"); }
             if campfire > 0.0 && !fire_res { self.hurt(eid, campfire, "campfire"); }
             if magma && !fire_res { self.hurt(eid, 1.0, "hot_floor"); }
             if burn_tick && !fire_res && !in_lava { self.hurt(eid, 1.0, "on_fire"); }

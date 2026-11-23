@@ -59,10 +59,10 @@ Read NOTES.md for verified packet formats.
 - [x] M2 crates/server: login/config/play, chunk streaming, movement, break/place, chat, multiplayer
 - [x] M2 verify with real 26.2 client (tools/run-vanilla-client.py) + basalt-client
 - [x] M3a worldgen terrain/biomes/surface/carvers/ores vs vanilla seed 12345, wired into server
-- [~] M3b features: trees + vegetation, lakes, springs, geodes, monster rooms; exact neighbour mode
-      — implemented and measured; marked done once tools/check-all.sh passes (testing rule)
+- [x] M3b features: trees + vegetation, lakes, springs, geodes, monster rooms; exact neighbour mode
+      — done: tools/check-all.sh green 2026-11-23 (M3 4/4, parity seeds 12345/42/1)
 - [ ] M3c structures (overworld; may move into M8)
-- [~] M4 survival gameplay — implemented & bot-tested (crates/game rules; server game/{items,inv,health}.rs):
+- [x] M4 survival gameplay — done, check-all M4 22/22 + Env 26/26 + Items 2/2 (2026-11-23) (crates/game rules; server game/{items,inv,health}.rs):
       hardness/tool dig times (server validates), loot-table drops as item entities + pickup/merge/
       despawn, Q-drop, all container_click modes, 2x2 + crafting table crafting, armor slots,
       health/hunger/saturation/regen/starve, fall damage, eating, death (drops inventory) + respawn.
@@ -72,7 +72,7 @@ Read NOTES.md for verified packet formats.
       suffocation, lava, fire/burning, campfire, magma, cactus, berry bush, void. Status effects
       (/effect), enchantments on stacks (/enchant), /setblock /fill /kill. Armor reduction done in M5. Missing: non-food use_item (buckets etc.), death
       screen in basalt-client (auto-respawns), human-driven real-client inventory test.
-- [~] M5 mobs — implemented & bot/real-client tested (server game/{mob,ai,path,combat,arrow,explosion,spawn,track}.rs):
+- [x] M5 mobs — done, check-all M5 12/12 + Diff 34/34 vs vanilla (2026-11-23) (server game/{mob,ai,path,combat,arrow,explosion,spawn,track}.rs):
       zombie/skeleton/creeper/spider/cow/pig/sheep/chicken with vanilla-measured spawn packets +
       metadata (baby, sheep colour/sheared, creeper fuse, aggressive, burning, death pose); generic
       visibility tracking for mobs+arrows; AABB block collision, step-up, gravity, water buoyancy;
