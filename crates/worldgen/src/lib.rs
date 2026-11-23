@@ -8,6 +8,7 @@
 
 pub mod aquifer;
 pub mod biome;
+pub mod carver;
 pub mod density;
 pub mod noise;
 pub mod random;
@@ -46,6 +47,7 @@ impl GeneratedChunk {
 pub enum Stage {
     Noise,
     Surface,
+    Carvers,
 }
 
 pub(crate) struct Router {
@@ -119,6 +121,43 @@ pub struct Generator {
     pub biome_names: Vec<String>,
     biomes: biome::BiomeSource,
     surface: surface::SurfaceSystem,
+    carvers: Vec<Option<carver::Carver>>,
+    /// Per biome: indices into `carvers`.
+    biome_carvers: Vec<Vec<usize>>,
+    trig: carver::Trig,
+}
+
+/// Target for the carvers: the chunk's blocks plus aquifer and surface access.
+struct CarveChunk<'a, 'b, 'g> {
+    env: &'b mut Env<'a, 'g>,
+    blocks: &'b mut [[u16; 4096]],
+    heights: [i32; 256],
+    corners: [i32; 4],
+}
+
+impl carver::CarveTarget for CarveChunk<'_, '_, '_> {
+    fn get(&self, x: i32, y: i32, z: i32) -> u16 {
+        let yy = y - MIN_Y;
+        self.blocks[(yy >> 4) as usize][(((yy & 15) << 8) | (z << 4) | x) as usize]
+    }
+    fn set(&mut self, x: i32, y: i32, z: i32, state: u16) {
+        let yy = y - MIN_Y;
+        self.blocks[(yy >> 4) as usize][(((yy & 15) << 8) | (z << 4) | x) as usize] = state;
+    }
+    fn carve_state(&mut self, x: i32, y: i32, z: i32) -> Option<u16> {
+        let g = self.env.g;
+        self.env.e.set_mode(Mode::Direct);
+        match self.env.aq.compute(self.env.e, x, y, z, 0.0)? {
+            Fluid::Air => Some(g.blocks.air),
+            Fluid::Water => Some(g.default_fluid),
+            Fluid::Lava => Some(g.blocks.lava),
+        }
+    }
+    fn top_material(&mut self, x: i32, y: i32, z: i32, fluid: bool) -> Option<u16> {
+        let g = self.env.g;
+        g.surface.top_material(self.env, x, y, z, fluid, &self.heights, self.corners)
+    }
+    fn is_fluid(&self, state: u16) -> bool { state == self.env.g.default_fluid || state == self.env.g.blocks.lava }
 }
 
 /// Environment handed to the surface rules.
@@ -192,9 +231,34 @@ impl Generator {
         let biomes = biome::BiomeSource::load(data_dir, &biome_names)?;
         let default_block = state_from_json(&settings["default_block"])?;
         let sea_level = settings["sea_level"].as_i64().unwrap_or(63) as i32;
+        let mut carvers = Vec::new();
+        let mut carver_names: Vec<String> = Vec::new();
+        let mut biome_carvers = Vec::new();
+        for n in &biome_names {
+            let v: Value = serde_json::from_str(&std::fs::read_to_string(wg.join("biome").join(format!("{n}.json")))?)?;
+            let list: Vec<String> = match &v["carvers"] {
+                Value::String(s) => vec![s.clone()],
+                Value::Array(a) => a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect(),
+                _ => Vec::new(),
+            };
+            let mut idx = Vec::new();
+            for c in list {
+                let i = match carver_names.iter().position(|x| *x == c) {
+                    Some(i) => i,
+                    None => {
+                        // Carvers of other dimensions (e.g. nether_cave) are not supported: keep a slot.
+                        carvers.push(carver::Carver::load(&data_dir.join("data/minecraft"), &c).ok());
+                        carver_names.push(c);
+                        carvers.len() - 1
+                    }
+                };
+                idx.push(i);
+            }
+            biome_carvers.push(idx);
+        }
         let surface = surface::SurfaceSystem::load(&wg, &settings, rand, &biome_names, default_block, sea_level, random::biome_zoom_seed(seed))?;
         Ok(Generator {
-            seed, biome_names, biomes, surface,
+            seed, biome_names, biomes, surface, carvers, biome_carvers, trig: carver::Trig::new(),
             aquifer_rand: rand.from_hash("minecraft:aquifer").fork_positional(),
             ore_rand: rand.from_hash("minecraft:ore").fork_positional(),
             sea_level,
@@ -208,7 +272,7 @@ impl Generator {
 
     /// Generate the terrain of one chunk.
     pub fn generate_chunk(&self, cx: i32, cz: i32) -> GeneratedChunk {
-        self.generate_stages(cx, cz, Stage::Surface)
+        self.generate_stages(cx, cz, Stage::Carvers)
     }
 
     /// Generate up to (and including) the given stage.
@@ -226,8 +290,35 @@ impl Generator {
             }
             let mut env = Env { g: self, e: &mut e, aq: &mut aq, cache, last: None };
             self.surface.build(&mut env, cx, cz, &mut blocks);
+            if stage >= Stage::Carvers {
+                self.carve(&mut env, cx, cz, &mut blocks);
+            }
         }
         GeneratedChunk { blocks, biomes }
+    }
+
+    fn carve(&self, env: &mut Env, cx: i32, cz: i32, blocks: &mut [[u16; 4096]]) {
+        let (heights, corners) = self.surface.column_info(env, cx, cz, blocks);
+        let mut ctx = carver::CarveCtx {
+            trig: &self.trig, cx, cz, mask: vec![0u64; 16 * 16 * HEIGHT as usize / 64],
+            grass: state("grass_block[snowy=false]").unwrap_or(0), mycelium: state("mycelium[snowy=false]").unwrap_or(0),
+            dirt: state("dirt").unwrap_or(0), lava: self.blocks.lava,
+        };
+        let mut target = CarveChunk { env, blocks, heights, corners };
+        let mut r = random::JavaRandom::new(0);
+        for dx in -8..=8 {
+            for dz in -8..=8 {
+                let (sx, sz) = (cx + dx, cz + dz);
+                use surface::SurfaceEnv;
+                let b = target.env.noise_biome(sx * 4, 0, sz * 4);
+                for (l, ci) in self.biome_carvers[b as usize].iter().enumerate() {
+                    let Some(c) = &self.carvers[*ci] else { continue };
+                    if carver::start(&mut r, self.seed, l as i32, sx, sz, c) {
+                        ctx.carve(c, &mut target, &mut r, sx, sz);
+                    }
+                }
+            }
+        }
     }
 
     pub fn debug_biome(&self, qx: i32, qy: i32, qz: i32) {

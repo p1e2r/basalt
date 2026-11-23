@@ -381,23 +381,15 @@ impl SurfaceSystem {
         }
     }
 
-    /// Run the surface rules over a chunk filled by the noise stage.
-    pub fn build(&self, env: &mut dyn SurfaceEnv, cx: i32, cz: i32, blocks: &mut [[u16; 4096]]) {
-        let x0 = cx * 16;
-        let z0 = cz * 16;
-        let get = |b: &[[u16; 4096]], x: i32, y: i32, z: i32| -> u16 {
-            let yy = y - crate::MIN_Y;
-            if !(0..crate::HEIGHT).contains(&yy) { return self.ids.air; }
-            b[(yy >> 4) as usize][(((yy & 15) << 8) | (z << 4) | x) as usize]
-        };
-        let is_air = |id: u16| BlockState(id as u32).is_air();
-        let is_fluid = |id: u16| { let n = BlockState(id as u32).name(); n == "water" || n == "lava" };
-        // WORLD_SURFACE_WG heightmap: one above the highest non-air block.
+    /// WORLD_SURFACE_WG heightmap (one above the highest non-air block) and the
+    /// preliminary surface levels at the chunk's four corners.
+    pub fn column_info(&self, env: &mut dyn SurfaceEnv, cx: i32, cz: i32, blocks: &[[u16; 4096]]) -> ([i32; 256], [i32; 4]) {
+        let (x0, z0) = (cx * 16, cz * 16);
         let mut heights = [crate::MIN_Y; 256];
         for x in 0..16 {
             for z in 0..16 {
                 let mut y = crate::MIN_Y + crate::HEIGHT - 1;
-                while y >= crate::MIN_Y && is_air(get(blocks, x, y, z)) { y -= 1; }
+                while y >= crate::MIN_Y && BlockState(get(blocks, x, y, z, self.ids.air) as u32).is_air() { y -= 1; }
                 heights[(z * 16 + x) as usize] = y + 1;
             }
         }
@@ -405,6 +397,28 @@ impl SurfaceSystem {
             env.preliminary_surface(x0, z0), env.preliminary_surface(x0 + 16, z0),
             env.preliminary_surface(x0, z0 + 16), env.preliminary_surface(x0 + 16, z0 + 16),
         ];
+        (heights, corners)
+    }
+
+    /// Surface block for exposed dirt below a carved block (stone depth 1).
+    #[allow(clippy::too_many_arguments)]
+    pub fn top_material(&self, env: &mut dyn SurfaceEnv, x: i32, y: i32, z: i32, fluid: bool, heights: &[i32; 256], corners: [i32; 4]) -> Option<u16> {
+        let mut ctx = Ctx {
+            x, y, z, surface_depth: self.surface_depth(x, z), secondary: None, min_surface: None,
+            stone_above: 1, stone_below: 1, water_height: if fluid { y + 1 } else { i32::MIN }, biome: None, steep: None, heights, corners,
+        };
+        self.apply(&self.rule, &mut ctx, env)
+    }
+
+    /// Run the surface rules over a chunk filled by the noise stage.
+    pub fn build(&self, env: &mut dyn SurfaceEnv, cx: i32, cz: i32, blocks: &mut [[u16; 4096]]) {
+        let x0 = cx * 16;
+        let z0 = cz * 16;
+        let air = self.ids.air;
+        let get = |b: &[[u16; 4096]], x: i32, y: i32, z: i32| get(b, x, y, z, air);
+        let is_air = |id: u16| BlockState(id as u32).is_air();
+        let is_fluid = |id: u16| { let n = BlockState(id as u32).name(); n == "water" || n == "lava" };
+        let (heights, corners) = self.column_info(env, cx, cz, blocks);
         for lx in 0..16 {
             for lz in 0..16 {
                 let x = x0 + lx;
@@ -449,6 +463,12 @@ impl SurfaceSystem {
             }
         }
     }
+}
+
+fn get(b: &[[u16; 4096]], x: i32, y: i32, z: i32, air: u16) -> u16 {
+    let yy = y - crate::MIN_Y;
+    if !(0..crate::HEIGHT).contains(&yy) { return air; }
+    b[(yy >> 4) as usize][(((yy & 15) << 8) | (z << 4) | x) as usize]
 }
 
 fn fiddle(l: i64) -> f64 { ((l >> 24).rem_euclid(1024) as f64 / 1024.0 - 0.5) * 0.9 }
