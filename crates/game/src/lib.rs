@@ -214,6 +214,10 @@ impl GameData {
         self.recipes.cook(kind, item)
     }
 
+    /// Recipe id (no namespace) of the cooking recipe for `item`, and the experience of a cooking recipe id.
+    pub fn cook_id(&self, kind: CookKind, item: i32) -> Option<&str> { self.recipes.cook_id(kind, item) }
+    pub fn cook_xp(&self, id: &str) -> Option<f32> { self.recipes.cook_xp(id) }
+
     /// Stonecutter outputs for an input item: (result, count).
     pub fn stonecut(&self, item: i32) -> Vec<(i32, i32)> {
         self.recipes.stonecut(item)
