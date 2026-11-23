@@ -592,6 +592,18 @@ pub fn scoreboard(ctx: &mut Ctx) -> Result<()> {
     let a = is(ctx, "get", &format!("scoreboard players get @s {o}"), "commands.scoreboard.players.get.success")?;
     ctx.metric("get_value", a.get(1).and_then(|v| v.parse().ok()).unwrap_or(-1.0), 0.0);
     is(ctx, "fake_set", &format!("scoreboard players set #bz {o} 9"), "commands.scoreboard.players.set.success.single")?;
+    // selector filters: tag=, scores=, level=
+    bot.cmd_reply("tag @s add bzsel")?;
+    let found = "commands.tag.list.single.success";
+    let none = "argument.entity.notfound.entity";
+    is(ctx, "sel_tag", "tag @s[tag=bzsel] list", found)?;
+    is(ctx, "sel_tag_not", "tag @s[tag=!bzsel] list", none)?;
+    is(ctx, "sel_scores", &format!("tag @s[scores={{{o}=7}}] list"), found)?;
+    is(ctx, "sel_scores_range", &format!("tag @s[scores={{{o}=..2}}] list"), none)?;
+    is(ctx, "sel_level", "tag @s[level=0..] list", found)?;
+    is(ctx, "sel_level_high", "tag @s[level=100..] list", none)?;
+    bot.cmd_reply("tag @s remove bzsel")?;
+    is(ctx, "sel_no_tags", "tag @s[tag=] list", "commands.tag.list.single.empty")?;
     is(ctx, "list_self", "scoreboard players list @s", "commands.scoreboard.players.list.entity.success")?;
     is(ctx, "display", &format!("scoreboard objectives setdisplay sidebar {o}"), "commands.scoreboard.objectives.display.set")?;
     is(ctx, "display_again", &format!("scoreboard objectives setdisplay sidebar {o}"), "commands.scoreboard.objectives.display.alreadySet")?;

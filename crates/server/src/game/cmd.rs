@@ -361,6 +361,40 @@ impl Game {
                     return false;
                 }
             }
+            let in_range = |v: f64, (lo, hi): (Option<f64>, Option<f64>)| {
+                !(lo.is_some_and(|l| v < l) || hi.is_some_and(|h| v > h))
+            };
+            if !sel.tags.is_empty() || sel.level.is_some() || !sel.scores.is_empty() {
+                // tags, levels and scores are tracked for players only (mobs never match these filters)
+                let Target::Player(e) = t else { return false };
+                let pl = &self.players[&e];
+                let tags_ok = sel.tags.iter().all(|(neg, tg)| {
+                    let has = if tg.is_empty() {
+                        !pl.tags.is_empty()
+                    } else {
+                        pl.tags.contains(tg)
+                    };
+                    if tg.is_empty() {
+                        has == *neg
+                    } else {
+                        has != *neg
+                    }
+                });
+                if !tags_ok {
+                    return false;
+                }
+                if let Some(r) = sel.level {
+                    if !in_range(pl.xp_level as f64, r) {
+                        return false;
+                    }
+                }
+                for (obj, r) in &sel.scores {
+                    match self.scoreboard.scores.get(&(pl.name.clone(), obj.clone())) {
+                        Some(v) if in_range(*v as f64, *r) => {}
+                        _ => return false,
+                    }
+                }
+            }
             if !sel.names.is_empty() {
                 let n = match t {
                     Target::Player(e) => self.players[&e].name.clone(),

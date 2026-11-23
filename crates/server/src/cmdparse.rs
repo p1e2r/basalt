@@ -663,6 +663,9 @@ pub enum Sort {
     Arbitrary,
 }
 
+/// `lo..hi` with either end open.
+pub type Range = (Option<f64>, Option<f64>);
+
 #[derive(Clone, Debug)]
 pub struct Selector {
     pub kind: Sel,
@@ -673,6 +676,12 @@ pub struct Selector {
     pub gamemodes: Vec<(bool, String)>,
     pub names: Vec<(bool, String)>,
     pub sort: Option<Sort>,
+    /// tag=[!]name (empty name: no tags / any tag)
+    pub tags: Vec<(bool, String)>,
+    /// scores={objective=range,...}
+    pub scores: Vec<(String, Range)>,
+    /// level=range (players' experience level)
+    pub level: Option<(Option<f64>, Option<f64>)>,
 }
 
 impl Selector {
@@ -686,6 +695,9 @@ impl Selector {
             gamemodes: vec![],
             names: vec![],
             sort: None,
+            tags: vec![],
+            scores: vec![],
+            level: None,
         }
     }
     pub fn max_results(&self) -> usize {
@@ -854,7 +866,10 @@ pub fn parse_selector(
             while peek(s, i) == Some(' ') {
                 i += 1;
             }
-            let neg = matches!(key, "type" | "gamemode" | "name") && peek(s, i) == Some('!');
+            let neg = matches!(
+                key,
+                "type" | "gamemode" | "name" | "tag" | "team" | "predicate"
+            ) && peek(s, i) == Some('!');
             if neg {
                 i += 1;
             }
@@ -963,7 +978,29 @@ pub fn parse_selector(
                     sel.names.push((neg, s[i..e].trim_matches('"').to_string()));
                     i = e;
                 }
-                _ => i = skip_value(s, i), // position/rotation/level/team/tag/nbt/scores/...: accepted, not evaluated
+                "tag" => {
+                    let e = take_while(s, i, unquoted_char);
+                    sel.tags.push((neg, s[i..e].to_string()));
+                    i = e;
+                }
+                "level" => {
+                    let e = take_while(s, i, num_char);
+                    sel.level = Some(parse_range(&s[i..e])?);
+                    i = e;
+                }
+                "scores" => {
+                    let e = skip_value(s, i);
+                    let body = s[i..e].trim().trim_start_matches('{').trim_end_matches('}');
+                    for part in body.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+                        let (obj, r) = part.split_once('=').ok_or_else(|| {
+                            CmdError::new("argument.entity.options.valueless", &["scores"])
+                        })?;
+                        sel.scores
+                            .push((obj.trim().to_string(), parse_range(r.trim())?));
+                    }
+                    i = e;
+                }
+                _ => i = skip_value(s, i), // position/rotation/team/nbt/...: accepted, not evaluated
             }
             while peek(s, i) == Some(' ') {
                 i += 1;

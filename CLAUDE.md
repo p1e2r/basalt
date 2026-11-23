@@ -154,7 +154,7 @@ Read NOTES.md for verified packet formats.
       m13_misc_commands, m13_scoreboard all match vanilla): seed, me, msg/tell/w, setworldspawn, spawnpoint, defaultgamemode,
       item replace entity, clone, particle (simple particles), stopsound, tag, rotate, data get entity|block, scoreboard
       objectives (add/remove/list/setdisplay) + players (set/add/remove/get/list/reset), synced packets, scoreboard.dat.
-      Todo: scoreboard criteria other than dummy, operation/enable/modify, selector tag=/scores= filters, data merge/modify,
+      selector tag= / scores= / level= filters. Todo: scoreboard criteria other than dummy, operation/enable/modify, data merge/modify,
       teams, bossbar, function/datapacks, advancements, client sidebar rendering.
 - [ ] M14 client polish
 - [~] M16 lossless vanilla worlds + admin files (admin done: server.properties / ops.json / whitelist.json / banned-*.json in vanilla formats, op levels from commands.json, op/deop/whitelist/ban/ban-ip/pardon/pardon-ip/banlist/kick, login refusals; no ops.json = everyone op; scenario m2_admin; level files done: vanilla overworld region path, level.dat + data/minecraft/*.dat and players/data/<uuid>.dat read and written keeping unknown tags — the official 26.2 server opens Basalt's saves (blocks, seed, player position/inventory/enchantments/XP checked), scenario m16_vanilla_files; todo: entities/ and poi/ folders, block/fluid ticks, structures in chunks)  - [ ] M17 performance  - [~] M18 tests/CI/docs/plugins
