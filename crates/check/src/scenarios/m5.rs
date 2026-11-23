@@ -61,7 +61,8 @@ pub fn skeleton_arrow(ctx: &mut Ctx) -> Result<()> {
     let z = (o[2] + 2) as f64 + 0.5;
     ctx.stand(&bot, o[0] + 1, o[2] + 2, "survival")?;
     let t0 = Instant::now();
-    summon(&bot, "skeleton", [o[0] as f64 + 11.5, Y as f64, z], "{PersistenceRequired:1b}")?;
+    // with NBT, vanilla skips the random equipment roll — hand the skeleton its bow explicitly
+    summon(&bot, "skeleton", [o[0] as f64 + 11.5, Y as f64, z], "{equipment:{mainhand:{id:\"minecraft:bow\",count:1}}}")?;
     if !bot.wait_until(Duration::from_secs(20), |s| s.damage.iter().any(|d| d.0 >= t0 && d.1 == "arrow")) { bail!("no arrow hit within 20 s"); }
     bot.wait_ticks(2);
     let dm = hits(&bot, t0, "arrow");
@@ -85,7 +86,7 @@ pub fn creeper(ctx: &mut Ctx) -> Result<()> {
     ctx.metric("creeper_fuse_ticks", (fuse / 5.0).round() * 5.0, 5.0);
     bot.wait_ticks(3);
     let ex = bot.st().explosions.iter().find(|e| e.at >= t0).cloned().unwrap();
-    let dm: f32 = { let k = damage_kinds(&bot, t0); ctx.note(format!("damage kinds {k:?}")); hits(&bot, t0, "explosion").first().copied().unwrap_or(0.0) };
+    let dm: f32 = { let k = damage_kinds(&bot, t0); ctx.note(format!("damage kinds {k:?}")); hits(&bot, t0, "explosion").into_iter().chain(hits(&bot, t0, "player_explosion")).next().unwrap_or(0.0) };
     let kb = ex.knockback.map(|k| (k[0] * k[0] + k[1] * k[1] + k[2] * k[2]).sqrt()).unwrap_or(0.0);
     ctx.note(format!("radius {} blocks {} damage {dm} knockback {kb:.3}", ex.radius, ex.blocks));
     ctx.approx("creeper damage at 4.36 blocks", dm as f64, 5.157, 0.3);
@@ -176,11 +177,12 @@ pub fn undead_sun(ctx: &mut Ctx) -> Result<()> {
     setblock(&bot, [c[0], Y + 1, c[2]], "air")?;
     let (eid, _) = summon(&bot, "zombie", [c[0] as f64 + 0.5, Y as f64, c[2] as f64 + 0.5], "{PersistenceRequired:1b}")?;
     let t0 = Instant::now();
-    let burned = bot.wait_until(Duration::from_secs(5), |s| s.entities.get(&eid).map(|e| e.flags & 1 != 0).unwrap_or(false));
+    // vanilla rolls ignition per tick (~1/25 at full sky light), so allow up to 10 s
+    let burned = bot.wait_until(Duration::from_secs(10), |s| s.entities.get(&eid).map(|e| e.flags & 1 != 0).unwrap_or(false));
     let t_burn = t0.elapsed().as_secs_f64() * 20.0;
     ctx.check(burned, "zombie in noon sunlight never caught fire");
     ctx.metric("zombie_burning", burned as i32 as f64, 0.0);
-    ctx.check(t_burn <= 40.0, format!("caught fire after {t_burn:.0} ticks"));
+    ctx.check(t_burn <= 200.0, format!("caught fire after {t_burn:.0} ticks"));
     bot.wait_ticks(60);
     let h = bot.st().entities.get(&eid).and_then(|e| e.health);
     ctx.note(format!("burning after {t_burn:.0} ticks; health after 3 s more: {h:?}"));

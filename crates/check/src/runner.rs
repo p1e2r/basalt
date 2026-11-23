@@ -125,6 +125,10 @@ impl Ctx {
         let ok = bot.wait_until(Duration::from_secs(30), |s| ((o[0] - 1) >> 4..=(o[0] + sx) >> 4).all(|cx| ((o[2] - 1) >> 4..=(o[2] + sz) >> 4).all(|cz| s.world.chunks.contains_key(&(cx, cz)))));
         if !ok { bail!("arena chunks did not load"); }
         bot.cmd_reply(&format!("fill {} {} {} {} {} {} air", o[0] - 1, o[1], o[2] - 1, o[0] + sx, o[1] + h, o[2] + sz))?;
+        if self.is_vanilla() {
+            // leftovers from earlier runs on the long-running server: persistent mobs, items, arrows
+            bot.cmd_reply(&format!("kill @e[type=!minecraft:player,x={},y={},z={},dx={},dy={},dz={}]", o[0] - 3, o[1] - 8, o[2] - 3, sx + 6, h + 16, sz + 6))?;
+        }
         bot.cmd_reply(&format!("fill {} {} {} {} {} {} stone", o[0], o[1], o[2], o[0] + sx - 1, o[1], o[2] + sz - 1))?;
         bot.set_frozen(false);
         Ok(o)
