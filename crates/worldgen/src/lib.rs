@@ -163,6 +163,11 @@ impl features::OreWorld for OreChunk<'_, '_, '_> {
         let g = self.env.g;
         g.surface.zoomed_biome(self.env, x, y, z)
     }
+    fn get_approx(&mut self, x: i32, y: i32, z: i32) -> u16 {
+        use surface::SurfaceEnv;
+        let g = self.env.g;
+        if y < self.env.preliminary_surface(x, z) { g.default_block } else if y < g.sea_level { g.default_fluid } else { g.blocks.air }
+    }
 }
 
 /// Target for the carvers: the chunk's blocks plus aquifer and surface access.

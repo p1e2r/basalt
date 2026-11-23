@@ -83,6 +83,95 @@ pub enum Modifier {
     HeightRange(Height),
     Biome,
     Rarity(i32),
+    /// true: OCEAN_FLOOR_WG, false: WORLD_SURFACE_WG
+    Heightmap(bool),
+    RandomOffset(IntProvider, IntProvider),
+    Filter(Pred),
+}
+
+/// Block predicates.
+#[derive(Debug, Clone)]
+pub enum Pred {
+    True,
+    MatchingBlocks((i32, i32, i32), HashSet<String>),
+    MatchingFluids((i32, i32, i32), bool, bool),
+    Solid((i32, i32, i32)),
+    Not(Box<Pred>),
+    AnyOf(Vec<Pred>),
+    AllOf(Vec<Pred>),
+}
+
+fn names_of(v: &Value) -> HashSet<String> {
+    match v {
+        Value::String(s) => [s.trim_start_matches("minecraft:").to_string()].into_iter().collect(),
+        Value::Array(a) => a.iter().filter_map(|x| x.as_str()).map(|s| s.trim_start_matches("minecraft:").to_string()).collect(),
+        _ => HashSet::new(),
+    }
+}
+
+impl Pred {
+    fn parse(v: &Value) -> Result<Pred> {
+        let off = v.get("offset").and_then(|o| o.as_array()).map(|a| {
+            let g = |i: usize| a.get(i).and_then(|x| x.as_i64()).unwrap_or(0) as i32;
+            (g(0), g(1), g(2))
+        }).unwrap_or((0, 0, 0));
+        Ok(match v["type"].as_str().unwrap_or("").trim_start_matches("minecraft:") {
+            "true" => Pred::True,
+            "matching_blocks" => Pred::MatchingBlocks(off, names_of(&v["blocks"])),
+            "matching_fluids" => {
+                let n = names_of(&v["fluids"]);
+                Pred::MatchingFluids(off, n.contains("water") || n.contains("flowing_water"), n.contains("lava") || n.contains("flowing_lava"))
+            }
+            "solid" => Pred::Solid(off),
+            "not" => Pred::Not(Box::new(Pred::parse(&v["predicate"])?)),
+            "any_of" => Pred::AnyOf(v["predicates"].as_array().ok_or_else(|| anyhow!("predicates"))?.iter().map(Pred::parse).collect::<Result<_>>()?),
+            "all_of" => Pred::AllOf(v["predicates"].as_array().ok_or_else(|| anyhow!("predicates"))?.iter().map(Pred::parse).collect::<Result<_>>()?),
+            t => bail!("unsupported block predicate {t}"),
+        })
+    }
+
+    /// `approx`: estimate unknown blocks outside the chunk instead of failing.
+    fn test(&self, w: &mut dyn OreWorld, x: i32, y: i32, z: i32, approx: bool) -> bool {
+        let get = |w: &mut dyn OreWorld, o: (i32, i32, i32)| {
+            let (px, py, pz) = (x + o.0, y + o.1, z + o.2);
+            match w.get(px, py, pz) { Some(b) => Some(b), None if approx => Some(w.get_approx(px, py, pz)), None => None }
+        };
+        match self {
+            Pred::True => true,
+            Pred::MatchingBlocks(o, set) => get(w, *o).map(|b| set.contains(BlockState(b as u32).name())).unwrap_or(false),
+            Pred::MatchingFluids(o, water, lava) => get(w, *o).map(|b| {
+                let st = BlockState(b as u32);
+                let wl = st.get("waterlogged") == Some("true");
+                (*water && (st.name() == "water" || wl)) || (*lava && st.name() == "lava")
+            }).unwrap_or(false),
+            Pred::Solid(o) => get(w, *o).map(|b| { let st = BlockState(b as u32); !st.is_air() && !matches!(st.name(), "water" | "lava") }).unwrap_or(false),
+            Pred::Not(p) => !p.test(w, x, y, z, approx),
+            Pred::AnyOf(ps) => ps.iter().any(|p| p.test(w, x, y, z, approx)),
+            Pred::AllOf(ps) => ps.iter().all(|p| p.test(w, x, y, z, approx)),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Disk {
+    half_height: i32,
+    radius: IntProvider,
+    rules: Vec<(Pred, u16)>,
+    fallback: u16,
+    target: Pred,
+}
+
+#[derive(Debug)]
+pub enum Kind {
+    Ore(Ore),
+    Disk(Disk),
+}
+
+fn simple_state(v: &Value) -> Result<u16> {
+    match v["type"].as_str().unwrap_or("").trim_start_matches("minecraft:") {
+        "simple_state_provider" => state_from_json(&v["state"]),
+        t => bail!("unsupported state provider {t}"),
+    }
 }
 
 #[derive(Debug)]
@@ -96,7 +185,7 @@ pub struct Ore {
 #[derive(Debug)]
 pub struct PlacedOre {
     modifiers: Vec<Modifier>,
-    ore: Ore,
+    kind: Kind,
 }
 
 pub struct Features {
@@ -110,6 +199,8 @@ pub struct Features {
     ores: HashMap<u32, PlacedOre>,
     /// Replaceable block-state sets used by ore targets.
     sets: Vec<Vec<bool>>,
+    /// State returned by `OreWorld::get_approx` for solid ground.
+    pub approx_stone: u16,
 }
 
 /// Something that ore placement can read and write.
@@ -123,6 +214,10 @@ pub trait OreWorld {
     fn ocean_floor(&mut self, x: i32, z: i32) -> i32;
     /// Zoomed biome at a block position.
     fn biome(&mut self, x: i32, y: i32, z: i32) -> u8;
+    /// Best guess for a block outside the chunk (used by placement filters only).
+    fn get_approx(&mut self, x: i32, y: i32, z: i32) -> u16;
+    /// WORLD_SURFACE_WG height of a column.
+    fn world_surface(&mut self, x: i32, z: i32) -> i32 { self.ocean_floor(x, z) }
 }
 
 impl Features {
@@ -198,7 +293,7 @@ impl Features {
             biome_steps.push(bs);
             biome_has.push(has);
         }
-        let mut f = Features { steps, biome_steps, biome_has, ores: HashMap::new(), sets: Vec::new() };
+        let mut f = Features { steps, biome_steps, biome_has, ores: HashMap::new(), sets: Vec::new(), approx_stone: BlockState::from_name("stone").map(|s| s.0 as u16).unwrap_or(1) };
         let mut set_idx: HashMap<String, usize> = HashMap::new();
         if f.steps.len() > ORE_STEP {
             for (i, name) in f.steps[ORE_STEP].clone().iter().enumerate() {
@@ -216,7 +311,8 @@ impl Features {
             Value::String(s) => serde_json::from_str(&std::fs::read_to_string(wg.join("configured_feature").join(format!("{}.json", s.trim_start_matches("minecraft:"))))?)?,
             v => v.clone(),
         };
-        if cv["type"].as_str() != Some("minecraft:ore") { return Ok(None); }
+        let ty = cv["type"].as_str().unwrap_or("").trim_start_matches("minecraft:").to_string();
+        if ty != "ore" && ty != "disk" { return Ok(None); }
         let mut modifiers = Vec::new();
         for m in pv["placement"].as_array().ok_or_else(|| anyhow!("placement"))? {
             modifiers.push(match m["type"].as_str().unwrap_or("").trim_start_matches("minecraft:") {
@@ -225,10 +321,39 @@ impl Features {
                 "height_range" => Modifier::HeightRange(Height::parse(&m["height"])?),
                 "biome" => Modifier::Biome,
                 "rarity_filter" => Modifier::Rarity(m["chance"].as_i64().unwrap_or(1) as i32),
+                "heightmap" => match m["heightmap"].as_str() {
+                    Some("OCEAN_FLOOR_WG") => Modifier::Heightmap(true),
+                    Some("WORLD_SURFACE_WG") => Modifier::Heightmap(false),
+                    _ => return Ok(None),
+                },
+                "random_offset" => Modifier::RandomOffset(IntProvider::parse(&m["xz_spread"])?, IntProvider::parse(&m["y_spread"])?),
+                "block_predicate_filter" => Modifier::Filter(Pred::parse(&m["predicate"])?),
                 _ => return Ok(None),
             });
         }
         let c = &cv["config"];
+        if ty == "disk" {
+            let sp = &c["state_provider"];
+            let (rules, fallback) = match sp["type"].as_str().unwrap_or("").trim_start_matches("minecraft:") {
+                "rule_based_state_provider" => {
+                    let mut rules = Vec::new();
+                    for r in sp["rules"].as_array().ok_or_else(|| anyhow!("rules"))? {
+                        rules.push((Pred::parse(&r["if_true"])?, simple_state(&r["then"])?));
+                    }
+                    (rules, simple_state(&sp["fallback"])?)
+                }
+                _ => (Vec::new(), simple_state(sp)?),
+            };
+            return Ok(Some(PlacedOre {
+                modifiers,
+                kind: Kind::Disk(Disk {
+                    half_height: c["half_height"].as_i64().unwrap_or(0) as i32,
+                    radius: IntProvider::parse(&c["radius"])?,
+                    rules, fallback,
+                    target: Pred::parse(&c["target"])?,
+                }),
+            }));
+        }
         let mut targets = Vec::new();
         for t in c["targets"].as_array().ok_or_else(|| anyhow!("targets"))? {
             let state = state_from_json(&t["state"])?;
@@ -252,11 +377,11 @@ impl Features {
         }
         Ok(Some(PlacedOre {
             modifiers,
-            ore: Ore {
+            kind: Kind::Ore(Ore {
                 size: c["size"].as_i64().unwrap_or(0) as i32,
                 discard: c["discard_chance_on_air_exposure"].as_f64().unwrap_or(0.0) as f32,
                 targets,
-            },
+            }),
         }))
     }
 
@@ -279,7 +404,10 @@ impl Features {
     #[allow(clippy::too_many_arguments)]
     fn place(&self, trig: &Trig, po: &PlacedOre, p: u32, r: &mut BitXoroshiro, mi: usize, x: i32, y: i32, z: i32, w: &mut dyn OreWorld) {
         if mi == po.modifiers.len() {
-            self.ore(trig, &po.ore, r, x, y, z, w);
+            match &po.kind {
+                Kind::Ore(o) => self.ore(trig, o, r, x, y, z, w),
+                Kind::Disk(d) => disk(d, r, x, y, z, w),
+            }
             return;
         }
         match &po.modifiers[mi] {
@@ -302,6 +430,19 @@ impl Features {
             }
             Modifier::Rarity(c) => {
                 if r.next_float() < 1.0 / *c as f32 { self.place(trig, po, p, r, mi + 1, x, y, z, w); }
+            }
+            Modifier::Heightmap(ocean) => {
+                let h = if *ocean { w.ocean_floor(x, z) } else { w.world_surface(x, z) };
+                if h > crate::MIN_Y { self.place(trig, po, p, r, mi + 1, x, h, z, w); }
+            }
+            Modifier::RandomOffset(xz, ys) => {
+                let nx = x + xz.sample(r);
+                let ny = y + ys.sample(r);
+                let nz = z + xz.sample(r);
+                self.place(trig, po, p, r, mi + 1, nx, ny, nz, w);
+            }
+            Modifier::Filter(pr) => {
+                if pr.test(w, x, y, z, true) { self.place(trig, po, p, r, mi + 1, x, y, z, w); }
             }
         }
     }
@@ -399,9 +540,11 @@ impl Features {
                         if bits[aj] { continue; }
                         bits[aj] = true;
                         let cur = w.get(ad, af, ah);
+                        // Unknown blocks (outside the chunk) are estimated; they only matter
+                        // for the randoms the air-exposure check draws.
+                        let test = match cur { Some(b) => b, None if no_rng => continue, None => w.get_approx(ad, af, ah) };
                         for (si, st) in &c.targets {
-                            // Unknown blocks (outside the chunk) are assumed to be replaceable stone.
-                            let pass = match cur { Some(b) => self.sets[*si][b as usize], None => true };
+                            let pass = self.sets[*si][test as usize] || (cur.is_none() && test == self.approx_stone);
                             if !pass { continue; }
                             let place = if c.discard <= 0.0 { true } else if c.discard >= 1.0 { false } else { r.next_float() >= c.discard }
                                 || !adjacent_air(w, ad, af, ah);
@@ -411,6 +554,26 @@ impl Features {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+fn disk<R: Rng>(d: &Disk, r: &mut R, ox: i32, oy: i32, oz: i32, w: &mut dyn OreWorld) {
+    let top = oy + d.half_height;
+    let bottom = oy - d.half_height - 1;
+    let l = d.radius.sample(r);
+    for z in oz - l..=oz + l {
+        for x in ox - l..=ox + l {
+            let (n, o) = (x - ox, z - oz);
+            if n * n + o * o > l * l { continue; }
+            let mut k = top;
+            while k > bottom {
+                if d.target.test(w, x, k, z, false) {
+                    let st = d.rules.iter().find(|(p, _)| p.test(w, x, k, z, false)).map(|(_, s)| *s).unwrap_or(d.fallback);
+                    w.set(x, k, z, st);
+                }
+                k -= 1;
             }
         }
     }
