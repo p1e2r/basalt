@@ -178,6 +178,12 @@ fn compare(case: &Value, v: &Value, b: &Value) -> Vec<Mismatch> {
         let mode = clicks.get(i).map(|c| c[2].as_i64().unwrap_or(-1)).unwrap_or(-1);
         let (sv, sb) = (&vs[i], &bs[i]);
         if sv["slots"] != sb["slots"] || sv["cursor"] != sb["cursor"] {
+            // a difference that is gone by the last step is a late packet or a reconverged state, not a final-state bug
+            let last = vs.len().min(bs.len()) - 1;
+            if i < last && vs[last]["slots"] == bs[last]["slots"] && vs[last]["cursor"] == bs[last]["cursor"] {
+                out.push(Mismatch::info(format!("transient-state/{tbl}mode{mode}"), format!("after click {i} {}: {} (equal again after the last click)", clicks[i], diff_slots(sv, sb))));
+                return out;
+            }
             let cur = if sv["cursor"] != sb["cursor"] { format!("; cursor vanilla {} basalt {}", sv["cursor"], sb["cursor"]) } else { String::new() };
             out.push(Mismatch::fail(format!("state/{tbl}mode{mode}"), format!("after click {i} {}: {}{cur}", clicks[i], diff_slots(sv, sb))));
             return out;

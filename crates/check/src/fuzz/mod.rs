@@ -339,7 +339,7 @@ pub fn cmd_collect(bot: &Bot, cmd: &str) -> Result<Vec<crate::proto::Text>> {
     if !bot.wait_until(std::time::Duration::from_secs(5), |s| s.chat[mark..].iter().any(|l| is_sentinel(&l.text))) { anyhow::bail!("no reply to the `list` sentinel after /{cmd}"); }
     let all: Vec<crate::proto::Text> = bot.st().chat[mark..].iter().map(|l| l.text.clone()).collect();
     let end = all.iter().rposition(is_sentinel).unwrap_or(all.len());
-    Ok(all[..end].iter().filter(|t| !t.key.as_deref().map(|k| k.starts_with("chat.type") || k.starts_with("multiplayer.")).unwrap_or(false) && !t.plain.ends_with("joined the game") && !t.plain.starts_with('<')).cloned().collect())
+    Ok(all[..end].iter().filter(|t| !t.key.as_deref().map(|k| k.starts_with("chat.type") || k.starts_with("multiplayer.") || k.starts_with("death.")).unwrap_or(false) && !t.plain.ends_with("joined the game") && !t.plain.starts_with('<')).cloned().collect())
 }
 
 /// Wait until no new `cont_log` entry has arrived for `quiet_ms` (at most `max_ms`).

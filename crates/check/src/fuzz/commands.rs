@@ -179,6 +179,10 @@ fn first_line(lines: &[Value]) -> Option<&Value> {
 }
 
 pub fn vanilla_outcome(lines: &[Value]) -> Outcome {
+    // vanilla's own replies always carry a translation key, except /help's `/cmd usage` lines; keyless text is a late
+    // `say` broadcast from an earlier case that arrived after its sentinel
+    let kept: Vec<Value> = lines.iter().filter(|l| !l["key"].is_null() || l["plain"].as_str().unwrap_or("").starts_with('/') || l["plain"].as_str().unwrap_or("").ends_with("command.context.here")).cloned().collect();
+    let lines = &kept[..];
     match first_line(lines) {
         None => Outcome { fail: false, key: String::new(), plain: String::new() },
         Some(l) => { let k = l["key"].as_str().unwrap_or("").to_string(); Outcome { fail: is_failure_key(&k), key: k, plain: l["plain"].as_str().unwrap_or("").into() } }

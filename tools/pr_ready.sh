@@ -115,7 +115,7 @@ if cargo build --release -p basalt-server -p basalt-check -q > "$OUT/build.log" 
     ./target/release/basalt-check --group client ${CSEL[@]+"${CSEL[@]}"} ${ARGS[@]+"${ARGS[@]}"} > "$OUT/pr_ready-client.log" 2>&1
     RC=$?
     if grep -q "no harnesses are registered for group" "$OUT/pr_ready-client.log"; then row "harnesses (client group)" skip "$(since $T)" "no client harness group registered yet (note: nothing run)"
-    elif [ $RC = 0 ]; then row "harnesses (client group)" pass "$(since $T)" "$(grep -E '^[0-9]+ harness' "$OUT/pr_ready-client.log" | tail -1)"
+    elif [ $RC = 0 ]; then row "harnesses (client group)" pass "$(since $T)" "$(grep -E '^[0-9]+ harness|nothing affected' "$OUT/pr_ready-client.log" | tail -1 | cut -c1-120)"
     else row "harnesses (client group)" FAIL "$(since $T)" "see $OUT/pr_ready-client.log"; FAIL=1; fi
   fi
 else
