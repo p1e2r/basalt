@@ -383,14 +383,7 @@ impl Generator {
         }
         let own_biomes = biomes[12].clone();
         let mut reg = region::Region::new(self, cx - 2, cz - 2, 5, blocks, biomes);
-        let mut order = DECORATION_ORDER;
-        match std::env::var("BASALT_ORDER").as_deref() {
-            Ok("zfirst") => order = [(-1, -1), (0, -1), (1, -1), (-1, 0), (0, 0), (1, 0), (-1, 1), (0, 1), (1, 1)],
-            Ok("desc") => order = [(1, 1), (1, 0), (1, -1), (0, 1), (0, 0), (0, -1), (-1, 1), (-1, 0), (-1, -1)],
-            Ok("zdesc") => order = [(1, 1), (0, 1), (-1, 1), (1, 0), (0, 0), (-1, 0), (1, -1), (0, -1), (-1, -1)],
-            _ => {}
-        }
-        for (dx, dz) in order {
+        for (dx, dz) in DECORATION_ORDER {
             let (nx, nz) = (cx + dx, cz + dz);
             let mut set = vec![false; self.biome_names.len()];
             for ex in -1..=1 {
@@ -398,13 +391,15 @@ impl Generator {
             }
             let list: Vec<u8> = set.iter().enumerate().filter(|(_, v)| **v).map(|(i, _)| i as u8).collect();
             reg.write = ((nx - 1) * 16, (nx + 2) * 16 - 1, (nz - 1) * 16, (nz + 2) * 16 - 1);
-            if features::debug_filter().map(|d| d == "fungus").unwrap_or(false) { eprintln!("[run] center {cx} {cz} decorating {nx} {nz}"); }
             self.features.decorate(self.seed, nx, nz, &list, &mut reg);
         }
         self.crop(GeneratedChunk { blocks: reg.take_chunk(cx, cz), biomes: own_biomes, min_y: MIN_Y })
     }
 
     /// Feature types present in the data that are not implemented yet (type → count).
+    /// Global placed-feature order per decoration step (debugging aid).
+    pub fn feature_steps(&self) -> &Vec<Vec<String>> { &self.features.steps }
+
     pub fn unsupported_features(&self) -> &std::collections::BTreeMap<String, usize> { &self.features.unsupported }
 
     /// Cut the internal 24-section buffer down to the dimension's own sections.

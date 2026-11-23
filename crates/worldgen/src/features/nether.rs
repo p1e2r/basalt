@@ -41,7 +41,7 @@ pub fn every_layer(reg: &mut Region, r: &mut R, count: &IntProvider, x0: i32, z0
             let mut prev = reg.block(x, h, z);
             let mut found = None;
             let mut k = h;
-            while k >= miny + 1 {
+            while k > miny {
                 let below = reg.block(x, k - 1, z);
                 if !is_empty_layer(below) && is_empty_layer(prev) && !name_is(reg, x, k - 1, z, "bedrock") {
                     if remaining == 0 { found = Some(k); break; }
@@ -62,6 +62,7 @@ pub fn every_layer(reg: &mut Region, r: &mut R, count: &IntProvider, x0: i32, z0
 
 pub struct HugeFungus {
     decor: u16,
+    vines: bool,
     hat: u16,
     stem: u16,
     replaceable: Pred,
@@ -73,6 +74,7 @@ impl HugeFungus {
     pub fn parse(f: &mut Features, c: &Value) -> Result<HugeFungus> {
         Ok(HugeFungus {
             decor: state_from_json(&c["decor_state"])?,
+            vines: BlockState(state_from_json(&c["hat_state"])? as u32).name() == "nether_wart_block",
             hat: state_from_json(&c["hat_state"])?,
             stem: state_from_json(&c["stem_state"])?,
             replaceable: Pred::parse(&f.tags, &c["replaceable_blocks"])?,
@@ -91,7 +93,6 @@ impl HugeFungus {
         if r.next_int_bounded(12) == 0 { h *= 2; }
         if !self.planted && y + h + 1 >= reg.g.gen_height { return false; }
         let thick = !self.planted && r.next_float() < 0.06;
-        if super::debug_filter().map(|d| d == "fungus").unwrap_or(false) { eprintln!("[fungus] {x} {y} {z} h={h} thick={thick}"); }
         reg.set(x, y, z, 0);
         self.stem(f, reg, r, x, y, z, h, thick);
         self.hat(f, reg, r, x, y, z, h, thick);
@@ -153,7 +154,7 @@ impl HugeFungus {
         if r.next_float() < decor { reg.set(x, y, z, self.decor); }
         else if r.next_float() < hat {
             reg.set(x, y, z, self.hat);
-            if r.next_float() < 0.083 { weeping_column_below(reg, r, x, y, z); }
+            if self.vines && r.next_float() < 0.083 { weeping_column_below(reg, r, x, y, z); }
         }
     }
 
@@ -162,7 +163,7 @@ impl HugeFungus {
             reg.set(x, y, z, self.hat);
         } else if r.next_float() < 0.15 {
             reg.set(x, y, z, self.hat);
-            if r.next_int_bounded(11) == 0 { weeping_column_below(reg, r, x, y, z); }
+            if self.vines && r.next_int_bounded(11) == 0 { weeping_column_below(reg, r, x, y, z); }
         }
     }
 }
@@ -174,6 +175,7 @@ fn weeping_column_below(reg: &mut Region, r: &mut R, x: i32, y: i32, z: i32) {
     weeping_column(reg, r, x, y - 1, z, h, 23, 25);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn weeping_column(reg: &mut Region, r: &mut R, x: i32, mut y: i32, z: i32, height: i32, min_age: i32, max_age: i32) {
     let plant = st("weeping_vines_plant");
     let head = BlockState::from_name("weeping_vines").unwrap();
@@ -190,6 +192,7 @@ fn weeping_column(reg: &mut Region, r: &mut R, x: i32, mut y: i32, z: i32, heigh
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn twisting_column(reg: &mut Region, r: &mut R, x: i32, mut y: i32, z: i32, height: i32, min_age: i32, max_age: i32) {
     let plant = st("twisting_vines_plant");
     let head = BlockState::from_name("twisting_vines").unwrap();
@@ -276,6 +279,7 @@ fn twisting_invalid(reg: &Region, x: i32, y: i32, z: i32) -> bool {
     !(b == st("netherrack") || b == st("warped_nylium") || b == st("warped_wart_block"))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn twisting_vines(reg: &mut Region, r: &mut R, x: i32, y: i32, z: i32, width: i32, height: i32, max_height: i32) -> bool {
     if twisting_invalid(reg, x, y, z) { return false; }
     for _ in 0..width * width {
@@ -570,4 +574,23 @@ pub fn parse_vegetation(f: &Features, c: &Value) -> Result<Vegetation> {
         width: c["spread_width"].as_i64().unwrap_or(8) as i32,
         height: c["spread_height"].as_i64().unwrap_or(4) as i32,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{Dimension, Generator};
+    use basalt_data::BlockState;
+
+    #[test]
+    fn nether_features_run() {
+        let g = Generator::new_dim(12345, Dimension::Nether);
+        assert!(!g.unsupported_features().keys().any(|k| k.contains("huge_fungus") || k.contains("count_on_every_layer")));
+        // A crimson forest chunk (measured against vanilla seed 12345): stems, hats and vines appear.
+        let c = g.generate_chunk(-3, 1);
+        let mut n = std::collections::HashMap::new();
+        for sec in &c.blocks { for &b in sec.iter() { *n.entry(BlockState(b as u32).name()).or_insert(0usize) += 1; } }
+        assert!(n.get("crimson_stem").copied().unwrap_or(0) > 20);
+        assert!(n.get("nether_wart_block").copied().unwrap_or(0) > 100);
+        assert!(n.get("weeping_vines_plant").copied().unwrap_or(0) > 0);
+    }
 }
