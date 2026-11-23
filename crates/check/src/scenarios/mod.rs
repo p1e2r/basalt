@@ -8,6 +8,7 @@ pub mod m3;
 pub mod m4;
 pub mod m5;
 pub mod m6;
+pub mod m8;
 pub mod util;
 
 macro_rules! spec {
@@ -82,4 +83,8 @@ pub static ALL: &[Spec] = &[
     // appended last: a scenario's arena is placed by its index, so inserting earlier would move the others
     spec!("M2", "m2_command_forms", m1::command_forms, Flat, Both, false, "Brigadier parsing: tp/time/gamemode/enchant/help/effect/setblock forms accepted or rejected with vanilla's keys; /kill kills creative players"),
     spec!("M4", "m4_dig_accept", m4::dig_accept, Flat, Both, false, "stop accepted at progress*(ticks+1) >= 0.7 (stone/hand 104, wool/hand 16), on_ground flag ignored, 5x slower above the floor"),
+    spec!("M8", "m8_execute_in", m8::execute_in, Flat, Both, true, "execute in the_nether run tp: respawn into the nether (layout 0..256, bedrock floor/roof), seed-12345 nether columns over the wire, and back"),
+    spec!("M8", "m8_portal_frames", m8::portal_frames, Flat, Both, true, "obsidian frames: fire lights 2x3..21-wide frames (x/z axis, corners optional), not 22-wide or incomplete ones; flint and steel; breaking the frame removes the portal"),
+    spec!("M8", "m8_portal_travel", m8::portal_travel, Flat, Both, true, "standing in a portal: survival ~80 ticks to x/8 z/8 with a new exit portal, no bounce-back while standing, return to the same portal; creative at once"),
+    spec!("M8", "m8_nether_persistence", m8::nether_persistence, FlatOnDisk, BasaltOnly, false, "player + block in the nether survive a restart; nether saved in world/dimensions/minecraft/the_nether/region"),
 ];

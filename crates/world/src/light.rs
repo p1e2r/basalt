@@ -147,7 +147,9 @@ impl Window {
         let Some(i) = self.slot(x, z) else { return };
         if !(MIN_Y..MAX_Y).contains(&y) { return; }
         let p = props(self.state(i, x, y, z));
+        let sky = self.chunk(i).layout.sky;
         for k in [LightKind::Sky, LightKind::Block] {
+            if k == LightKind::Sky && !sky { continue; }
             let old = self.get(i, k, x, y, z);
             let base = match k {
                 LightKind::Block => p.emission,
@@ -180,14 +182,15 @@ impl Window {
         self.changed[ci] = true;
         let (bx, bz) = (self.cx * 16, self.cz * 16);
 
-        // --- sky ---
+        // --- sky --- (none in sky-less dimensions such as the Nether)
+        let sky = self.chunk(ci).layout.sky;
         // Highest light-relevant y around: everything above is open sky in all 9 chunks.
         let mut top = MIN_Y;
         for c in self.chunks.iter().flatten() {
             top = top.max(c.heightmaps.world_surface.iter().copied().max().unwrap_or(0) as i32 + MIN_Y);
         }
         let mut q = VecDeque::new();
-        for lz in 0..16 {
+        for lz in 0..if sky { 16 } else { 0 } {
             for lx in 0..16 {
                 let (x, z) = (bx + lx, bz + lz);
                 let mut y = MAX_Y - 1;

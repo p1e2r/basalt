@@ -458,11 +458,13 @@ impl Game {
     pub(super) fn save_mobs(&self) {
         let Some(d) = &self.dir else { return };
         let v: Vec<_> = self.mobs.values().filter(|m| m.alive()).map(|m| m.to_json()).collect();
-        let _ = std::fs::write(d.join("entities.json"), serde_json::Value::Array(v).to_string());
+        let path = d.join(super::dim::DIMS[self.cur].entities);
+        if let Some(p) = path.parent() { let _ = std::fs::create_dir_all(p); }
+        let _ = std::fs::write(path, serde_json::Value::Array(v).to_string());
     }
     pub(super) fn load_mobs(&mut self) {
         let Some(d) = &self.dir else { return };
-        let Ok(s) = std::fs::read_to_string(d.join("entities.json")) else { return };
+        let Ok(s) = std::fs::read_to_string(d.join(super::dim::DIMS[self.cur].entities)) else { return };
         let Ok(serde_json::Value::Array(a)) = serde_json::from_str::<serde_json::Value>(&s) else { return };
         for v in a {
             let eid = self.sh.next_eid.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

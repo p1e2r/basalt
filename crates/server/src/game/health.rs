@@ -102,6 +102,13 @@ impl Game {
 
     /// client_command 0: perform respawn.
     pub(super) fn respawn(&mut self, eid: i32) {
+        // players always respawn at the world spawn in the overworld (no beds / anchors yet)
+        if self.cur != super::dim::OVERWORLD && self.players.get(&eid).map(|p| p.dead).unwrap_or(false) {
+            let Some(p) = self.players.remove(&eid) else { return };
+            for o in self.players.values() { let mut w = Writer::with_id(cb::REMOVE_ENTITIES); w.varint(1).varint(eid); o.send(w); }
+            self.enter(super::dim::OVERWORLD);
+            self.players.insert(eid, p);
+        }
         let spawn = self.spawn;
         let dims = self.sh.registries.entries("minecraft:dimension_type");
         let dim_type = dims.iter().position(|d| d == "minecraft:overworld").unwrap_or(0) as i32;
