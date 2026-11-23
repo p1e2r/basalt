@@ -97,3 +97,53 @@ mod tests {
         assert_eq!(super::tr("missing", &[]), "missing");
     }
 }
+
+/// Legacy colour code of a named text colour (`0`-`f`), or a private `x` + 6 hex digits for RGB.
+fn color_code(name: &str) -> Option<String> {
+    const NAMES: [&str; 16] = ["black", "dark_blue", "dark_green", "dark_aqua", "dark_red", "dark_purple", "gold", "gray", "dark_gray", "blue", "green", "aqua", "red", "light_purple", "yellow", "white"];
+    if let Some(i) = NAMES.iter().position(|n| *n == name) { return Some(format!("{:x}", i)); }
+    name.strip_prefix('#').filter(|h| h.len() == 6 && h.chars().all(|c| c.is_ascii_hexdigit())).map(|h| format!("x{h}"))
+}
+
+/// Like `text`, with colours kept inline as `§<code>` (the UI renderer turns them into colour
+/// changes; `§r` back to the default). Children inherit their parent's colour.
+pub fn styled(t: &Tag) -> String {
+    fn walk(t: &Tag, cur: &str, out: &mut String) {
+        match t {
+            Tag::Compound(c) => {
+                let col = match c.get("color") { Some(Tag::String(n)) => color_code(n).unwrap_or_else(|| cur.to_string()), _ => cur.to_string() };
+                let set = |out: &mut String, code: &str| { if !code.is_empty() { out.push('§'); out.push_str(code); } else { out.push_str("§r"); } };
+                if col != cur { set(out, &col); }
+                if let Some(Tag::String(x)) = c.get("text") { out.push_str(x); }
+                if let Some(Tag::String(x)) = c.get("") { out.push_str(x); }
+                if let Some(Tag::String(k)) = c.get("translate") {
+                    let args: Vec<String> = match c.get("with") {
+                        Some(Tag::List(w)) => w.iter().map(|a| { let mut o = String::new(); walk(a, &col, &mut o); o.push_str(&if col.is_empty() { "§r".to_string() } else { format!("§{col}") }); o }).collect(),
+                        _ => Vec::new(),
+                    };
+                    let fallback = match c.get("fallback") { Some(Tag::String(f)) => Some(f.clone()), _ => None };
+                    let r = tr(k, &args);
+                    if r == *k && fallback.is_some() { out.push_str(&fallback.unwrap()); } else { out.push_str(&r); }
+                }
+                if let Some(Tag::List(ex)) = c.get("extra") { for e in ex { walk(e, &col, out); set(out, &col); } }
+                if col != cur { set(out, cur); }
+            }
+            Tag::List(l) => for e in l { walk(e, cur, out) },
+            other => out.push_str(&text(other)),
+        }
+    }
+    let mut out = String::new();
+    walk(t, "", &mut out);
+    out
+}
+
+/// `s` without `§` formatting codes.
+pub fn strip_codes(s: &str) -> String {
+    let mut out = String::new();
+    let mut it = s.chars().peekable();
+    while let Some(c) = it.next() {
+        if c != '§' { out.push(c); continue; }
+        if it.next() == Some('x') { for _ in 0..6 { it.next(); } }
+    }
+    out
+}

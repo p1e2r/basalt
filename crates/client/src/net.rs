@@ -277,10 +277,10 @@ fn handle_play(id: i32, data: &[u8], tx: &Sender<Event>, players: &mut HashMap<U
             let yaw = r.f32()?; let pitch = r.f32()?; let flags = r.i32()?;
             Event::Teleport { id, pos, vel, yaw, pitch, flags }
         }
-        cb::SYSTEM_CHAT => { let t = r.nbt()?; let overlay = r.bool().unwrap_or(false); if overlay { Event::Title { kind: 2, text: crate::lang::text(&t) } } else { Event::Chat(crate::lang::text(&t)) } }
-        cb::SET_TITLE_TEXT => Event::Title { kind: 0, text: crate::lang::text(&r.nbt()?) },
-        cb::SET_SUBTITLE_TEXT => Event::Title { kind: 1, text: crate::lang::text(&r.nbt()?) },
-        cb::SET_ACTION_BAR_TEXT => Event::Title { kind: 2, text: crate::lang::text(&r.nbt()?) },
+        cb::SYSTEM_CHAT => { let t = r.nbt()?; let overlay = r.bool().unwrap_or(false); if overlay { Event::Title { kind: 2, text: crate::lang::styled(&t) } } else { Event::Chat(crate::lang::styled(&t)) } }
+        cb::SET_TITLE_TEXT => Event::Title { kind: 0, text: crate::lang::styled(&r.nbt()?) },
+        cb::SET_SUBTITLE_TEXT => Event::Title { kind: 1, text: crate::lang::styled(&r.nbt()?) },
+        cb::SET_ACTION_BAR_TEXT => Event::Title { kind: 2, text: crate::lang::styled(&r.nbt()?) },
         cb::SET_TITLES_ANIMATION => Event::TitleTimes([r.i32()?, r.i32()?, r.i32()?]),
         cb::CLEAR_TITLES => Event::ClearTitles { reset: r.bool()? },
         cb::PLAYER_CHAT => {
@@ -298,7 +298,7 @@ fn handle_play(id: i32, data: &[u8], tx: &Sender<Event>, players: &mut HashMap<U
             for _ in 0..n.clamp(0, 1000) { list.push(r.str()?); if r.bool()? { r.nbt()?; } }
             Event::Suggestions { id, start, len, list }
         }
-        cb::DISGUISED_CHAT => Event::Chat(crate::lang::text(&r.nbt()?)),
+        cb::DISGUISED_CHAT => Event::Chat(crate::lang::styled(&r.nbt()?)),
         cb::SET_HEALTH => { let hp = r.f32()?; let food = r.varint()?; Event::Health { hp, food } }
         cb::SET_EXPERIENCE => { let progress = r.f32()?; let level = r.varint()?; let total = r.varint()?; Event::Experience { progress, level, total } }
         cb::GAME_EVENT => { let e = r.u8()?; let v = r.f32()?; if e == 3 { Event::GameMode(v as u8) } else { return Ok(()) } }

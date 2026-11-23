@@ -425,7 +425,7 @@ impl Game {
                 self.spawned = true;
                 if matches!(self.screen, Some(Screen::Connecting { .. })) { self.screen = None; }
             }
-            Event::Chat(s) => { println!("[chat] {s}"); self.chat.push((s, Instant::now())); if self.chat.len() > 100 { self.chat.remove(0); } }
+            Event::Chat(s) => { println!("[chat] {}", lang::strip_codes(&s)); self.chat.push((s, Instant::now())); if self.chat.len() > 100 { self.chat.remove(0); } }
             Event::Health { hp, food } => { self.hp = hp; self.food = food; }
             Event::Experience { progress, level, total: _ } => { self.xp = (progress, level); }
             Event::Title { kind: 0, text } => { self.title.0 = text; self.title.2 = 0; }

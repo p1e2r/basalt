@@ -1195,13 +1195,16 @@ fn titles(c: &Ctx) -> Result<Outcome> {
     cmd(&mut g, "title @s subtitle \"small\"");
     cmd(&mut g, "title @s title {text:\"Big\",color:\"gold\"}");
     cmd(&mut g, "title @s actionbar \"bar\"");
-    if !wait_until(&mut g, 3.0, |g| g.title.0 == "Big" && g.actionbar.0 == "bar")? { bail!("title/actionbar not received: {:?} {:?}", g.title.0, g.actionbar.0); }
+    if !wait_until(&mut g, 3.0, |g| crate::lang::strip_codes(&g.title.0) == "Big" && crate::lang::strip_codes(&g.actionbar.0) == "bar")? { bail!("title/actionbar not received: {:?} {:?}", g.title.0, g.actionbar.0); }
     wait(&mut g, 0.2)?;
     let shown = capture(&mut g)?;
     save(&g, &shown, "titles");
     let (w, h) = (W as i32, H as i32);
     let mid = diff_count(&before, &shown, w / 4, h / 4, 3 * w / 4, h / 2 + h / 8);
     if mid < 200 { bail!("title text not drawn ({mid} px)"); }
+    // {color:"gold"} -> (255,170,0)
+    let gold = (0..W as i32).step_by(2).flat_map(|x| (H as i32 / 4..H as i32 / 2).step_by(2).map(move |y| (x, y))).filter(|&(x, y)| { let p = px(&shown, x, y); p[0] > 220 && (150..=190).contains(&p[1]) && p[2] < 40 }).count();
+    if gold < 20 { bail!("title not drawn in gold ({gold} px)"); }
     if !wait_until(&mut g, 3.0, |g| g.title.2 < 0)? { bail!("title did not time out after times 0 20 0"); }
     Ok(Outcome::Pass(format!("title drawn ({mid} px), gone after its stay time")))
 }

@@ -147,14 +147,36 @@ impl UiAtlas {
         }
         m.idx.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3]);
     }
-    pub fn text_width(&self, s: &str, scale: f32) -> f32 { s.chars().map(|c| self.advance(c) * scale).sum() }
+    pub fn text_width(&self, s: &str, scale: f32) -> f32 {
+        let mut w = 0.0;
+        let mut it = s.chars();
+        while let Some(c) = it.next() {
+            if c == '§' { if it.next() == Some('x') { for _ in 0..6 { it.next(); } } continue; }
+            w += self.advance(c) * scale;
+        }
+        w
+    }
     /// Text with drop shadow.
     pub fn text(&self, m: &mut MeshData, s: &str, x: f32, y: f32, scale: f32, color: [u8; 4]) { self.text_ex(m, s, x, y, scale, color, true) }
     pub fn text_ex(&self, m: &mut MeshData, s: &str, x: f32, y: f32, scale: f32, color: [u8; 4], shadow: bool) {
         let passes: &[(f32, [u8; 4])] = if shadow { &[(1.0, [color[0] / 4, color[1] / 4, color[2] / 4, color[3]]), (0.0, color)] } else { &[(0.0, color)] };
-        for &(pass, col) in passes {
+        // vanilla's 16 chat colours (§0-§f; standard values), shadows a quarter as bright
+        const PAL: [[u8; 3]; 16] = [[0, 0, 0], [0, 0, 170], [0, 170, 0], [0, 170, 170], [170, 0, 0], [170, 0, 170], [255, 170, 0], [170, 170, 170], [85, 85, 85], [85, 85, 255], [85, 255, 85], [85, 255, 255], [255, 85, 85], [255, 85, 255], [255, 255, 85], [255, 255, 255]];
+        for &(pass, base) in passes {
             let mut cx = x + pass * scale;
-            for ch in s.chars() {
+            let mut col = base;
+            let mut it = s.chars();
+            while let Some(ch) = it.next() {
+                if ch == '§' {
+                    let rgb = match it.next() {
+                        Some('x') => { let h: String = (0..6).filter_map(|_| it.next()).collect(); u32::from_str_radix(&h, 16).ok().map(|v| [(v >> 16) as u8, (v >> 8) as u8, v as u8]) }
+                        Some('r') => None,
+                        Some(c) => c.to_digit(16).map(|d| PAL[d as usize]),
+                        None => None,
+                    };
+                    col = match rgb { Some(c) if pass > 0.0 => [c[0] / 4, c[1] / 4, c[2] / 4, base[3]], Some(c) => [c[0], c[1], c[2], base[3]], None => base };
+                    continue;
+                }
                 if ch != ' ' {
                     let g = self.glyphs.get(&ch).or_else(|| self.glyphs.get(&'?'));
                     if let Some(g) = g {
