@@ -14,6 +14,7 @@ mod menu;
 mod mesh;
 mod meshdump;
 mod net;
+mod options;
 mod particles;
 mod player;
 mod render;
@@ -226,6 +227,8 @@ pub struct Game {
     pub equip: (f32, f32), equip_for: i32,
     /// item name shown above the hotbar after selecting a different item, and its remaining ticks
     pub held_name: (String, i32),
+    /// title screen splash line and when the menus started (panorama spin, splash pulse)
+    pub splash: String, pub menu_t0: Instant,
     step_dist: f64,
     last_place: Instant,
     last_space: Option<Instant>,
@@ -274,11 +277,22 @@ impl Game {
             dirty: HashMap::new(), in_flight: HashSet::new(), events: rx, out: otx, entities: HashMap::new(), player_names: HashMap::new(), my_eid: 0, name: o.name,
             chat: Vec::new(), chat_input: None, cmd_tree: None, sug: Sug::default(), hp: 20.0, food: 20, hotbar: Default::default(), held: 0, inventory: vec![ItemStack::default(); 46], inv_state: 0, carried: ItemStack::default(), day_time: 6000,
             spawned: false, loaded_sent: false, connected: false, keys: HashSet::new(), mouse: [false; 2], mouse_pos: (0.0, 0.0), slider_drag: None, last_tick: Instant::now(),
-            last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, particles: Default::default(), equip: (1.0, 1.0), equip_for: -1, held_name: (String::new(), 0), step_dist: 0.0,
+            last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, particles: Default::default(), equip: (1.0, 1.0), equip_for: -1, held_name: (String::new(), 0), splash: String::new(), menu_t0: Instant::now(), step_dist: 0.0,
             last_place: Instant::now(), last_space: None, debug: false, disconnected: None, death_msg: None, respawn_at: None, auto_respawn: o.auto_respawn,
             screen: Some(Screen::Title), cfg: o.cfg, sounds, last_addr: String::new(), quit: false, fullscreen_changed: false, hide_entities: false, hide_cracks: false, hide_gui: false, hide_hand: false, fixed_time: None, last_chunk_at: Instant::now(), stats: Stats::default(), clicks_sent: 0, ticks: 0,
             frames: (0, Instant::now(), 0.0),
         };
+        // title panorama (launcher asset store; the jar only has a placeholder) and a random splash
+        let faces: Vec<assets::Image> = (0..6).filter_map(|i| g.sounds.read_object(&format!("minecraft/textures/gui/title/background/panorama_{i}.png")).and_then(|b| assets::decode_png(&b).ok())).collect();
+        if faces.len() == 6 { g.gpu.set_panorama(&faces.iter().map(|f| (f.w, f.h, f.rgba.as_slice())).collect::<Vec<_>>()); }
+        else { log::warn!("title panorama not in the launcher asset store ({} of 6 faces); menus use a plain dark backdrop", faces.len()); }
+        if !g.assets.splashes.is_empty() {
+            let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos() as usize).unwrap_or(0);
+            g.splash = g.assets.splashes[n % g.assets.splashes.len()].clone();
+        }
+        if g.cfg.language != "en_us" && !g.cfg.language.is_empty() { let l = g.cfg.language.clone(); g.set_language(&l); }
+        for (k, v) in g.cfg.extra.clone() { if let Some(cat) = k.strip_prefix("vol.") { g.sounds.set_category(cat, v); } }
+        if g.cfg.extra.get("hide_splash").copied().unwrap_or(0.0) > 0.5 { g.splash.clear(); }
         if let Some(a) = o.addr { g.connect(&a); }
         Ok(g)
     }
@@ -882,7 +896,8 @@ impl Game {
         self.player.pitch = (self.player.pitch + dy as f32 * f).clamp(-90.0, 90.0);
     }
     pub fn scroll(&mut self, dy: f32) {
-        if self.screen.is_some() || dy.abs() < 0.5 { return; }
+        if self.screen.is_some() { self.menu_scroll(dy); return; }
+        if dy.abs() < 0.5 { return; }
         let s = (self.held as i32 - dy.signum() as i32).rem_euclid(9) as u8; self.set_held(s);
     }
 
@@ -1087,7 +1102,7 @@ impl Game {
             params: [fog_start, fog_end, daylight, day_time as f32], screen: [w, h, underwater as u8 as f32, 0.0], sun: [sun[0], sun[1], sun[2], 0.0],
         };
         let cam = Vec3::new(eye[0] as f32, eye[1] as f32, eye[2] as f32);
-        let mut fd = FrameData { u, cam, vp, render_dist, extra: MeshData::default(), skinned: MeshData::default(), items3d: MeshData::default(), overlay: MeshData::default(), hand_skin: MeshData::default(), hand_items: MeshData::default(), layers: Vec::new() };
+        let mut fd = FrameData { u, cam, vp, render_dist, extra: MeshData::default(), skinned: MeshData::default(), items3d: MeshData::default(), overlay: MeshData::default(), hand_skin: MeshData::default(), hand_items: MeshData::default(), layers: Vec::new(), backdrop: self.backdrop(), blur: self.cfg.extra.get("menu_blur").copied().unwrap_or(5.0) };
         let in_world = self.connected && self.spawned;
         if in_world {
             // block outline
@@ -1161,6 +1176,16 @@ impl Game {
         fd
     }
 
+    /// Behind menus: the blurred world in game, the blurred spinning panorama elsewhere.
+    fn backdrop(&self) -> render::Backdrop {
+        match &self.screen {
+            None | Some(Screen::Container(_)) | Some(Screen::Death { .. }) => render::Backdrop::None,
+            Some(_) if self.connected && self.spawned => render::Backdrop::Blur,
+            // spin rate and tilt by eye against a vanilla 26.2 recording
+            Some(_) => render::Backdrop::Panorama { yaw: self.menu_t0.elapsed().as_secs_f32() * 1.2, pitch: 10.0 },
+        }
+    }
+
     fn render(&mut self, alpha: f64, screenshot: Option<&str>) -> Result<()> {
         let fd = self.frame(alpha);
         let f = fd.as_frame(self.world.min_y as f32);
@@ -1187,10 +1212,10 @@ impl Game {
     }
 }
 
-pub struct FrameData { u: Uniforms, cam: Vec3, vp: Mat4, render_dist: f32, extra: MeshData, skinned: MeshData, items3d: MeshData, overlay: MeshData, hand_skin: MeshData, hand_items: MeshData, layers: Vec<(MeshData, Tex)> }
+pub struct FrameData { u: Uniforms, cam: Vec3, vp: Mat4, render_dist: f32, extra: MeshData, skinned: MeshData, items3d: MeshData, overlay: MeshData, hand_skin: MeshData, hand_items: MeshData, layers: Vec<(MeshData, Tex)>, backdrop: render::Backdrop, blur: f32 }
 impl FrameData {
     fn as_frame(&self, min_y: f32) -> Frame<'_> {
-        Frame { uniforms: self.u, cam: self.cam, vp: self.vp, render_dist: self.render_dist + 32.0, min_y, extra: &self.extra, skinned: &self.skinned, items3d: &self.items3d, overlay: &self.overlay, hand_skin: &self.hand_skin, hand_items: &self.hand_items, ui_layers: &self.layers }
+        Frame { uniforms: self.u, cam: self.cam, vp: self.vp, render_dist: self.render_dist + 32.0, min_y, extra: &self.extra, skinned: &self.skinned, items3d: &self.items3d, overlay: &self.overlay, hand_skin: &self.hand_skin, hand_items: &self.hand_items, ui_layers: &self.layers, hud_layers: 3, backdrop: self.backdrop, blur: self.blur }
     }
 }
 

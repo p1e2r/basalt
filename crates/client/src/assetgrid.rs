@@ -104,7 +104,7 @@ pub fn run(args: &Args, assets: Arc<Assets>, out: &str) -> Result<bool> {
         u.vp = Mat4::IDENTITY.to_cols_array_2d(); u.inv_vp = Mat4::IDENTITY.to_cols_array_2d(); u.screen = [PAGE as f32, PAGE as f32, 0.0, 0.0]; u.params = [1e6, 1e6 + 1.0, 1.0, 6000.0];
         let empty = MeshData::default();
         let layers = vec![(bg, Tex::Ui), (icons, Tex::Blocks)];
-        let f = Frame { uniforms: u, cam: Vec3::ZERO, vp: Mat4::IDENTITY, render_dist: 0.0, min_y: 0.0, extra: &empty, skinned: &empty, hand_skin: &empty, hand_items: &empty, items3d: &empty, overlay: &empty, ui_layers: &layers };
+        let f = Frame { uniforms: u, cam: Vec3::ZERO, vp: Mat4::IDENTITY, render_dist: 0.0, min_y: 0.0, extra: &empty, skinned: &empty, hand_skin: &empty, hand_items: &empty, backdrop: crate::render::Backdrop::None, hud_layers: 0, blur: 0.0, items3d: &empty, overlay: &empty, ui_layers: &layers };
         let rgb = gpu.capture(&f)?;
         let path = if p == 0 { out.to_string() } else { out.replace(".png", &format!("_{}.png", p + 1)) };
         crate::render::save_png(&path, PAGE, PAGE, &rgb)?;

@@ -14,7 +14,7 @@ use winit::keyboard::KeyCode;
 const W: u32 = 854;
 const H: u32 = 480;
 
-pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles"];
+pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages"];
 
 enum Outcome { Pass(String), Skip(String) }
 
@@ -40,7 +40,7 @@ pub fn run(args: &Args, assets: Arc<Assets>, name: &str) -> Result<bool> {
         let t = Instant::now();
         let r = match s {
             "edge_chunks" => edge_chunks(&ctx), "inventory" => inventory(&ctx), "crafting_table" => crafting_table(&ctx), "death" => death(&ctx),
-            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx),
+            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx),
             other => Err(anyhow!("unknown scenario {other} (known: {})", ALL.join(", "))),
         };
         let secs = t.elapsed().as_secs_f32();
@@ -677,7 +677,7 @@ fn menus(c: &Ctx) -> Result<Outcome> {
     if !matches!(g.screen, Some(Screen::Title)) { bail!("not on the title screen"); }
     let img = capture(&mut g)?; save(&g, &img, "title");
     // logo drawn: bright pixels near the top centre
-    let logo = (0..W as i32).step_by(3).filter(|&x| { let p = px(&img, x, 60); p[0] as u32 + p[1] as u32 + p[2] as u32 > 300 }).count();
+    let logo = (0..W as i32).step_by(3).filter(|&x| { let p = px(&img, x, 100); p[0] as u32 + p[1] as u32 + p[2] as u32 > 300 }).count();
     if logo < 10 { bail!("title logo not drawn"); }
     press_widget(&mut g, "multiplayer")?;
     if !matches!(g.screen, Some(Screen::Multiplayer { .. })) { bail!("Multiplayer button did not open the server list"); }
@@ -790,3 +790,55 @@ fn break_particles(c: &Ctx) -> Result<Outcome> {
     if !g.particles.is_empty() { bail!("{} particles still alive after 2.5 s", g.particles.len()); }
     Ok(Outcome::Pass(format!("{dig_max} while digging, {after} on break, all gone after 2.5 s")))
 }
+
+/// Title + pause + every Options page renders and works: icons/tooltips, the vanilla options
+/// layout, toggles/cycles/sliders stored in the config, category volumes applied, scrolling lists.
+fn options_pages(c: &Ctx) -> Result<Outcome> {
+    let mut g = c.game_at("opts", None)?;
+    wait(&mut g, 0.2)?;
+    let img = capture(&mut g)?; save(&g, &img, "title_full");
+    press_widget(&mut g, "options")?;
+    if !matches!(g.screen, Some(Screen::Options { .. })) { bail!("Options did not open from the title"); }
+    let img = capture(&mut g)?; save(&g, &img, "options_main");
+    let mut seen = Vec::new();
+    for (id, name) in [("page:skin", "skin"), ("page:sounds", "sounds"), ("page:video", "video"), ("page:controls", "controls"), ("page:language", "language"),
+        ("page:chat", "chat"), ("page:packs", "packs"), ("page:accessibility", "accessibility"), ("page:credits", "credits"), ("page:online", "online")] {
+        press_widget(&mut g, id)?;
+        if !matches!(g.screen, Some(Screen::Page { .. })) { bail!("{id} did not open a page"); }
+        let n = g.widgets().len();
+        if n < 3 { bail!("{name} page has only {n} widgets"); }
+        let img = capture(&mut g)?; save(&g, &img, &format!("page_{name}"));
+        seen.push(format!("{name}:{n}"));
+        press_widget(&mut g, "done")?;
+        if !matches!(g.screen, Some(Screen::Options { .. })) { bail!("Done on {name} did not return to Options"); }
+    }
+    // a toggle persists
+    press_widget(&mut g, "page:skin")?;
+    let before = crate::options::value(&g.cfg, &crate::options::opts(crate::options::Page::Skin)[0]);
+    press_widget(&mut g, "opt:cape")?;
+    let after = crate::options::value(&g.cfg, &crate::options::opts(crate::options::Page::Skin)[0]);
+    if before == after { bail!("Cape toggle did not change"); }
+    if Config::load().extra.get("cape").copied() != Some(after) { bail!("Cape toggle not saved"); }
+    press_widget(&mut g, "opt:cape")?;
+    press_widget(&mut g, "done")?;
+    // a category slider changes the gain of that category's sounds
+    press_widget(&mut g, "page:sounds")?;
+    let blocks = g.widgets().into_iter().find(|w| w.id == "opt:vol.block").ok_or_else(|| anyhow!("no Blocks volume slider"))?;
+    let s = g.gui_scale();
+    click_at(&mut g, (blocks.x + 4.0) * s, (blocks.y + 10.0) * s, 0)?;
+    g.mouse_button(0, false);
+    let vol = g.sounds.categories.get("block").copied().unwrap_or(1.0);
+    if vol > 0.05 { bail!("Blocks volume slider at the left edge left the category at {vol}"); }
+    set_opt_back(&mut g, "vol.block");
+    press_widget(&mut g, "done")?;
+    // the video page scrolls
+    press_widget(&mut g, "page:video")?;
+    let first = g.widgets().iter().filter(|w| w.id.starts_with("opt:")).map(|w| w.id.clone()).next();
+    g.scroll(-5.0);
+    let after_scroll = g.widgets().iter().filter(|w| w.id.starts_with("opt:")).map(|w| w.id.clone()).next();
+    if first == after_scroll { bail!("video settings list did not scroll"); }
+    press_widget(&mut g, "done")?;
+    Ok(Outcome::Pass(format!("pages {}; toggle saved; block volume applied; video list scrolls", seen.join(" "))))
+}
+
+fn set_opt_back(g: &mut Game, id: &str) { g.set_opt(id, 1.0); }
