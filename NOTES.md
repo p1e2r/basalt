@@ -55,6 +55,18 @@ real server/client over the wire.
   - Light is uniform per quad: top and sides = per-channel max(own cell, cell above), bottom = max(own cell, cell
     below); the block's own emission counts as block light of its cell, full-bright blocks (active sculk sensor,
     magma) give 15/15, lava block light 15. Tint = biome water colour (water) / white (lava) times the shade.
+- Smooth light on inset faces (fitted with controlled light probes: random 5x5x5 light cells around one
+  block, all else air; vertex light is truncated to 1/16): the *centre* cell is always the cell in front of the
+  face, but the side and diagonal cells come from that same layer only for a face on the block boundary - for an
+  inset face (slab top, cactus side, wall post, daylight detector, trapdoor) they are the block's own layer. If
+  the centre cell is an opaque block (an inset face covered by a neighbour) the block's own cell stands in for
+  it (also as the "dark cell" fallback value). Corner values combine bilinearly by vertex position over the whole
+  block face as before. Ambient occlusion still samples one layer for all four cells (own layer when inset);
+  that matches ~90 % of inset-face vertices, the rest is unexplained (a diagonal cell sometimes counts
+  differently), see "what remains".
+- Flat-lit faces (models with "ambientocclusion": false: levers, bars, brewing stands): the cell in front of the
+  face when the face lies on the block boundary (whether or not the model declares a cullface), otherwise the
+  block's own cell.
 
 ## Verified wire formats (26.2)
 - play/login: i32 eid, bool hardcore, varint n + n dim names, varint maxPlayers,

@@ -160,16 +160,25 @@ pub fn mesh_block(a: &Assets, biomes: &[Biome], s: &Snapshot, x: i32, y: i32, z:
             let smooth = q.ao && info.emission == 0;
             let (t1, t2) = match axis { 0 => (1, 2), 1 => (0, 2), _ => (0, 1) };
             let mut corner = [[0f32; 3]; 4]; // [ao factor, sky, block] for (-,-), (+,-), (-,+), (+,+)
+            let plane = q.pos[0][axis];
+            let flush = if d[axis] > 0 { plane >= 0.9999 } else { plane <= 0.0001 };
             if smooth {
-                let plane = q.pos[0][axis];
-                let flush = if d[axis] > 0 { plane >= 0.9999 } else { plane <= 0.0001 };
-                let f = if flush { [x + d[0], y + d[1], z + d[2]] } else { [x, y, z] };
-                let fl = s.light[sidx(f[0], f[1], f[2])];
+                // the centre cell is always the one in front of the face; the side and diagonal cells sit in
+                // that layer for a flush face, in the block's own layer for an inset one (measured with
+                // controlled light probes against the vanilla client)
+                let nbc = [x + d[0], y + d[1], z + d[2]];
+                let lb = if flush { nbc } else { [x, y, z] };
+                // ... unless that cell is an opaque block (an inset face covered by a neighbour): then the block's own cell
+                let nb_ix = sidx(nbc[0], nbc[1], nbc[2]);
+                let centre_ix = if a.info(s.blocks[nb_ix]).occludes { sidx(x, y, z) } else { nb_ix };
+                let fl = s.light[centre_ix];
                 for (ci, (c1, c2)) in [(-1, -1), (1, -1), (-1, 1), (1, 1)].into_iter().enumerate() {
-                    let cell = |a1: i32, a2: i32| { let mut c = f; c[t1] += a1; c[t2] += a2; sidx(c[0], c[1], c[2]) };
+                    let cell = |a1: i32, a2: i32| { let mut c = lb; c[t1] += a1; c[t2] += a2; sidx(c[0], c[1], c[2]) };
                     let (mut ao, mut sky, mut blk) = (0.0f32, 0.0f32, 0.0f32);
-                    for ix in [cell(0, 0), cell(c1, 0), cell(0, c2), cell(c1, c2)] {
-                        ao += if a.info(s.blocks[ix]).ao_occluder { 0.2 } else { 1.0 };
+                    let aoc = { let c = lb; sidx(c[0], c[1], c[2]) };
+                    for (r, ix) in [centre_ix, cell(c1, 0), cell(0, c2), cell(c1, c2)].into_iter().enumerate() {
+                        // ambient occlusion samples the same layer for all four cells (the centre only differs for light)
+                        ao += if a.info(s.blocks[if r == 0 { aoc } else { ix }]).ao_occluder { 0.2 } else { 1.0 };
                         let l = s.light[ix];
                         sky += if l >> 4 == 0 { (fl >> 4) as f32 } else { (l >> 4) as f32 };
                         blk += if l == 0 { (fl & 15) as f32 } else { (l & 15) as f32 };
@@ -186,7 +195,8 @@ pub fn mesh_block(a: &Assets, biomes: &[Biome], s: &Snapshot, x: i32, y: i32, z:
                     let mix = |k: usize| corner.iter().zip(w).map(|(c, w)| c[k] * w).sum::<f32>();
                     aof = mix(0); sky = mix(1); blk = mix(2);
                 } else {
-                    let l = if q.cull < 6 { s.light[sidx(x + d[0], y + d[1], z + d[2])] } else { own_light };
+                    // flat lighting: the cell in front of a face on the block boundary, the block's own cell for an inset face
+                    let l = if flush { s.light[sidx(x + d[0], y + d[1], z + d[2])] } else { own_light };
                     sky = (l >> 4) as f32; blk = (l & 15) as f32; aof = 1.0;
                 }
                 blk = if info.full_bright { 15.0 } else { blk.max(info.emission as f32) };
