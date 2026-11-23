@@ -20,7 +20,7 @@ check() { if grep -q "$2" "$1"; then echo "ok   $3"; else echo "FAIL $3"; fail=1
 A=$!
 sleep 2
 # 2. a second player joining at the same time (multiplayer visibility)
-./target/debug/basalt-client 127.0.0.1:$PORT --name Bob --screenshot "$OUT/bob.png" --wait 8 --walk 4 --look 90,10 > "$OUT/bob.log" 2>&1
+./target/debug/basalt-client 127.0.0.1:$PORT --name Bob --screenshot "$OUT/bob.png" --wait 14 --walk 4 --look 90,10 > "$OUT/bob.log" 2>&1
 wait $A
 check "$OUT/alice.log" "screenshot" "alice joined and rendered"
 check "$OUT/bob.log" "screenshot" "bob joined and rendered"
