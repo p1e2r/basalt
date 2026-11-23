@@ -29,7 +29,11 @@ Read NOTES.md for verified packet formats.
   Verified: real 26.2 client joins, renders, sees a second (basalt-client) player, chat,
   placed blocks; restart keeps blocks/inventory/position. `tools/server-smoke.sh` runs the
   two-client smoke test. Generation runs on a worker pool (gen.rs); `--flat` for superflat.
-- crates/worldgen: **terrain done, features partial.** Noise router/density functions, aquifers,
+- crates/worldgen: **terrain + most decoration done** (M3b: exact 5x5 neighbour decoration,
+  trees/huge mushrooms/vegetation, lakes, springs, geodes, monster rooms; seed 12345 r3: biomes
+  100%, exact 99.0-99.6%, all non-structure blocks 99.2-99.6%; ~75-105 ms/chunk). Remaining:
+  lush caves, dark-oak drift, jungle/mangrove/cherry trees, corals, dripstone, sculk, glow lichen.
+  Earlier summary: Noise router/density functions, aquifers,
   ore veins, multi-noise biomes, surface rules, cave/canyon carvers, ores + disks + freeze.
   vs vanilla seed 12345 (15x15 chunks at two sites): biomes 100.000%, shape 99.6-99.7%, exact
   terrain blocks 99.3-99.45%. Missing: trees/vegetation, lakes, springs, geodes, monster rooms,
@@ -43,7 +47,8 @@ Read NOTES.md for verified packet formats.
 - [x] M2 crates/server: login/config/play, chunk streaming, movement, break/place, chat, multiplayer
 - [x] M2 verify with real 26.2 client (tools/run-vanilla-client.py) + basalt-client
 - [x] M3a worldgen terrain/biomes/surface/carvers/ores vs vanilla seed 12345, wired into server
-- [ ] M3b features: trees + vegetation, lakes, springs, geodes, monster rooms; exact neighbour mode
+- [~] M3b features: trees + vegetation, lakes, springs, geodes, monster rooms; exact neighbour mode
+      — implemented and measured; marked done once tools/check-all.sh passes (testing rule)
 - [ ] M3c structures (overworld; may move into M8)
 - [~] M4 survival gameplay — implemented & bot-tested (crates/game rules; server game/{items,inv,health}.rs):
       hardness/tool dig times (server validates), loot-table drops as item entities + pickup/merge/
