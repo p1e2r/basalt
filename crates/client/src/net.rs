@@ -26,6 +26,7 @@ impl ItemStack {
 #[derive(Debug, Clone)]
 pub enum Meta { Byte(u8), Int(i32), Float(f32), Bool(bool), Item(ItemStack), Other }
 
+#[allow(dead_code)] // some decoded fields are kept for debugging / future use
 pub enum Event {
     Registries { biomes: Vec<String>, dimension_types: Vec<String> },
     Login { entity_id: i32, dimension_type: i32, dimension: String, gamemode: u8 },

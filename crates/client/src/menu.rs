@@ -59,6 +59,7 @@ pub enum Screen {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub enum Kind { Button { label: String, enabled: bool }, Slider { label: String, value: f32 }, Field { text: String, focused: bool, hint: String }, Label { text: String, color: [u8; 4], scale: f32 }, Row { title: String, sub: String, selected: bool } }
 
 /// A widget in GUI units.

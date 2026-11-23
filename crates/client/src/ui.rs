@@ -66,7 +66,6 @@ impl UiAtlas {
     fn sub_uv(&self, r: [u32; 4], sx: f32, sy: f32, sw: f32, sh: f32) -> [f32; 4] {
         [(r[0] as f32 + sx) / self.w as f32, (r[1] as f32 + sy) / self.h as f32, (r[0] as f32 + sx + sw) / self.w as f32, (r[1] as f32 + sy + sh) / self.h as f32]
     }
-    pub fn has(&self, name: &str) -> bool { self.rects.contains_key(name) }
     pub fn size(&self, name: &str) -> Option<(f32, f32)> { self.rects.get(name).map(|r| (r[2] as f32, r[3] as f32)) }
 
     pub fn sprite(&self, m: &mut MeshData, name: &str, x: f32, y: f32, scale: f32) {

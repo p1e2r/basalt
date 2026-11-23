@@ -183,7 +183,6 @@ impl EntityAtlas {
         }
         EntityAtlas { w, h, rgba, rects, legacy }
     }
-    pub fn has(&self, n: &str) -> bool { self.rects.contains_key(n) }
 }
 
 // ---------------------------------------------------------------- model building
