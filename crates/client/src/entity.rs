@@ -482,7 +482,7 @@ pub fn first_person_arm(atlas: &EntityAtlas, uuid: &Uuid, eye: Vec3, yaw: f32, p
     let s2 = (swing.sqrt() * PI).sin();
     let base = Mat4::from_translation(eye) * Mat4::from_rotation_y(-yaw.to_radians()) * Mat4::from_rotation_x(pitch.to_radians())
         // view space (x right = -X world-local since we face +Z): place the arm low on the right
-        * Mat4::from_translation(Vec3::new(-0.42 - s2 * 0.1, -0.5 + bob + s * 0.12, 0.55 - s * 0.15))
+        * Mat4::from_translation(Vec3::new(-0.56 - s2 * 0.1, -0.62 + bob + s * 0.12, 0.62 - s * 0.15))
         * Mat4::from_rotation_y(-0.6 + s2 * 0.5) * Mat4::from_rotation_x(-1.3 - s * 0.9) * Mat4::from_rotation_z(0.2)
         * Mat4::from_scale(Vec3::splat(1.0 / 16.0)) * Mat4::from_scale(Vec3::new(1.0, -1.0, -1.0));
     let mut m = Emitter { out, base, tex: t, aw: atlas.w as f32, ah: atlas.h as f32, color: [255; 4], light };

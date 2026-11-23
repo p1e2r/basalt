@@ -34,6 +34,7 @@ pub struct Gpu {
     p_opaque: wgpu::RenderPipeline,
     p_cutout: wgpu::RenderPipeline,
     p_trans: wgpu::RenderPipeline,
+    p_crack: wgpu::RenderPipeline,
     p_sky: wgpu::RenderPipeline,
     p_ui: wgpu::RenderPipeline,
     pub sections: HashMap<(i32, i32, i32), SectionGpu>,
@@ -130,10 +131,13 @@ impl Gpu {
         let p_opaque = mk("vs_chunk", "fs_opaque", None, true, true, true, &[vlayout.clone()]);
         let p_cutout = mk("vs_chunk", "fs_cutout", None, true, true, false, &[vlayout.clone()]);
         let p_trans = mk("vs_chunk", "fs_trans", Some(wgpu::BlendState::ALPHA_BLENDING), false, true, false, &[vlayout.clone()]);
+        // block-breaking cracks: result = 2 · src · dst (darkens and lightens like the vanilla overlay)
+        let mul = wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Dst, dst_factor: wgpu::BlendFactor::Src, operation: wgpu::BlendOperation::Add };
+        let p_crack = mk("vs_chunk", "fs_crack", Some(wgpu::BlendState { color: mul, alpha: wgpu::BlendComponent::OVER }), false, true, false, &[vlayout.clone()]);
         let p_sky = mk("vs_sky", "fs_sky", None, false, false, false, &[]);
         let p_ui = mk("vs_ui", "fs_ui", Some(wgpu::BlendState::ALPHA_BLENDING), false, false, false, &[vlayout.clone()]);
         let depth = make_depth(&device, size.0.max(1), size.1.max(1));
-        Ok(Gpu { device, queue, surface, config, format, size, offscreen, depth, ubuf, ubind, atlas_bind, ui_bind, skin_bind, p_opaque, p_cutout, p_trans, p_sky, p_ui, sections: HashMap::new() })
+        Ok(Gpu { device, queue, surface, config, format, size, offscreen, depth, ubuf, ubind, atlas_bind, ui_bind, skin_bind, p_opaque, p_cutout, p_trans, p_crack, p_sky, p_ui, sections: HashMap::new() })
     }
 
     pub fn resize(&mut self, w: u32, h: u32) {
@@ -190,7 +194,7 @@ impl Gpu {
             rp.set_pipeline(&self.p_cutout);
             for (_, s) in &vis { if let Some(m) = &s.layers[1] { draw_mesh(&mut rp, m); } }
             if let Some(m) = &items3d { draw_mesh(&mut rp, m); }
-            if let Some(m) = &overlay { rp.set_pipeline(&self.p_trans); draw_mesh(&mut rp, m); }
+            if let Some(m) = &overlay { rp.set_pipeline(&self.p_crack); draw_mesh(&mut rp, m); }
             rp.set_pipeline(&self.p_trans);
             for (_, s) in vis.iter().rev() { if let Some(m) = &s.layers[2] { draw_mesh(&mut rp, m); } }
             rp.set_pipeline(&self.p_ui);

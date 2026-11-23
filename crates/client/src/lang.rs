@@ -58,6 +58,8 @@ pub fn text(t: &Tag) -> String {
             s
         }
         Tag::List(l) => l.iter().map(text).collect(),
+        Tag::Byte(v) => v.to_string(), Tag::Short(v) => v.to_string(), Tag::Int(v) => v.to_string(), Tag::Long(v) => v.to_string(),
+        Tag::Float(v) => v.to_string(), Tag::Double(v) => v.to_string(),
         _ => String::new(),
     }
 }

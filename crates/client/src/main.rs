@@ -190,6 +190,7 @@ pub struct Game {
     quit: bool,
     fullscreen_changed: bool,
     hide_entities: bool,
+    hide_cracks: bool,
     clicks_sent: u32,
     ticks: u64,
     frames: (u32, Instant, f32),
@@ -216,7 +217,7 @@ impl Game {
             spawned: false, loaded_sent: false, connected: false, keys: HashSet::new(), mouse: [false; 2], mouse_pos: (0.0, 0.0), slider_drag: None, last_tick: Instant::now(),
             last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, step_dist: 0.0,
             last_place: Instant::now(), last_space: None, debug: false, disconnected: None, death_msg: None, respawn_at: None, auto_respawn: o.auto_respawn,
-            screen: Some(Screen::Title), cfg: o.cfg, sounds, last_addr: String::new(), quit: false, fullscreen_changed: false, hide_entities: false, clicks_sent: 0, ticks: 0,
+            screen: Some(Screen::Title), cfg: o.cfg, sounds, last_addr: String::new(), quit: false, fullscreen_changed: false, hide_entities: false, hide_cracks: false, clicks_sent: 0, ticks: 0,
             frames: (0, Instant::now(), 0.0),
         };
         if let Some(a) = o.addr { g.connect(&a); }
@@ -884,6 +885,21 @@ impl Game {
         }
     }
 
+    /// View-projection matrix (camera at the origin, world coordinates relative to the eye).
+    pub fn view_proj(&self) -> Mat4 {
+        let (w, h) = (self.gpu.size.0 as f32, self.gpu.size.1 as f32);
+        let d = self.look_dir();
+        let view = Mat4::look_to_rh(Vec3::ZERO, Vec3::new(d[0] as f32, d[1] as f32, d[2] as f32), Vec3::Y);
+        Mat4::perspective_rh(self.cfg.fov.to_radians(), w / h.max(1.0), 0.05, 1024.0) * view
+    }
+    /// Screen position (pixels) of a world point, if in front of the camera.
+    pub fn project(&self, p: [f64; 3]) -> Option<(f32, f32)> {
+        let e = self.eye(1.0);
+        let c = self.view_proj() * glam::Vec4::new((p[0] - e[0]) as f32, (p[1] - e[1]) as f32, (p[2] - e[2]) as f32, 1.0);
+        if c.w <= 0.05 { return None; }
+        Some(((c.x / c.w * 0.5 + 0.5) * self.gpu.size.0 as f32, (0.5 - c.y / c.w * 0.5) * self.gpu.size.1 as f32))
+    }
+
     fn frame(&self, alpha: f64) -> FrameData {
         let (w, h) = (self.gpu.size.0 as f32, self.gpu.size.1 as f32);
         let eye = self.eye(alpha);
@@ -929,8 +945,10 @@ impl Game {
                 }
             }
             // block-breaking cracks: own dig + other players' block_destruction
-            if let (Some(d), Some(st)) = (&self.dig, self.dig_stage()) { self.crack(&mut fd.overlay, d.block, st); }
-            for (id, (b, st)) in &self.destroy { if *id != self.my_eid { self.crack(&mut fd.overlay, *b, *st); } }
+            if !self.hide_cracks {
+                if let (Some(d), Some(st)) = (&self.dig, self.dig_stage()) { self.crack(&mut fd.overlay, d.block, st); }
+                for (id, (b, st)) in &self.destroy { if *id != self.my_eid { self.crack(&mut fd.overlay, *b, *st); } }
+            }
             // entities
             let wool = self.atlas_uv("block/white_wool");
             let a = alpha as f32;

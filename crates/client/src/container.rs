@@ -227,7 +227,7 @@ impl Game {
             if button > 2 { return; }
             // double click: gather all of the carried item
             let dbl = button == 0 && c.last_click.map(|(s, t)| Some(s) == slot && t.elapsed().as_millis() < 250).unwrap_or(false);
-            if let Some(crate::menu::Screen::Container(c)) = &mut self.screen { c.last_click = slot.map(|s| (s, Instant::now())); }
+            if let Some(crate::menu::Screen::Container(c)) = &mut self.screen { c.last_click = if button == 0 && !dbl { slot.map(|s| (s, Instant::now())) } else { None }; }
             if dbl && carrying { if let Some(s) = slot { self.click(s, 0, 6); } return; }
             if button == 2 { if let Some(s) = slot { if self.player.gamemode == 1 { self.click(s, 2, 3); } } return; }
             if carrying && slot.is_some() && !shift {

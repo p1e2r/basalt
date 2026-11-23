@@ -58,6 +58,11 @@ fn fogged(c: vec3<f32>, dist: f32) -> vec3<f32> {
     if (t.a < 0.5) { discard; }
     return vec4<f32>(fogged(t.rgb * i.color.rgb, i.dist), 1.0);
 }
+@fragment fn fs_crack(i: VOut) -> @location(0) vec4<f32> {
+    let t = textureSample(tex, smp, i.uv);
+    if (t.a < 0.1) { discard; }
+    return vec4<f32>(t.rgb, 1.0);
+}
 @fragment fn fs_trans(i: VOut) -> @location(0) vec4<f32> {
     let t = textureSample(tex, smp, i.uv);
     if (t.a < 0.01) { discard; }
