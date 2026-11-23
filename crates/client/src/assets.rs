@@ -87,6 +87,8 @@ pub struct StateInfo {
     pub self_cull: bool,
     /// full non-opaque cube (glass, leaves, ice): a fluid side face against it is drawn with the overlay sprite
     pub fluid_overlay: bool,
+    /// position-dependent model offset: (max horizontal, vertical range); (0, 0) = none. See `mesh::model_offset`.
+    pub offset: (f32, f32),
     /// the block's own shape hides the fluid faces it covers (stairs, slabs, sculk sensors; not
     /// trapdoors, roots, leaves, glass, which never occlude)
     pub hides_fluid: bool,
@@ -291,7 +293,7 @@ impl<'a> Baker<'a> {
                     let mut apply = |axis: usize, angle: f32| {
                         if angle == 0.0 { return; }
                         for p in pos.iter_mut() {
-                            *p = rot_point(*p, axis, angle * if axis == 1 { 1.0 } else { -1.0 }, origin);
+                            *p = rot_point(*p, axis, angle, origin);
                         }
                         if rescale {
                             let s = 1.0 / angle.to_radians().cos().abs().max(0.01);
@@ -305,6 +307,11 @@ impl<'a> Baker<'a> {
                         for (i, k) in ["x", "y", "z"].iter().enumerate() { if let Some(a) = rot.get(*k).and_then(|a| a.as_f64()) { apply(i, a as f32); } }
                     }
                 }
+                // faces of a zero-thickness element (flat planes, rotated or not) have no area: not emitted
+                let sub = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+                let cross = |a: [f32; 3], b: [f32; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+                let len = |a: [f32; 3]| (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+                if len(cross(sub(pos[1], pos[0]), sub(pos[2], pos[0]))) + len(cross(sub(pos[2], pos[0]), sub(pos[3], pos[0]))) < 1e-3 { continue; }
                 let mut cull = face.get("cullface").and_then(|c| c.as_str()).map(dir_from_name).unwrap_or(NO_CULL);
                 // variant rotation (x then y), negative angles about block centre
                 if rx != 0 { for p in pos.iter_mut() { *p = rot_point(*p, 0, -(rx as f32), [8.0; 3]); } cull = rot_dir(cull, 0, -rx / 90); }
@@ -478,6 +485,22 @@ fn tint_for(name: &str) -> Tint {
     }
 }
 
+/// Blocks whose model is shifted by a position-dependent offset in the vanilla client (measured with
+/// `basalt-check client-mesh` + probes at 100 positions per block): (max horizontal, vertical range).
+pub fn model_offset_params(name: &str) -> (f32, f32) {
+    match name {
+        "pointed_dripstone" | "sulfur_spike" => (0.125, 0.0),
+        "fern" | "short_grass" | "short_dry_grass" | "tall_dry_grass" => (0.25, 0.2),
+        "small_dripleaf" => (0.25, 0.1),
+        "bamboo" | "bamboo_sapling" | "mangrove_propagule" | "hanging_roots" | "crimson_roots" | "warped_roots" | "nether_sprouts"
+        | "large_fern" | "tall_grass" | "tall_seagrass" | "lilac" | "peony" | "rose_bush" | "sunflower" | "pitcher_plant"
+        | "allium" | "azure_bluet" | "blue_orchid" | "cornflower" | "dandelion" | "golden_dandelion" | "lily_of_the_valley"
+        | "oxeye_daisy" | "poppy" | "orange_tulip" | "pink_tulip" | "red_tulip" | "white_tulip" | "torchflower" | "wither_rose"
+        | "closed_eyeblossom" | "open_eyeblossom" => (0.25, 0.0),
+        _ => (0.0, 0.0),
+    }
+}
+
 pub struct Assets {
     pub atlas: Atlas,
     pub models: Vec<Model>,
@@ -501,6 +524,9 @@ pub struct Assets {
     pub no_model: Vec<u8>,
     /// per block state: the blockstate file offers several weighted models (vanilla picks one by position)
     pub random_variant: Vec<bool>,
+    /// per block state with weighted variants: for each part (multipart apply / the variants entry) its (model, weight) list;
+    /// vanilla picks one per part from a position-seeded random generator (see `mesh::pick_variants`)
+    pub variant_parts: Vec<Option<Box<Vec<Vec<(u32, u32)>>>>>,
 }
 
 impl Assets {
@@ -512,6 +538,7 @@ impl Assets {
         crate::lang::init(jar.files.get("assets/minecraft/lang/en_us.json").map(|v| v.as_slice()));
         let mut no_model = Vec::with_capacity(basalt_data::blocks::STATE_COUNT);
         let mut random_variant = Vec::with_capacity(basalt_data::blocks::STATE_COUNT);
+        let mut variant_parts: Vec<Option<Box<Vec<Vec<(u32, u32)>>>>> = vec![None; basalt_data::blocks::STATE_COUNT];
         let (mut item_models, mut item_tint, mut item_icons): (Vec<Option<u32>>, Vec<Option<u32>>, Vec<Option<String>>) = (Vec::new(), Vec::new(), Vec::new());
         {
             let mut baker = Baker { jar: &jar, raw: HashMap::new(), atlas: &atlas };
@@ -520,22 +547,45 @@ impl Assets {
             for id in 0..basalt_data::blocks::STATE_COUNT as u32 {
                 let st = BlockState(id); let b = st.block();
                 let bs = bs_cache.entry(b.name).or_insert_with(|| jar.json(&format!("assets/minecraft/blockstates/{}.json", b.name)));
-                // collect applied (model, x, y, uvlock)
+                // collect applied (model, x, y, uvlock) = the first variant of every part, plus every part's weighted variants
                 let mut applied: Vec<(String, i32, i32, bool)> = Vec::new();
+                let mut parts: Vec<Vec<(String, i32, i32, bool, u32)>> = Vec::new();
                 let mut random = false;
                 let mut push = |v: &Value| {
-                    if v.as_array().map(|a| a.len() > 1).unwrap_or(false) { random = true; }
-                    let v = if let Some(a) = v.as_array() { &a[0] } else { v };
-                    if let Some(m) = v.get("model").and_then(|m| m.as_str()) {
-                        applied.push((m.to_string(), v.get("x").and_then(|x| x.as_i64()).unwrap_or(0) as i32, v.get("y").and_then(|x| x.as_i64()).unwrap_or(0) as i32, v.get("uvlock").and_then(|x| x.as_bool()).unwrap_or(false)));
+                    let list: Vec<&Value> = match v.as_array() { Some(a) => a.iter().collect(), None => vec![v] };
+                    if list.len() > 1 { random = true; }
+                    let mut part = Vec::new();
+                    for v in list {
+                        if let Some(m) = v.get("model").and_then(|m| m.as_str()) {
+                            part.push((m.to_string(), v.get("x").and_then(|x| x.as_i64()).unwrap_or(0) as i32, v.get("y").and_then(|x| x.as_i64()).unwrap_or(0) as i32,
+                                v.get("uvlock").and_then(|x| x.as_bool()).unwrap_or(false), v.get("weight").and_then(|w| w.as_u64()).unwrap_or(1) as u32));
+                        }
                     }
+                    if let Some(f) = part.first() { applied.push((f.0.clone(), f.1, f.2, f.3)); parts.push(part); }
                 };
                 if let Some(bs) = bs {
                     if let Some(vars) = bs.get("variants").and_then(|v| v.as_object()) {
                         if let Some((_, v)) = vars.iter().find(|(k, _)| variant_matches(k, st)) { push(v); }
-                    } else if let Some(parts) = bs.get("multipart").and_then(|v| v.as_array()) {
-                        for p in parts { if p.get("when").map(|w| cond_matches(w, st)).unwrap_or(true) { if let Some(a) = p.get("apply") { push(a); } } }
+                    } else if let Some(mp) = bs.get("multipart").and_then(|v| v.as_array()) {
+                        for p in mp { if p.get("when").map(|w| cond_matches(w, st)).unwrap_or(true) { if let Some(a) = p.get("apply") { push(a); } } }
                     }
+                }
+                // states with weighted variants: bake every variant of every part on its own (picked per position at mesh time)
+                if random {
+                    let mut out_parts = Vec::new();
+                    for part in &parts {
+                        let mut vs = Vec::new();
+                        for (name, x, y, uvl, w) in part {
+                            let key = format!("single:{name}:{x}:{y}:{uvl}");
+                            let mi = match cache.get(&key) { Some(i) => *i, None => {
+                                let mut m = Model::default(); baker.bake(name, *x, *y, *uvl, &mut m);
+                                models.push(m); let i = models.len() as u32 - 1; cache.insert(key, i); i
+                            } };
+                            vs.push((mi, (*w).max(1)));
+                        }
+                        out_parts.push(vs);
+                    }
+                    variant_parts[id as usize] = Some(Box::new(out_parts));
                 }
                 // a multipart state matching no part renders nothing in vanilla either (e.g. an isolated wall without post)
                 random_variant.push(random);
@@ -559,7 +609,7 @@ impl Assets {
                 if name == "snow" { collides = st.get("layers") != Some("1"); }
                 if b.kind == "fence_gate" && st.get("open") == Some("true") { collides = false; }
                 states.push(StateInfo {
-                    model: mi, tint: tint_for_state(name, st), occludes: m.occludes, self_cull: m.full_cube && !m.occludes && !name.ends_with("leaves"), fluid_overlay: m.full_cube && !m.occludes, hides_fluid: !(name.contains("trapdoor") || name == "mangrove_roots" || name.ends_with("leaves") || name.contains("glass") || name.contains("grate")), collides, fluid, fluid_level: level,
+                    model: mi, tint: tint_for_state(name, st), occludes: m.occludes, self_cull: m.full_cube && !m.occludes && !name.ends_with("leaves"), fluid_overlay: m.full_cube && !m.occludes, offset: model_offset_params(name), hides_fluid: !(name.contains("trapdoor") || name == "mangrove_roots" || name.ends_with("leaves") || name.contains("glass") || name.contains("grate")), collides, fluid, fluid_level: level,
                     emits_light: basalt_world::props::emission(id) > 0, emission: basalt_world::props::emission(id),
                     full_bright: name == "magma_block" || (name.ends_with("sculk_sensor") && st.get("sculk_sensor_phase") == Some("active")),
                     ao_occluder: m.full_cube && collides && !(m.full_cube && !m.occludes && !name.ends_with("leaves")),
@@ -635,7 +685,7 @@ impl Assets {
             water_still: uvrect("block/water_still"), water_flow: uvrect("block/water_flow"), lava_still: uvrect("block/lava_still"), water_overlay: uvrect("block/water_overlay"), lava_flow: uvrect("block/lava_flow"),
             grass_map: jar.png("assets/minecraft/textures/colormap/grass.png"), foliage_map: jar.png("assets/minecraft/textures/colormap/foliage.png"),
             font: jar.png("assets/minecraft/textures/font/ascii.png"),
-            atlas, models, states, biome_json, dimension_types, gui, entity_tex, item_icons, item_models, item_tint, no_model, random_variant,
+            atlas, models, states, biome_json, dimension_types, gui, entity_tex, item_icons, item_models, item_tint, no_model, random_variant, variant_parts,
         })
     }
 

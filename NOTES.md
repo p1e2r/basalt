@@ -30,9 +30,6 @@ real server/client over the wire.
   B70000 C10000 CC0000 D60000 E00000 EA0600 F41B00 FF3200. Stems: age a -> (32a, 255-8a, 4a).
 - Emission: glow lichen 7 only with a face; trial spawner 4 (waiting) / 8 (active, ejecting) / 0;
   vault 6 inactive / 12 otherwise.
-- Element rotation: a positive "angle" about the y axis turns (x, z) offsets from the origin like
-  x' = x cos a + z sin a, z' = -x sin a + z cos a (diagonal tendrils / cross planes of sculk sensors,
-  propagules ... were mirrored before). This one sign also fixed most "weighted variant" mismatches.
 - Fluids (water/lava, also waterlogged blocks), measured with the oracle:
   - Heights: source and falling (level >= 8) 8/9, flowing level l (1..7) (8-l)/9. A corner height is the
     average over the 4 cells touching the corner (own, the two side cells, the diagonal): a fluid cell of
@@ -67,6 +64,21 @@ real server/client over the wire.
 - Flat-lit faces (models with "ambientocclusion": false: levers, bars, brewing stands): the cell in front of the
   face when the face lies on the block boundary (whether or not the model declares a cullface), otherwise the
   block's own cell.
+- Element rotation (all three axes, corrected): the standard right-handed rotation by "angle" degrees about the
+  axis through "origin" (y: x' = x cos a + z sin a, z' = -x sin a + z cos a; x: y' = y cos a - z sin a,
+  z' = y sin a + z cos a). Faces of zero-thickness elements (zero area) are not emitted.
+- Model offset (position hash, measured at 100 random positions per block, all exact): h = (x*3129871 ^ z*116129781)
+  as a 64-bit value, h = h*h*42317861 + h*11, h >>= 16 (arithmetic; y is not used). dx = clamp((bits0..3 / 15 - 0.5) * 0.5,
+  +-max), dz = same with bits 8..11, dy = (bits 4..7 / 15 - 1) * v. Blocks: +-0.25 flowers, tall grass/ferns (dy range
+  0.2: short_grass, fern, short/tall_dry_grass; large_fern and tall_grass have none), bamboo, propagule, roots, nether
+  sprouts, pitcher plant, eyeblossoms, torchflower, wither rose; small dripleaf +-0.25 with dy range 0.1;
+  pointed_dripstone and sulfur_spike +-0.125. (crates/client/src/assets.rs `model_offset_params`.)
+- Weighted variants: one block seed s = (x*3129871 ^ z*116129781 ^ y) with the same mixing/shift as above seeds a
+  java.util.Random-style LCG (scramble ^ 0x5DEECE66D, a = a*0x5DEECE66D + 0xB, 48 bit); every part (variants entry or
+  multipart apply) that lists several models draws nextInt(total weight) and takes the first model whose cumulative
+  weight exceeds it (single-model parts draw nothing). Stone and lily pad (4 variants): 300/300 random positions
+  identical to vanilla. Bamboo (offset + 4 variants) is NOT reproduced yet (its mesh also differs in a way not
+  explained by the four models).
 
 ## Verified wire formats (26.2)
 - play/login: i32 eid, bool hardcore, varint n + n dim names, varint maxPlayers,
