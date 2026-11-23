@@ -101,6 +101,7 @@ fn emission_of(s: BlockState, name: &str, kind: &str) -> u8 {
         "enchanting_table" | "ender_chest" => 7,
         // glow lichen only glows with at least one face (measured with the client-mesh oracle)
         "glow_lichen" => if ["down", "up", "north", "south", "west", "east"].iter().any(|f| prop_true(s, f)) { 7 } else { 0 },
+        // Light levels below were observed from the vanilla 26.2 client (client-mesh oracle, 2026-11-23); state -> level.
         "trial_spawner" => match s.get("trial_spawner_state") { Some("waiting_for_players") => 4, Some("active" | "waiting_for_reward_ejection" | "ejecting_reward") => 8, _ => 0 },
         "vault" => if s.get("vault_state") == Some("inactive") { 6 } else { 12 },
         "sculk_catalyst" => 6,

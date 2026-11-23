@@ -2,7 +2,12 @@
 
 Clean-room Rust reimplementation of Minecraft Java 26.2 (protocol 776). MIT licensed.
 Never translate decompiled Mojang code; match behaviour by observing a real server/client
-over the wire. Never commit Mojang data/assets (data/, vanilla/, *.jar are gitignored).
+(over the wire, or through the test-only oracle mod's data dumps).
+
+**What may be committed:** never commit Mojang code, assets (textures, models, sounds, lang), jars, or
+bulk generated data (./data, ./vanilla incl. vanilla/oracle dumps and caches are gitignored). Small
+measured constants — values observed from vanilla behaviour, e.g. a 16-entry colour table or a handful
+of light levels — ARE allowed, each with a comment saying where/how it was measured (tool, date).
 
 Read NOTES.md for verified packet formats.
 
@@ -161,3 +166,7 @@ Read NOTES.md for verified packet formats.
     whitelist, bans).
 17. Performance: multithreading, lighting engine, LOD.
 18. Parity test suite, CI builds for macOS/Windows/Linux, docs, plugin API.
+
+
+## Daily log
+(One entry appended each day at 8 am Jakarta by the long-run loop: what changed, check numbers, agents, open issues.)
