@@ -15,6 +15,7 @@ use std::time::Instant;
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+    if let Some(code) = basalt_check::driver::try_main() { std::process::exit(code); }
     let mut basalt = false; let mut vanilla: Option<String> = None; let mut vdir = "vanilla/srv".to_string(); let mut diff = false;
     let mut filter: Vec<String> = Vec::new(); let mut jobs = 4usize; let mut out = "target/check".to_string(); let mut json: Option<String> = None;
     let mut it = std::env::args().skip(1);

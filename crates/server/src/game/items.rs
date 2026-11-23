@@ -105,7 +105,7 @@ impl Game {
         }
     }
 
-    fn remove_item(&mut self, eid: i32) {
+    pub(super) fn remove_item(&mut self, eid: i32) {
         self.items.remove(&eid);
         for p in self.players.values_mut() {
             if p.seen_items.remove(&eid) { let mut w = Writer::with_id(cb::REMOVE_ENTITIES); w.varint(1).varint(eid); p.send(w); }

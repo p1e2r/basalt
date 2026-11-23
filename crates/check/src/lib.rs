@@ -2,6 +2,9 @@
 //! (`data get` / `execute if block`), and scenario tests that run against either server — or
 //! both, comparing outcomes (differential mode).
 pub mod bot;
+pub mod driver;
+pub mod fuzz;
+pub mod harness;
 pub mod physics;
 pub mod proto;
 pub mod query;
