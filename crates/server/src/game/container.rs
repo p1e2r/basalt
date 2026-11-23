@@ -783,6 +783,29 @@ impl Game {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn xp_levels() {
+        assert_eq!(xp_level(0), (0, 0.0));
+        assert_eq!(xp_level(7).0, 1);
+        assert_eq!(xp_level(15).0, 1); // level 1 -> 2 needs 9 points
+        assert_eq!(xp_level(16).0, 2);
+        assert_eq!(xp_level(17).0, 2);
+        assert_eq!(xp_level(352).0, 16); // 0..15 cost 352 points in total
+        assert_eq!(xp_level(1507).0, 31);
+    }
+    #[test]
+    fn chest_pair_directions() {
+        let south_left = BlockState::parse("chest[type=left,facing=south]").unwrap().0;
+        let south_right = BlockState::parse("chest[type=right,facing=south]").unwrap().0;
+        assert_eq!(partner_dir(south_left), Some("west")); // measured: the west chest of a south-facing pair is `right`, its partner east
+        assert_eq!(partner_dir(south_right), Some("east"));
+        assert_eq!(partner_dir(BlockState::parse("chest[type=single,facing=south]").unwrap().0), None);
+    }
+}
+
 fn opposite_dir(f: &str) -> &'static str { match f { "south" => "north", "north" => "south", "east" => "west", "west" => "east", "up" => "down", _ => "up" } }
 
 fn same(a: &Stack, b: &Stack) -> bool { a.item == b.item && a.damage == b.damage && a.ench == b.ench }
