@@ -1,0 +1,14 @@
+[package]
+name = "basalt-world"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[dependencies]
+anyhow.workspace = true
+flate2.workspace = true
+log.workspace = true
+basalt-nbt = { path = "../nbt" }
+basalt-data = { path = "../data" }
+basalt-protocol = { path = "../protocol" }

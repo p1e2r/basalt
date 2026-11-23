@@ -219,6 +219,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "basalt-world"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "basalt-data",
+ "basalt-nbt",
+ "basalt-protocol",
+ "flate2",
+ "log",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
