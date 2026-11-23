@@ -167,3 +167,24 @@ real server/client over the wire.
 - Sprinting: 0.1 exhaustion per metre (47.8 blocks → saturation 5 → 4, exhaustion 0.74 left).
 - Drowning: air 300 → -20 at 1/tick, 2.0 drown damage at tick ~320 then every 20 ticks; refill +4/tick.
 - Summon NBT: any compound (`{PersistenceRequired:1b}`) stops vanilla's random equipment/baby rolls.
+- Entity rotation bytes: yaw is an unsigned-wrapping byte (256 = 360°, interpolate via shortest angle);
+  **pitch is a signed byte** (-128..127) clamped to ±90° — read unsigned, a mob looking slightly up
+  arrives as ~337° and its head lerps through a backflip (client: net::pitch_angle).
+- `commands` (clientbound): varint node count; node = u8 flags (bits 0-1 type: 0 root/1 literal/2
+  argument; 0x04 executable; 0x08 redirect; 0x10 custom suggestions; 0x20 restricted), varint child
+  count + indices, [varint redirect], [string name (literal/argument)], [argument: varint parser id
+  (COMMAND_ARGUMENT_TYPE), properties, (0x10) string suggestion type]; then varint root index.
+  Parser properties: integer/long/float/double = u8 flags (1 min, 2 max) + values; string = varint
+  (0 word, 1 phrase, 2 greedy); entity = u8 (1 single, 2 players only); score_holder = u8 (1 multiple);
+  time = i32 min; resource/resource_key/resource_or_tag(_key)/resource_selector = string registry.
+  Vanilla suggestion types seen: minecraft:ask_server, summonable_entities, available_sounds. The
+  restricted flag equals the presence of `permissions` in reports/commands.json. Basalt builds its
+  tree from that file (crates/server/src/commands.rs); tools/decode-commands.py decodes a captured
+  packet and tools/compare-commands.py diffs two (0 differences over the 15 shared commands).
+- command_suggestion (serverbound): varint id, string text (with the leading slash).
+  command_suggestions (clientbound): varint id, varint start, varint length, varint count, then
+  {string text, bool hasTooltip (+ component)}.
+- First-person arm (empty hand), fitted to the real client: BASALT_ARM="tx,ty,tz,ry,rx,rz,scale"
+  overrides it (default -0.45,-0.8,0.4,-0.3,-2.3,0,1); the arm points up/forward from the lower
+  right. Reference silhouette: crates/client/refs/first_person_arm.txt.
+- Observed oddity (not fixed): the real client renders a night sky on Basalt even at day_time 6000.

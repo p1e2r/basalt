@@ -14,7 +14,7 @@ use winit::keyboard::KeyCode;
 const W: u32 = 854;
 const H: u32 = 480;
 
-pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "sounds", "menus"];
+pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus"];
 
 enum Outcome { Pass(String), Skip(String) }
 
@@ -40,7 +40,7 @@ pub fn run(args: &Args, assets: Arc<Assets>, name: &str) -> Result<bool> {
         let t = Instant::now();
         let r = match s {
             "edge_chunks" => edge_chunks(&ctx), "inventory" => inventory(&ctx), "crafting_table" => crafting_table(&ctx), "death" => death(&ctx),
-            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx),
+            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx),
             other => Err(anyhow!("unknown scenario {other} (known: {})", ALL.join(", "))),
         };
         let secs = t.elapsed().as_secs_f32();
@@ -517,6 +517,113 @@ fn head_pitch(c: &Ctx) -> Result<Outcome> {
     if max_step > 20.0 { bail!("head pitch jumped {max_step:.1}° between frames (backflip)"); }
     if min > -10.0 { bail!("the zombie never looked up at the player above it (min pitch {min:.1}°) — scenario not exercising the bug"); }
     Ok(Outcome::Pass(format!("pitch {min:.1}..{max:.1}° over {frames} frames, max step {max_step:.1}°")))
+}
+
+/// Region of the frame the first-person arm reference covers, and its cell size (see refs/first_person_arm.txt).
+const ARM_REGION: (usize, usize, usize, usize) = (612, 250, 854, 478);
+const ARM_CELL: usize = 4;
+
+/// Arm pixels = where the frame with the hand differs from the frame without it, as a 4x4-cell grid.
+fn arm_cells(with: &[u8], without: &[u8]) -> Vec<Vec<bool>> {
+    let (x0, y0, x1, y1) = ARM_REGION;
+    let (cw, ch) = ((x1 - x0) / ARM_CELL, (y1 - y0) / ARM_CELL);
+    (0..ch).map(|cy| (0..cw).map(|cx| {
+        let mut n = 0;
+        for y in cy * ARM_CELL..(cy + 1) * ARM_CELL { for x in cx * ARM_CELL..(cx + 1) * ARM_CELL {
+            let i = ((y0 + y) * W as usize + x0 + x) * 3;
+            let d: i32 = (0..3).map(|k| (with[i + k] as i32 - without[i + k] as i32).abs()).sum();
+            if d > 40 { n += 1; }
+        } }
+        n >= ARM_CELL * ARM_CELL / 2
+    }).collect()).collect()
+}
+
+fn arm_reference() -> Vec<Vec<bool>> {
+    include_str!("../refs/first_person_arm.txt").lines().filter(|l| !l.starts_with("//") && !l.is_empty()).map(|l| l.chars().map(|c| c == '#').collect()).collect()
+}
+
+fn grid_iou(a: &[Vec<bool>], b: &[Vec<bool>]) -> f32 {
+    let (mut i, mut u) = (0, 0);
+    for (ra, rb) in a.iter().zip(b) { for (x, y) in ra.iter().zip(rb) { if *x && *y { i += 1; } if *x || *y { u += 1; } } }
+    i as f32 / u.max(1) as f32
+}
+
+fn centroid_y(g: &[Vec<bool>]) -> f32 {
+    let (mut s, mut n) = (0.0, 0.0);
+    for (y, row) in g.iter().enumerate() { for v in row { if *v { s += y as f32; n += 1.0; } } }
+    s / f32::max(n, 1.0) * ARM_CELL as f32
+}
+
+/// The empty first-person arm must sit where the real client draws it (silhouette measured from a
+/// real 26.2 capture: refs/first_person_arm.txt), and swinging must move it.
+fn first_person_arm(c: &Ctx) -> Result<Outcome> {
+    let mut g = c.game("fpa")?;
+    join(&mut g)?;
+    cmd(&mut g, "time set noon");
+    tp(&mut g, [820.5, -60.0, 820.5], 0.0, 0.0)?;
+    wait(&mut g, 1.5)?;
+    if g.hotbar[g.held as usize].count != 0 { bail!("hotbar slot is not empty; the arm is only drawn for an empty hand"); }
+    g.fp_swing = -1;
+    let with = capture(&mut g)?;
+    g.hide_hand = true; let without = capture(&mut g)?; g.hide_hand = false;
+    let cells = arm_cells(&with, &without);
+    let n: usize = cells.iter().map(|r| r.iter().filter(|v| **v).count()).sum();
+    if n < 150 { bail!("arm barely drawn: {n} cells"); }
+    let iou = grid_iou(&cells, &arm_reference());
+    save(&g, &with, "first_person_arm");
+    if iou < 0.70 { bail!("arm silhouette IoU {iou:.2} vs the real client (need 0.70); {n} cells"); }
+    // swing: the arm must move (vanilla raises it forward and up)
+    g.fp_swing = 3;
+    let swung = capture(&mut g)?;
+    let sc = arm_cells(&swung, &without);
+    let dy = (centroid_y(&sc) - centroid_y(&cells)).abs();
+    if dy < 3.0 { bail!("swing barely moves the arm (centroid shift {dy:.1}px)"); }
+    Ok(Outcome::Pass(format!("silhouette IoU {iou:.2} vs real client, {n} cells, swing shifts it {dy:.0}px")))
+}
+
+/// Chat-box command suggestions: the server's tree, local suggestions, Tab completion/cycling,
+/// ask_server answers, the popup being drawn.
+fn command_suggestions(c: &Ctx) -> Result<Outcome> {
+    let mut g = c.game("cs")?;
+    join(&mut g)?;
+    if !wait_until(&mut g, 5.0, |g| g.cmd_tree.is_some())? { bail!("no commands packet received"); }
+    let nodes = g.cmd_tree.as_ref().map(|t| t.nodes.len()).unwrap_or(0);
+    if nodes < 50 { bail!("command tree has only {nodes} nodes"); }
+    wait(&mut g, 0.5)?;
+    let sug = |g: &Game| g.sug.list.clone();
+    tap(&mut g, KeyCode::KeyT, None)?;
+    type_text(&mut g, "/gam")?;
+    if !sug(&g).contains(&"gamemode".to_string()) { bail!("'/gam' did not suggest gamemode: {:?}", sug(&g)); }
+    // the popup is actually drawn (compare with the list hidden)
+    let shown = capture(&mut g)?;
+    let saved = std::mem::take(&mut g.sug.list); let hidden = capture(&mut g)?; g.sug.list = saved;
+    let popup_px = diff_count(&shown, &hidden, 0, 300, 300, 470);
+    if popup_px < 100 { bail!("suggestion popup not drawn ({popup_px} px)"); }
+    save(&g, &shown, "command_suggestions");
+    tap(&mut g, KeyCode::Tab, None)?;
+    if g.chat_input.as_deref() != Some("/gamemode") { bail!("Tab gave {:?}, expected /gamemode", g.chat_input); }
+    type_text(&mut g, " c")?;
+    if sug(&g) != vec!["creative".to_string()] { bail!("'/gamemode c' suggested {:?}", sug(&g)); }
+    tap(&mut g, KeyCode::Tab, None)?;
+    if g.chat_input.as_deref() != Some("/gamemode creative") { bail!("Tab gave {:?}", g.chat_input); }
+    // cycling through a list with repeated Tab
+    g.chat_input = Some("/gamemode ".into()); g.update_suggestions();
+    tap(&mut g, KeyCode::Tab, None)?; tap(&mut g, KeyCode::Tab, None)?;
+    if g.chat_input.as_deref() != Some("/gamemode creative") { bail!("second Tab gave {:?}, expected the 2nd suggestion (creative)", g.chat_input); }
+    // entity selectors (give takes players only: no @e) and registry items
+    g.chat_input = Some("/give @".into()); g.update_suggestions();
+    if !sug(&g).contains(&"@s".to_string()) || sug(&g).contains(&"@e".to_string()) { bail!("'/give @' suggested {:?}", sug(&g)); }
+    g.chat_input = Some("/give @s sto".into()); g.update_suggestions();
+    if !sug(&g).contains(&"minecraft:stone".to_string()) { bail!("'/give @s sto' suggested {:?}", &sug(&g)[..sug(&g).len().min(5)]); }
+    g.chat_input = Some("/summon zomb".into()); g.update_suggestions();
+    if !sug(&g).contains(&"minecraft:zombie".to_string()) { bail!("'/summon zomb' suggested {:?}", sug(&g)); }
+    // ask_server: the server answers /time set <marker>
+    g.chat_input = Some("/time set n".into()); g.update_suggestions();
+    if !wait_until(&mut g, 3.0, |g| g.sug.list.contains(&"night".to_string()))? { bail!("server suggestions for '/time set n' never arrived: {:?}", sug(&g)); }
+    g.chat_input = Some("/zzz".into()); g.update_suggestions();
+    if !sug(&g).is_empty() { bail!("'/zzz' suggested {:?}", sug(&g)); }
+    tap(&mut g, KeyCode::Escape, None)?;
+    Ok(Outcome::Pass(format!("{nodes}-node tree; local, Tab/cycle, selectors, registries and server (ask_server) suggestions; popup {popup_px}px")))
 }
 
 /// Sound index + Ogg decoding from the asset store; play events for local place/break and server packets.

@@ -17,6 +17,7 @@ mod player;
 mod render;
 mod scenario;
 mod sound;
+mod suggest;
 mod ui;
 mod world;
 
@@ -154,6 +155,19 @@ pub struct Stats { pub mesh_ms: Vec<f32>, pub sections_meshed: u64, pub chunk_ar
 
 pub struct Dig { pub block: [i32; 3], pub face: u8, pub ticks: u32, pub total: u32 }
 
+/// Chat-box suggestion popup state.
+#[derive(Default)]
+pub struct Sug {
+    pub list: Vec<String>,
+    pub sel: usize,
+    /// byte offset (after the slash) of the word the suggestions replace
+    pub anchor: usize,
+    /// text the list was computed for; after a Tab completion the list is kept so Tab keeps cycling
+    for_text: String,
+    cycling: bool,
+    pub query_id: i32,
+}
+
 pub struct Game {
     gpu: Gpu,
     assets: Arc<Assets>,
@@ -175,6 +189,9 @@ pub struct Game {
     name: String,
     chat: Vec<(String, Instant)>,
     chat_input: Option<String>,
+    /// server command tree (clientbound `commands`) and the chat box's suggestion popup
+    cmd_tree: Option<suggest::Tree>,
+    sug: Sug,
     hp: f32, food: i32,
     hotbar: [ItemStack; 9], held: u8,
     inventory: Vec<ItemStack>,
@@ -218,6 +235,8 @@ pub struct Game {
     hide_cracks: bool,
     /// F1: no HUD, no hand
     hide_gui: bool,
+    /// test hook: draw the HUD but not the first-person arm
+    pub hide_hand: bool,
     /// fixed time of day for deterministic captures (overrides the server)
     fixed_time: Option<i64>,
     last_chunk_at: Instant,
@@ -244,11 +263,11 @@ impl Game {
         let mut g = Game {
             gpu, assets, rules, ui, entity_atlas, biomes, dim_types: Vec::new(), world: World::new(-64, 384), player: Player::new(), mesher,
             dirty: HashMap::new(), in_flight: HashSet::new(), events: rx, out: otx, entities: HashMap::new(), player_names: HashMap::new(), my_eid: 0, name: o.name,
-            chat: Vec::new(), chat_input: None, hp: 20.0, food: 20, hotbar: Default::default(), held: 0, inventory: vec![ItemStack::default(); 46], inv_state: 0, carried: ItemStack::default(), day_time: 6000,
+            chat: Vec::new(), chat_input: None, cmd_tree: None, sug: Sug::default(), hp: 20.0, food: 20, hotbar: Default::default(), held: 0, inventory: vec![ItemStack::default(); 46], inv_state: 0, carried: ItemStack::default(), day_time: 6000,
             spawned: false, loaded_sent: false, connected: false, keys: HashSet::new(), mouse: [false; 2], mouse_pos: (0.0, 0.0), slider_drag: None, last_tick: Instant::now(),
             last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, step_dist: 0.0,
             last_place: Instant::now(), last_space: None, debug: false, disconnected: None, death_msg: None, respawn_at: None, auto_respawn: o.auto_respawn,
-            screen: Some(Screen::Title), cfg: o.cfg, sounds, last_addr: String::new(), quit: false, fullscreen_changed: false, hide_entities: false, hide_cracks: false, hide_gui: false, fixed_time: None, last_chunk_at: Instant::now(), stats: Stats::default(), clicks_sent: 0, ticks: 0,
+            screen: Some(Screen::Title), cfg: o.cfg, sounds, last_addr: String::new(), quit: false, fullscreen_changed: false, hide_entities: false, hide_cracks: false, hide_gui: false, hide_hand: false, fixed_time: None, last_chunk_at: Instant::now(), stats: Stats::default(), clicks_sent: 0, ticks: 0,
             frames: (0, Instant::now(), 0.0),
         };
         if let Some(a) = o.addr { g.connect(&a); }
@@ -418,6 +437,14 @@ impl Game {
                 if event == 2001 { self.block_sound(data as u16, "break", [pos[0] as f64 + 0.5, pos[1] as f64 + 0.5, pos[2] as f64 + 0.5]); }
             }
             Event::PlayerName { uuid, name } => { self.player_names.insert(uuid, name); }
+            Event::Commands(b) => match suggest::Tree::parse(&b) { Ok(t) => self.cmd_tree = Some(t), Err(e) => log::warn!("commands packet: {e:#}") },
+            Event::Suggestions { id, start, len: _, list } => {
+                // answer to our ask_server query: only if it is still for the text being typed
+                if id == self.sug.query_id && !list.is_empty() {
+                    let anchor = (start as usize).saturating_sub(1);
+                    if anchor == self.sug.anchor { for s in list { if !self.sug.list.contains(&s) { self.sug.list.push(s); } } self.sug.list.sort(); }
+                }
+            }
             Event::Velocity(v) => self.player.vel = v,
             Event::Died { player, msg } => {
                 if player != self.my_eid && self.my_eid != 0 { return; }
@@ -708,6 +735,34 @@ impl Game {
     /// Whether the mouse should be captured for looking around.
     pub fn wants_grab(&self) -> bool { self.screen.is_none() && self.chat_input.is_none() && self.connected && self.spawned }
 
+    /// Recompute the popup for the current chat text (and ask the server where the tree says so).
+    fn update_suggestions(&mut self) {
+        let Some(text) = self.chat_input.clone() else { self.sug = Sug { query_id: self.sug.query_id, ..Default::default() }; return };
+        if self.sug.cycling && text == self.sug.for_text { return; }
+        self.sug.cycling = false;
+        self.sug.list.clear(); self.sug.sel = 0; self.sug.for_text = text.clone();
+        let Some(tree) = &self.cmd_tree else { return };
+        let players: Vec<String> = self.player_names.values().cloned().collect();
+        let Some(o) = suggest::suggest(tree, &text, &players) else { return };
+        self.sug.anchor = o.anchor; self.sug.list = o.list;
+        if o.ask_server {
+            self.sug.query_id += 1;
+            let mut w = Writer::with_id(sb::COMMAND_SUGGESTION); w.varint(self.sug.query_id).str(&text); send(&self.out, w);
+        }
+    }
+
+    /// Tab: put the selected suggestion into the box; pressing it again cycles through the list.
+    fn complete_suggestion(&mut self, step: isize) {
+        if self.sug.list.is_empty() { return; }
+        let n = self.sug.list.len();
+        let sel = if self.sug.cycling { (self.sug.sel as isize + step).rem_euclid(n as isize) as usize } else { self.sug.sel };
+        let Some(buf) = &mut self.chat_input else { return };
+        let cut = 1 + self.sug.anchor;
+        if cut > buf.len() { return; }
+        buf.truncate(cut); buf.push_str(&self.sug.list[sel]);
+        self.sug.sel = sel; self.sug.cycling = true; self.sug.for_text = buf.clone();
+    }
+
     pub fn key(&mut self, code: KeyCode, pressed: bool, text: Option<&str>) {
         if pressed { self.keys.insert(code); } else { self.keys.remove(&code); }
         if !pressed { return; }
@@ -716,8 +771,14 @@ impl Game {
                 KeyCode::Escape => self.chat_input = None,
                 KeyCode::Enter | KeyCode::NumpadEnter => { let m = self.chat_input.take().unwrap(); self.send_chat(&m); }
                 KeyCode::Backspace => { buf.pop(); }
+                KeyCode::Tab => { let back = self.keys.contains(&KeyCode::ShiftLeft); self.complete_suggestion(if back { -1 } else { 1 }); return; }
+                KeyCode::ArrowDown | KeyCode::ArrowUp if !self.sug.list.is_empty() => {
+                    let n = self.sug.list.len() as isize; let d = if code == KeyCode::ArrowDown { 1 } else { -1 };
+                    self.sug.sel = (self.sug.sel as isize + d).rem_euclid(n) as usize; return;
+                }
                 _ => if let Some(t) = text { for c in t.chars() { if !c.is_control() && buf.len() < 256 { buf.push(c); } } },
             }
+            self.update_suggestions();
             return;
         }
         if code == KeyCode::F11 { self.cfg.fullscreen = !self.cfg.fullscreen; self.cfg.save(); self.fullscreen_changed = true; return; }
@@ -727,8 +788,8 @@ impl Game {
             None => {}
         }
         match code {
-            KeyCode::KeyT => self.chat_input = Some(String::new()),
-            KeyCode::Slash => self.chat_input = Some("/".into()),
+            KeyCode::KeyT => { self.chat_input = Some(String::new()); self.update_suggestions(); }
+            KeyCode::Slash => { self.chat_input = Some("/".into()); self.update_suggestions(); }
             KeyCode::F3 => self.debug = !self.debug,
             KeyCode::KeyE => self.open_inventory(),
             KeyCode::KeyQ => {
@@ -901,6 +962,19 @@ impl Game {
         if let Some(buf) = &self.chat_input {
             a.rect(ui, 2.0 * s, h - 14.0 * s, w - 4.0 * s, 12.0 * s, [0, 0, 0, 128]);
             a.text(ui, &format!("{buf}_"), 4.0 * s, h - 12.0 * s, s, [255; 4]);
+            // suggestion popup above the input line, anchored at the word being replaced
+            if !self.sug.list.is_empty() && buf.starts_with('/') {
+                const ROWS: usize = 10;
+                let (lo, hi) = suggest::window(self.sug.list.len(), self.sug.sel, ROWS);
+                let x0 = 4.0 * s + a.text_width(&buf[..(1 + self.sug.anchor).min(buf.len())], s) - s;
+                let wmax = self.sug.list[lo..hi].iter().map(|t| a.text_width(t, s)).fold(0.0f32, f32::max) + 2.0 * s;
+                let top = h - 14.0 * s - (hi - lo) as f32 * 12.0 * s;
+                a.rect(ui, x0, top, wmax, (hi - lo) as f32 * 12.0 * s, [0, 0, 0, 200]);
+                for (row, idx) in (lo..hi).enumerate() {
+                    let col = if idx == self.sug.sel { [255, 255, 85, 255] } else { [170, 170, 170, 255] };
+                    a.text(ui, &self.sug.list[idx], x0 + s, top + row as f32 * 12.0 * s + 2.0 * s, s, col);
+                }
+            }
         }
         if in_game {
             for (msg, t) in self.chat.iter().rev().take(if open { 20 } else { 10 }) {
@@ -1010,7 +1084,7 @@ impl Game {
                 }
             }
             // first-person arm
-            if self.screen.is_none() && !self.hide_gui && self.player.gamemode != 3 && self.hotbar[self.held as usize].count == 0 {
+            if self.screen.is_none() && !self.hide_gui && self.player.gamemode != 3 && self.hotbar[self.held as usize].count == 0 && !self.hide_hand && std::env::var("BASALT_NOHAND").is_err() {
                 let sw = if self.fp_swing >= 0 { (self.fp_swing as f32 + a) / 6.0 } else { 0.0 };
                 let (sl, bl) = self.world.light(eye[0].floor() as i32, eye[1].floor() as i32, eye[2].floor() as i32);
                 entity::first_person_arm(&self.entity_atlas, &net::offline_uuid(&self.name), cam, self.player.yaw, self.player.pitch, sw, 0.0, [sl * 17, bl * 17], &mut fd.skinned);

@@ -474,16 +474,24 @@ pub fn build_item(a: &Assets, e: &Entity, alpha: f32, light: [u8; 2], out: &mut 
 }
 
 /// First-person right arm (skin texture) at the camera, with the swing animation.
+/// First-person arm placement: translation x y z (camera-local, world-aligned), rotations y x z (rad), scale.
+/// `BASALT_ARM="tx,ty,tz,ry,rx,rz,scale"` overrides it (used to fit the pose against the real client).
+pub const ARM_DEFAULT: [f32; 7] = [-0.45, -0.8, 0.4, -0.3, -2.3, 0.0, 1.0];
+fn arm_params() -> [f32; 7] {
+    std::env::var("BASALT_ARM").ok().and_then(|v| { let p: Vec<f32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect(); <[f32; 7]>::try_from(p).ok() }).unwrap_or(ARM_DEFAULT)
+}
+
 pub fn first_person_arm(atlas: &EntityAtlas, uuid: &Uuid, eye: Vec3, yaw: f32, pitch: f32, swing: f32, bob: f32, light: [u8; 2], out: &mut MeshData) {
     let (texn, slim) = default_skin(uuid);
     let Some(t) = atlas.rects.get(&texn).copied() else { return };
     let s = (swing * PI).sin();
     let s2 = (swing.sqrt() * PI).sin();
+    let a = arm_params();
     let base = Mat4::from_translation(eye) * Mat4::from_rotation_y(-yaw.to_radians()) * Mat4::from_rotation_x(pitch.to_radians())
         // view space (x right = -X world-local since we face +Z): place the arm low on the right
-        * Mat4::from_translation(Vec3::new(-0.56 - s2 * 0.1, -0.62 + bob + s * 0.12, 0.62 - s * 0.15))
-        * Mat4::from_rotation_y(-0.6 + s2 * 0.5) * Mat4::from_rotation_x(-1.3 - s * 0.9) * Mat4::from_rotation_z(0.2)
-        * Mat4::from_scale(Vec3::splat(1.0 / 16.0)) * Mat4::from_scale(Vec3::new(1.0, -1.0, -1.0));
+        * Mat4::from_translation(Vec3::new(a[0] - s2 * 0.1, a[1] + bob + s * 0.12, a[2] - s * 0.15))
+        * Mat4::from_rotation_y(a[3] + s2 * 0.5) * Mat4::from_rotation_x(a[4] - s * 0.9) * Mat4::from_rotation_z(a[5])
+        * Mat4::from_scale(Vec3::splat(a[6] / 16.0)) * Mat4::from_scale(Vec3::new(1.0, -1.0, -1.0));
     let mut m = Emitter { out, base, tex: t, aw: atlas.w as f32, ah: atlas.h as f32, color: [255; 4], light };
     let w = if slim { 3.0 } else { 4.0 };
     m.part([0.0; 3], [0.0; 3], &[cube([-w / 2.0, -2.0, -2.0], [w, 12.0, 4.0], [40.0, 16.0]), cube_i([-w / 2.0, -2.0, -2.0], [w, 12.0, 4.0], [40.0, 32.0], 0.25)]);

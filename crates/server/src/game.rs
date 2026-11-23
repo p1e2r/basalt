@@ -113,6 +113,8 @@ pub struct Game {
     player_type: i32,
     dir: Option<std::path::PathBuf>,
     data: Arc<basalt_game::GameData>,
+    /// `commands` packet body, built from reports/commands.json (None → the small built-in tree)
+    commands_body: Option<Vec<u8>>,
     items: HashMap<i32, items::ItemEntity>,
     mobs: HashMap<i32, mob::Mob>,
     arrows: HashMap<i32, arrow::Arrow>,
@@ -160,8 +162,10 @@ impl Game {
         let world = World::new(dir.as_ref().map(|d| d.join("region")));
         let player_type = registry_id(reg::ENTITY_TYPE, "player").unwrap_or(0);
         let data = sh.data.clone();
-        let mut g = Game { sh, world, gen: GenPool::new(gen), players: HashMap::new(), tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir, data, items: HashMap::new(), mobs: HashMap::new(), arrows: HashMap::new(), path_budget: 0, no_spawning: false, rng: rand::rngs::StdRng::from_entropy() };
+        let mut g = Game { sh, world, gen: GenPool::new(gen), players: HashMap::new(), tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir, data, commands_body: None, items: HashMap::new(), mobs: HashMap::new(), arrows: HashMap::new(), path_budget: 0, no_spawning: false, rng: rand::rngs::StdRng::from_entropy() };
         g.no_spawning = g.sh.cfg.no_spawning;
+        g.commands_body = crate::commands::build_packet(&g.sh.cfg.data_dir, crate::commands::IMPLEMENTED);
+        if g.commands_body.is_none() { log::warn!("no reports/commands.json: using the built-in command tree"); }
         g.load_level();
         g.load_mobs();
         g.spawn = g.find_spawn();
@@ -365,7 +369,7 @@ impl Game {
         Self::send_abilities(&p);
         let mut w = Writer::with_id(cb::SET_HELD_SLOT); w.varint(p.held as i32); p.send(w);
         let mut w = Writer::with_id(cb::UPDATE_RECIPES); w.varint(0).varint(0); p.send(w);
-        p.send(commands_packet());
+        match &self.commands_body { Some(b) => { let mut w = Writer::with_id(cb::COMMANDS); w.bytes(b); p.send(w); } None => p.send(commands_packet()) }
         Self::teleport(&mut p);
         let mut w = Writer::with_id(cb::SERVER_DATA); w.nbt(&text::plain(&self.sh.cfg.motd)).bool(false); p.send(w);
         // tab list: everyone to the newcomer, newcomer to everyone
@@ -508,6 +512,15 @@ impl Game {
                 if msg.len() > 256 || msg.chars().any(|c| c.is_control()) { return Err(anyhow!("illegal chat")); }
                 let name = self.players.get(&eid).map(|p| p.name.clone()).unwrap_or_default();
                 self.system_chat(text::plain(&format!("<{name}> {msg}")));
+            }
+            sb::COMMAND_SUGGESTION => {
+                let id = r.varint()?; let text = r.str()?;
+                let (start, len, list) = crate::commands::suggest(&text);
+                if let Some(p) = self.players.get(&eid) {
+                    let mut w = Writer::with_id(cb::COMMAND_SUGGESTIONS); w.varint(id).varint(start).varint(len).varint(list.len() as i32);
+                    for s in &list { w.str(s).bool(false); }
+                    p.send(w);
+                }
             }
             sb::CHAT_COMMAND | sb::CHAT_COMMAND_SIGNED => { let cmd = r.str()?; self.command(eid, &cmd); }
             sb::CLIENT_INFORMATION => { let _l = r.str()?; let v = r.i8()?; if let Some(p) = self.players.get_mut(&eid) { p.view = (v.clamp(2, 32) as i32).min(self.sh.cfg.view_distance as i32); } self.stream_chunks(eid); }

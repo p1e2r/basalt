@@ -63,6 +63,8 @@ pub enum Event {
     PlayerName { uuid: Uuid, name: String },
     Velocity([f64; 3]),
     Died { player: i32, msg: String },
+    Commands(Vec<u8>),
+    Suggestions { id: i32, start: i32, len: i32, list: Vec<String> },
     Disconnected(String),
 }
 
@@ -278,6 +280,13 @@ fn handle_play(id: i32, data: &[u8], tx: &Sender<Event>, players: &mut HashMap<U
             Event::Chat(format!("<{name}> {msg}"))
         }
         cb::PLAYER_COMBAT_KILL => { let player = r.varint()?; Event::Died { player, msg: crate::lang::text(&r.nbt()?) } }
+        cb::COMMANDS => Event::Commands(r.rest().to_vec()),
+        cb::COMMAND_SUGGESTIONS => {
+            let id = r.varint()?; let start = r.varint()?; let len = r.varint()?; let n = r.varint()?;
+            let mut list = Vec::new();
+            for _ in 0..n.clamp(0, 1000) { list.push(r.str()?); if r.bool()? { r.nbt()?; } }
+            Event::Suggestions { id, start, len, list }
+        }
         cb::DISGUISED_CHAT => Event::Chat(crate::lang::text(&r.nbt()?)),
         cb::SET_HEALTH => { let hp = r.f32()?; let food = r.varint()?; Event::Health { hp, food } }
         cb::GAME_EVENT => { let e = r.u8()?; let v = r.f32()?; if e == 3 { Event::GameMode(v as u8) } else { return Ok(()) } }
