@@ -41,6 +41,7 @@ fn scenario_paths(id: &str) -> Vec<&'static str> {
     p.extend(["crates/check/src/scenarios/mod.rs", "crates/check/src/scenarios/util.rs"]);
     let by_prefix: &[(&str, &[&str])] = &[
         ("m1_", &["crates/check/src/scenarios/m1.rs", "crates/server/src/game/track.rs"]),
+        ("m13_", &["crates/check/src/scenarios/m1.rs", "crates/server/src/commands.rs", "crates/server/src/cmdparse.rs", "crates/server/src/game/{cmd,score,bossbar}.rs"]),
         ("m2_", &["crates/check/src/scenarios/m1.rs", "crates/server/src/game/track.rs", "crates/server/src/commands.rs", "crates/server/src/cmdparse.rs", "crates/server/src/game/cmd.rs"]),
         ("m3_", &["crates/check/src/scenarios/m3.rs", "crates/worldgen/**", "crates/server/src/game/cmd.rs", "crates/server/src/commands.rs"]),
         ("m4_", &["crates/check/src/scenarios/m4.rs", "crates/game/**", "crates/server/src/game.rs", "crates/server/src/game/{inv,items,health,combat,env,explosion}.rs"]),

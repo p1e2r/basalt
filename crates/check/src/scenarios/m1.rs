@@ -630,6 +630,75 @@ pub fn scoreboard(ctx: &mut Ctx) -> Result<()> {
     Ok(())
 }
 
+/// /bossbar: every sub-command's reply (key + args) and the boss_event packets the player on the bar gets,
+/// vs vanilla. Each step contributes one hashed metric (reply + packets), the note keeps the text. Uses its
+/// own bar id and removes it again (the vanilla world is shared).
+pub fn bossbar(ctx: &mut Ctx) -> Result<()> {
+    let bot = ctx.bot()?;
+    let name = bot.name.clone();
+    let id = "bzbb";
+    let _ = bot.cmd_reply(&format!("bossbar remove {id}"));
+    let mut log = Vec::new();
+    let steps: Vec<(&str, String)> = vec![
+        ("add", format!("bossbar add {id} {{\"text\":\"Hello Boss\",\"color\":\"red\"}}")),
+        ("add_dup", format!("bossbar add {id} \"again\"")),
+        ("get_value", format!("bossbar get {id} value")),
+        ("get_max", format!("bossbar get {id} max")),
+        ("get_visible", format!("bossbar get {id} visible")),
+        ("get_players_none", format!("bossbar get {id} players")),
+        ("players_empty_unchanged", format!("bossbar set {id} players")),
+        ("players_self", format!("bossbar set {id} players @s")),
+        ("players_self_again", format!("bossbar set {id} players @s")),
+        ("get_players", format!("bossbar get {id} players")),
+        ("value", format!("bossbar set {id} value 5")),
+        ("value_again", format!("bossbar set {id} value 5")),
+        ("value_over_max", format!("bossbar set {id} value 500")),
+        ("max_below_value", format!("bossbar set {id} max 20")),
+        ("value_back", format!("bossbar set {id} value 10")),
+        ("max_again", format!("bossbar set {id} max 20")),
+        ("max_big", format!("bossbar set {id} max 1000")),
+        ("get_value_after", format!("bossbar get {id} value")),
+        ("color", format!("bossbar set {id} color blue")),
+        ("color_again", format!("bossbar set {id} color blue")),
+        ("style", format!("bossbar set {id} style notched_10")),
+        ("style_again", format!("bossbar set {id} style notched_10")),
+        ("style_progress", format!("bossbar set {id} style progress")),
+        ("hide", format!("bossbar set {id} visible false")),
+        ("hide_again", format!("bossbar set {id} visible false")),
+        ("value_hidden", format!("bossbar set {id} value 20")),
+        ("get_hidden", format!("bossbar get {id} visible")),
+        ("show", format!("bossbar set {id} visible true")),
+        ("show_again", format!("bossbar set {id} visible true")),
+        ("rename", format!("bossbar set {id} name {{\"text\":\"Renamed\"}}")),
+        ("rename_plain", format!("bossbar set {id} name \"Plain\"")),
+        ("rename_again", format!("bossbar set {id} name \"Plain\"")),
+        ("list", "bossbar list".to_string()),
+        ("players_clear", format!("bossbar set {id} players")),
+        ("players_again", format!("bossbar set {id} players @s")),
+        ("remove", format!("bossbar remove {id}")),
+        ("remove_missing", format!("bossbar remove {id}")),
+        ("get_missing", format!("bossbar get {id} value")),
+        ("set_missing", format!("bossbar set {id} value 1")),
+        ("list_none", "bossbar list".to_string()),
+        ("ns_add", "bossbar add bz:nsbar \"ns\"".to_string()),
+        ("ns_get", "bossbar get bz:nsbar max".to_string()),
+        ("ns_remove", "bossbar remove bz:nsbar".to_string()),
+    ];
+    for (label, cmd) in steps {
+        let mark = bot.st().boss_log.len();
+        let r = bot.cmd_reply(&cmd)?;
+        bot.wait_ticks(3);
+        let (k, a) = r.first().map(|l| (l.key.clone().unwrap_or_default(), l.args.iter().map(|a| a.replace(&name, "BOT")).collect::<Vec<_>>())).unwrap_or_default();
+        let pk: Vec<String> = bot.st().boss_log[mark..].iter().map(|(_, l)| l.clone()).collect();
+        let line = format!("{label}: {k} {a:?} {pk:?}");
+        let h = line.bytes().fold(0x811c9dc5u32, |h, b| (h ^ b as u32).wrapping_mul(16777619));
+        ctx.metric(label, h as f64, 0.0);
+        log.push(line);
+    }
+    ctx.note(log.join(" | "));
+    Ok(())
+}
+
 /// Admin files (Basalt only: changes ops/bans): without ops.json everyone is an operator; /op
 /// creates ops.json and from then on a non-op is refused op commands; ops survive a restart;
 /// /ban kicks and refuses the player, /pardon lets them back in; /whitelist on refuses others.
