@@ -3,14 +3,16 @@ use crate::buf::{Reader, Writer};
 use anyhow::{bail, Result};
 use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
 use std::io::{Read, Write};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 
 pub struct Frame { pub id: i32, pub data: Vec<u8> }
 impl Frame { pub fn reader(&self) -> Reader<'_> { Reader::new(&self.data) } }
 
-pub struct ConnReader { inner: BufReader<OwnedReadHalf>, pub threshold: i32 }
+/// Frame reader. `read` is cancel-safe (usable in `tokio::select!`): bytes are buffered here and a
+/// frame is only consumed once it is complete.
+pub struct ConnReader { inner: OwnedReadHalf, buf: Vec<u8>, pub threshold: i32 }
 pub struct ConnWriter { inner: OwnedWriteHalf, pub threshold: i32 }
 
 pub struct Conn { pub r: ConnReader, pub w: ConnWriter }
@@ -19,25 +21,40 @@ impl Conn {
     pub fn new(s: TcpStream) -> Self {
         s.set_nodelay(true).ok();
         let (r, w) = s.into_split();
-        Conn { r: ConnReader { inner: BufReader::with_capacity(1 << 16, r), threshold: -1 }, w: ConnWriter { inner: w, threshold: -1 } }
+        Conn { r: ConnReader { inner: r, buf: Vec::with_capacity(1 << 16), threshold: -1 }, w: ConnWriter { inner: w, threshold: -1 } }
     }
     pub async fn read(&mut self) -> Result<Frame> { self.r.read().await }
     pub async fn send(&mut self, w: &Writer) -> Result<()> { self.w.send(w).await }
     pub fn set_threshold(&mut self, t: i32) { self.r.threshold = t; self.w.threshold = t; }
 }
 
-async fn read_varint<R: AsyncReadExt + Unpin>(r: &mut R) -> Result<i32> {
+/// Parse a varint at the start of `b`: Ok(Some((value, len))) or Ok(None) if incomplete.
+fn peek_varint(b: &[u8]) -> Result<Option<(i32, usize)>> {
     let mut v: u32 = 0;
-    for i in 0..5 { let b = r.read_u8().await?; v |= ((b & 0x7F) as u32) << (7 * i); if b & 0x80 == 0 { return Ok(v as i32); } }
+    for i in 0..5 {
+        let Some(&x) = b.get(i) else { return Ok(None) };
+        v |= ((x & 0x7F) as u32) << (7 * i);
+        if x & 0x80 == 0 { return Ok(Some((v as i32, i + 1))); }
+    }
     bail!("varint too long")
 }
 
 impl ConnReader {
     pub async fn read(&mut self) -> Result<Frame> {
-        let len = read_varint(&mut self.inner).await?;
-        if len <= 0 || len > 1 << 23 { bail!("bad frame length {len}") }
-        let mut buf = vec![0u8; len as usize];
-        self.inner.read_exact(&mut buf).await?;
+        let buf = loop {
+            if let Some((len, n)) = peek_varint(&self.buf)? {
+                if len <= 0 || len > 1 << 23 { bail!("bad frame length {len}") }
+                let end = n + len as usize;
+                if self.buf.len() >= end {
+                    let frame = self.buf[n..end].to_vec();
+                    self.buf.drain(..end);
+                    break frame;
+                }
+            }
+            if self.buf.capacity() - self.buf.len() < 8192 { self.buf.reserve(1 << 16); }
+            // read_buf is cancel-safe: nothing is lost if this future is dropped
+            if self.inner.read_buf(&mut self.buf).await? == 0 { bail!("connection closed"); }
+        };
         let body = if self.threshold >= 0 {
             let mut r = Reader::new(&buf);
             let dlen = r.varint()?;

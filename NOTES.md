@@ -82,3 +82,40 @@ real server/client over the wire.
   zero move_entity_pos + the stack. Resting items only run their move step every 4th tick (so their
   velocity reads ~(0,-0.08,0) at the 20-tick update, then 0).
   Items: gravity 0.04 before moving, drag 0.98, ground friction slipperiness×0.98, bounce vy×-0.5.
+- Mobs (measured on vanilla 26.2 via basalt-probe proxy, M5):
+  - Spawn is a bundle: bundle_delimiter, add_entity, set_entity_data, update_attributes,
+    [set_equipment], bundle_delimiter. add_entity = varint eid, uuid, varint type, f64 xyz, LpVec3 vel,
+    u8 pitch, u8 yaw, u8 headYaw, varint data (0 for mobs; arrows: the SHOOTER'S entity id, not id+1).
+  - Mob metadata: 9 health (float); 6 pose (ser 20; 7 = DYING, sent with health 0 on death);
+    8 living flags (byte; 1 = using item, skeleton drawing its bow); 15 mob flags (byte: 1 NoAI,
+    2 left-handed, 4 aggressive — zombie arms up / skeleton aiming); 16 baby (boolean ser 8) for
+    ageable mobs and zombies; creeper 16 swell state (varint ser 1, -1 idle / 1 swelling),
+    17 powered (bool), 18 ignited (bool); sheep 18 wool byte (low 4 bits colour, 0x10 sheared);
+    spider 16 climbing (byte 1); chicken 19 variant (ser 31, only sent when not default);
+    arrow 8 flags byte (1 crit), 10 in ground (bool). Vanilla sends only non-default values.
+  - update_attributes: varint eid, varint n, {varint attribute id, f64 base, varint nmods,
+    {str id, f64 amount, u8 op}}; vanilla syncs only movement_speed for these mobs (zombie 0.23,
+    skeleton/creeper/pig/chicken 0.25, spider 0.3, cow 0.2, sheep 0.23; baby zombie carries
+    "minecraft:baby" +0.5 op 1).
+  - set_equipment: varint eid, then {u8 slot (|0x80 if more follow), slot item}; skeleton: slot 0 bow.
+  - Movement: move_entity_pos(_rot) about every tick while moving (i16 deltas ×4096 + bool onGround),
+    rotate_head (varint eid, u8), set_entity_motion (varint eid, LpVec3), entity_position_sync
+    (varint eid, f64 xyz, f64 vel xyz, f32 yaw pitch, bool onGround) occasionally.
+  - Damage: damage_event = varint eid, varint damage_type id, varint cause eid+1 (0 none), varint
+    direct eid+1, bool hasPos (+ f64 xyz). The hurt player alone also gets hurt_animation (varint eid,
+    f32 yaw). Hurt/death/ambient/step sounds are server-sent `sound` packets: varint sound id+1,
+    varint category (5 hostile, 6 neutral, 7 player), i32 x*8 y*8 z*8, f32 vol, f32 pitch, i64 seed.
+  - Death: set_entity_data health 0 + pose 7, entity_event 3, death sound, loot dropped at once;
+    ~20 ticks later entity_event 60 (poof) then remove_entities.
+  - Knockback of a player by a mob: set_entity_motion with the player's own id.
+  - explode: f64 x y z, f32 radius, i32 block count (all positions the rays touched, incl. air:
+    282-598 for r 3-4), Optional<f64×3> player knockback (bool + 3 doubles, only to the knocked
+    player), varint particle (explosion_emitter), sound holder varint (id+1 of
+    entity.generic.explode), varint n block-particle entries {varint particle, f32 scaling, f32 speed,
+    varint weight} (vanilla: poof 0.5/1.0/1, smoke 1.0/1.0/1). Destroyed blocks go out separately as
+    section_blocks_update / block_update.
+  - Serverbound (minecraft.wiki protocol page, 26.x): attack = varint entity id; interact = varint
+    entity id, varint hand, LpVec3 target offset, bool sneaking.
+  - Reference values (vanilla, difficulty=easy, unarmored player): zombie hit 2.5; skeleton arrow from
+    10 blocks 3.0; creeper (r 3, Fuse:0) 4.36 blocks from the player's feet → 5.157 damage and
+    knockback magnitude 0.274 (impact uses distance to feet, push direction aims at the eyes).

@@ -37,6 +37,7 @@ pub enum Event {
     RemoveEntities(Vec<i32>),
     PlayerName { uuid: Uuid, name: String },
     Velocity([f64; 3]),
+    EntityMotion { id: i32, vel: [f64; 3] },
     Died(String),
     Disconnected(String),
 }
@@ -155,6 +156,18 @@ fn skip_lpvec3(r: &mut Reader) -> Result<()> {
     Ok(())
 }
 
+/// Decode a LpVec3 (see NOTES.md "Entities").
+fn read_lpvec3(r: &mut Reader) -> Result<[f64; 3]> {
+    let b0 = r.u8()?;
+    if b0 == 0 { return Ok([0.0; 3]); }
+    let b1 = r.u8()?; let hi = r.i32()? as u32;
+    let packed = b0 as u64 | (b1 as u64) << 8 | (hi as u64) << 16;
+    let mut scale = packed & 3;
+    if packed & 4 != 0 { scale |= (r.varint()? as u64) << 2; }
+    let f = |v: u64| ((v & 0x7fff).min(32766) as f64 * 2.0 / 32766.0 - 1.0) * scale as f64;
+    Ok([f(packed >> 3), f(packed >> 18), f(packed >> 33)])
+}
+
 fn angle(b: u8) -> f32 { b as f32 * 360.0 / 256.0 }
 
 fn handle_play(id: i32, data: &[u8], tx: &Sender<Event>, players: &mut HashMap<Uuid, String>) -> Result<()> {
@@ -258,6 +271,7 @@ fn handle_play(id: i32, data: &[u8], tx: &Sender<Event>, players: &mut HashMap<U
             let yaw = r.f32()?;
             Event::TeleportEntity { id, pos, yaw }
         }
+        cb::SET_ENTITY_MOTION => { let id = r.varint()?; Event::EntityMotion { id, vel: read_lpvec3(&mut r)? } }
         cb::REMOVE_ENTITIES => { let n = r.varint()?; let mut v = Vec::new(); for _ in 0..n { v.push(r.varint()?); } Event::RemoveEntities(v) }
         _ => return Ok(()),
     };

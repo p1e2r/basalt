@@ -29,11 +29,11 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
-struct Args { data: String, addr: String, name: String, jar: String, screenshot: Option<String>, wait: f32, size: (u32, u32), pos: Option<[f64; 3]>, look: Option<(f32, f32)>, cmds: Vec<String>, walk: f32, chat: Vec<String>, click: Option<char>, clicks: Vec<(i16, i8, i32)>, hold: f32, later: Vec<(f32, String)> }
+struct Args { data: String, addr: String, name: String, jar: String, screenshot: Option<String>, wait: f32, size: (u32, u32), pos: Option<[f64; 3]>, look: Option<(f32, f32)>, cmds: Vec<String>, walk: f32, chat: Vec<String>, click: Option<char>, clicks: Vec<(i16, i8, i32)>, hold: f32, later: Vec<(f32, String)>, attack: u32, attack_every: f32 }
 
 fn parse_args() -> Args {
     let mut a = Args { data: "data".into(), addr: "127.0.0.1:25566".into(), name: "Basalt".into(), jar: std::env::var("BASALT_JAR").unwrap_or_else(|_| "vanilla/client.jar".into()),
-        screenshot: None, wait: 8.0, size: (1280, 720), pos: None, look: None, cmds: Vec::new(), walk: 0.0, chat: Vec::new(), click: None, clicks: Vec::new(), hold: 1.0, later: Vec::new() };
+        screenshot: None, wait: 8.0, size: (1280, 720), pos: None, look: None, cmds: Vec::new(), walk: 0.0, chat: Vec::new(), click: None, clicks: Vec::new(), hold: 1.0, later: Vec::new(), attack: 0, attack_every: 0.7 };
     let mut it = std::env::args().skip(1);
     let triple = |s: String| -> Option<[f64; 3]> { let v: Vec<f64> = s.split(',').filter_map(|p| p.parse().ok()).collect(); (v.len() == 3).then(|| [v[0], v[1], v[2]]) };
     while let Some(k) = it.next() {
@@ -50,6 +50,9 @@ fn parse_args() -> Args {
             // "--later 10:tp @s 0 0 0": run a command N seconds after joining
             "--later" => { let v = v(); if let Some((t, c)) = v.split_once(':') { a.later.push((t.parse().unwrap_or(0.0), c.to_string())); } }
             "--hold" => a.hold = v().parse().unwrap_or(1.0),
+            // test hook: attack the nearest mob N times (every --attack-every seconds, from 3 s after joining)
+            "--attack" => a.attack = v().parse().unwrap_or(1),
+            "--attack-every" => a.attack_every = v().parse().unwrap_or(0.7),
             // container clicks in the player inventory: "slot:button:mode,..."
             "--clicks" => a.clicks = v().split(',').filter_map(|c| { let p: Vec<&str> = c.split(':').collect(); Some((p.first()?.parse().ok()?, p.get(1).unwrap_or(&"0").parse().ok()?, p.get(2).unwrap_or(&"0").parse().ok()?)) }).collect(),
             "--walk" => a.walk = v().parse().unwrap_or(0.0),
@@ -103,6 +106,25 @@ fn snapshot(w: &World, cx: i32, sy: i32, cz: i32) -> Snapshot {
 
 #[derive(Clone)]
 struct Entity { pos: [f64; 3], yaw: f32, kind: i32 }
+
+/// Box width, height and colour per entity type (vanilla hitbox sizes, from public docs).
+fn entity_look(kind: i32) -> (f32, f32, [u8; 4]) {
+    let name = basalt_data::registries::ENTITY_TYPE.get(kind as usize).copied().unwrap_or("");
+    match name {
+        "player" => (0.6, 1.8, [200, 170, 140, 255]),
+        "zombie" => (0.6, 1.95, [60, 140, 70, 255]),
+        "skeleton" => (0.6, 1.99, [220, 220, 220, 255]),
+        "creeper" => (0.6, 1.7, [40, 200, 40, 255]),
+        "spider" => (1.4, 0.9, [70, 50, 50, 255]),
+        "cow" => (0.9, 1.4, [90, 60, 40, 255]),
+        "pig" => (0.9, 0.9, [240, 160, 170, 255]),
+        "sheep" => (0.9, 1.3, [245, 245, 245, 255]),
+        "chicken" => (0.4, 0.7, [255, 255, 230, 255]),
+        "item" | "experience_orb" => (0.25, 0.25, [230, 200, 80, 255]),
+        "arrow" => (0.5, 0.5, [120, 90, 60, 255]),
+        _ => (0.6, 0.9, [200, 170, 140, 255]),
+    }
+}
 
 struct Game {
     gpu: Gpu,
@@ -247,6 +269,7 @@ impl Game {
             Event::RemoveEntities(v) => { for id in v { self.entities.remove(&id); } }
             Event::PlayerName { .. } => {}
             Event::Velocity(v) => self.player.vel = v,
+            Event::EntityMotion { id, vel } => { if id == self.my_eid { self.player.vel = vel; } }
             Event::Died(m) => { println!("[death] {m}"); self.chat.push((m, Instant::now())); self.died = Some(Instant::now()); }
             Event::Disconnected(m) => { eprintln!("disconnected: {m}"); self.chat.push((format!("Disconnected: {m}"), Instant::now())); self.disconnected = Some(m); }
         }
@@ -339,6 +362,53 @@ impl Game {
     fn player_action(&mut self, status: i32, b: [i32; 3], face: u8) {
         self.seq += 1;
         let mut w = Writer::with_id(sb::PLAYER_ACTION); w.varint(status).position(b[0], b[1], b[2]).u8(face).varint(self.seq); send(&self.out, w);
+    }
+
+    /// Nearest entity whose box the look ray hits within reach, if closer than the block target.
+    fn target_entity(&self) -> Option<(i32, f64)> {
+        let (o, d) = (self.eye(1.0), self.look_dir());
+        let reach: f64 = if self.player.gamemode == 1 { 5.0 } else { 3.0 };
+        let block = self.target().map(|h| { let c = [h.block[0] as f64 + 0.5, h.block[1] as f64 + 0.5, h.block[2] as f64 + 0.5]; ((c[0] - o[0]).powi(2) + (c[1] - o[1]).powi(2) + (c[2] - o[2]).powi(2)).sqrt() - 0.5 }).unwrap_or(f64::MAX);
+        let mut best: Option<(i32, f64)> = None;
+        for (id, e) in &self.entities {
+            if *id == self.my_eid { continue; }
+            let (w, h, _) = entity_look(e.kind);
+            if basalt_data::registries::ENTITY_TYPE.get(e.kind as usize).map(|n| matches!(*n, "item" | "arrow" | "experience_orb")).unwrap_or(false) { continue; }
+            let hw = w as f64 / 2.0;
+            let bb = [e.pos[0] - hw, e.pos[1], e.pos[2] - hw, e.pos[0] + hw, e.pos[1] + h as f64, e.pos[2] + hw];
+            let (mut t0, mut t1) = (0.0f64, reach);
+            let mut ok = true;
+            for a in 0..3 {
+                if d[a].abs() < 1e-12 { if o[a] < bb[a] || o[a] > bb[a + 3] { ok = false; break; } continue; }
+                let (mut x, mut y) = ((bb[a] - o[a]) / d[a], (bb[a + 3] - o[a]) / d[a]);
+                if x > y { std::mem::swap(&mut x, &mut y); }
+                t0 = t0.max(x); t1 = t1.min(y);
+                if t0 > t1 { ok = false; break; }
+            }
+            if ok && t0 < block && best.map(|b| t0 < b.1).unwrap_or(true) { best = Some((*id, t0)); }
+        }
+        best
+    }
+
+    /// Attack packet (varint entity id) + swing, as the real client sends on left click.
+    fn attack(&mut self, id: i32) {
+        let mut w = Writer::with_id(sb::ATTACK); w.varint(id); send(&self.out, w);
+        let mut w = Writer::with_id(sb::SWING); w.varint(0); send(&self.out, w);
+    }
+
+    /// Test hook: face and attack the nearest non-player living entity within `range`.
+    fn attack_nearest(&mut self, range: f64) -> bool {
+        let eye = self.eye(1.0);
+        let skip = |k: i32| basalt_data::registries::ENTITY_TYPE.get(k as usize).map(|n| matches!(*n, "item" | "arrow" | "experience_orb" | "player")).unwrap_or(true);
+        let Some((id, pos, h)) = self.entities.iter().filter(|(id, e)| **id != self.my_eid && !skip(e.kind))
+            .map(|(id, e)| (*id, e.pos, entity_look(e.kind).1 as f64))
+            .min_by(|a, b| { let d = |p: [f64; 3]| (p[0] - eye[0]).powi(2) + (p[2] - eye[2]).powi(2); d(a.1).partial_cmp(&d(b.1)).unwrap() }) else { return false };
+        let (dx, dy, dz) = (pos[0] - eye[0], pos[1] + h * 0.5 - eye[1], pos[2] - eye[2]);
+        if (dx * dx + dy * dy + dz * dz).sqrt() > range { return false; }
+        self.player.yaw = (-dx).atan2(dz).to_degrees() as f32;
+        self.player.pitch = (-(dy.atan2((dx * dx + dz * dz).sqrt())).to_degrees()) as f32;
+        self.attack(id);
+        true
     }
 
     fn tick_dig(&mut self) {
@@ -570,11 +640,12 @@ impl Game {
         let wool = self.atlas_uv("block/white_wool");
         for (id, e) in &self.entities {
             if *id == self.my_eid { continue; }
-            let (hw, hh) = if e.kind == basalt_data::registry_id(basalt_data::registries::ENTITY_TYPE, "player").unwrap_or(-1) { (0.3, 1.8) } else { (0.3, 0.9) };
+            let (w, hh, color) = entity_look(e.kind);
+            let hw = w / 2.0;
             let (sl, bl) = self.world.light(e.pos[0].floor() as i32, e.pos[1].floor() as i32 + 1, e.pos[2].floor() as i32);
             let lv = (sl.max(bl) * 17).max(40);
             let p = [e.pos[0] as f32, e.pos[1] as f32, e.pos[2] as f32];
-            Self::cuboid(&mut extra, [p[0] - hw, p[1], p[2] - hw], [p[0] + hw, p[1] + hh, p[2] + hw], wool, [200, 170, 140, 255], lv);
+            Self::cuboid(&mut extra, [p[0] - hw, p[1], p[2] - hw], [p[0] + hw, p[1] + hh, p[2] + hw], wool, color, lv);
         }
         let (mut ui, mut items) = (MeshData::default(), MeshData::default());
         self.build_hud(&mut ui, &mut items);
@@ -643,7 +714,7 @@ impl ApplicationHandler for App {
                 let pressed = state == ElementState::Pressed;
                 if !self.grabbed { if pressed && g.chat_input.is_none() { self.grab(true); } return; }
                 match button {
-                    MouseButton::Left => g.mouse[0] = pressed,
+                    MouseButton::Left => { if pressed { if let Some((id, _)) = g.target_entity() { g.attack(id); } else { g.mouse[0] = true; } } else { g.mouse[0] = false; } }
                     MouseButton::Right => { g.mouse[1] = pressed; if pressed { g.use_item(); } }
                     _ => {}
                 }
@@ -685,6 +756,7 @@ fn run_screenshot(args: &Args, assets: Arc<Assets>, out: &str) -> Result<()> {
     let mut next_click = 0usize;
     let mut placed_at: Option<Instant> = None;
     let mut done_later: Vec<String> = Vec::new();
+    let mut attacks_done = 0u32;
     while start.elapsed().as_secs_f32() < args.wait {
         g.update();
         if g.spawned && !placed && g.loaded_sent {
@@ -699,6 +771,12 @@ fn run_screenshot(args: &Args, assets: Arc<Assets>, out: &str) -> Result<()> {
             match args.click { Some('l') => { g.mouse[0] = true; clicked = true; } Some('r') => { g.use_item(); clicked = true; } _ => {} }
         }
         if clicked && (start.elapsed().as_secs_f32() > args.wait - 1.0 || clicked_at.get_or_insert(Instant::now()).elapsed().as_secs_f32() > args.hold) { g.mouse[0] = false; }
+        if let Some(t0) = placed_at {
+            let el = t0.elapsed().as_secs_f32();
+            if attacks_done < args.attack && el > 3.0 + attacks_done as f32 * args.attack_every {
+                if g.attack_nearest(6.0) { attacks_done += 1; println!("attack {attacks_done}"); } else if el > 3.0 + (attacks_done as f32 + 3.0) * args.attack_every { attacks_done += 1; println!("attack {attacks_done}: no target"); }
+            }
+        }
         if let Some(t0) = placed_at { for (t, c) in &args.later { if !done_later.contains(c) && t0.elapsed().as_secs_f32() >= *t { g.send_chat(&format!("/{c}")); done_later.push(c.clone()); } } }
         if placed && placed_at.is_none() { placed_at = Some(Instant::now()); }
         if placed && start.elapsed().as_secs_f32() > 4.0 + next_click as f32 * 0.3 && next_click < args.clicks.len() {
@@ -731,6 +809,9 @@ fn run_screenshot(args: &Args, assets: Arc<Assets>, out: &str) -> Result<()> {
     }
     let p = &g.player;
     let inv: Vec<String> = g.inventory.iter().enumerate().filter(|(_, s)| s.count > 0).map(|(i, s)| format!("{i}:{}x{}{}", basalt_data::registries::ITEM.get(s.item as usize).unwrap_or(&"?"), s.count, if s.damage > 0 { format!("(dmg {})", s.damage) } else { String::new() })).collect();
+    let mut kinds: Vec<String> = g.entities.iter().filter(|(id, _)| **id != g.my_eid).map(|(_, e)| format!("{}@{:.1},{:.1},{:.1}", basalt_data::registries::ENTITY_TYPE.get(e.kind as usize).unwrap_or(&"?"), e.pos[0], e.pos[1], e.pos[2])).collect();
+    kinds.sort();
+    println!("entity list: {}", kinds.join(" "));
     println!("state: hp {} food {} gamemode {} inv [{}]", g.hp, g.food, g.player.gamemode, inv.join(" "));
     println!("screenshot {out}: pos {:.2},{:.2},{:.2} chunks {} sections {} entities {}", p.pos[0], p.pos[1], p.pos[2], g.world.chunks.len(), g.gpu.sections.len(), g.entities.len());
     Ok(())
