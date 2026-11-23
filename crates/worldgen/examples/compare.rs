@@ -192,6 +192,13 @@ fn main() -> Result<()> {
                         let e = feat_types.entry(BlockState(theirs as u32).name()).or_insert((0, 0, 0));
                         e.0 += 1;
                         if ours == theirs { feat_ok += 1; e.1 += 1; } else {
+                            if let Ok(fp) = std::env::var("FPAIR") {
+                                let (on, tn) = (BlockState(ours as u32).to_string(), BlockState(theirs as u32).to_string());
+                                if (on.contains(&fp) || tn.contains(&fp)) && pair_count < std::env::var("FLIMIT").ok().and_then(|v| v.parse().ok()).unwrap_or(60) {
+                                    pair_count += 1;
+                                    println!("  at {wx} {wy} {wz}: ours {on} vanilla {tn}");
+                                }
+                            }
                             feat_types.entry(BlockState(ours as u32).name()).or_insert((0, 0, 0)).2 += 1;
                         }
                     }
@@ -219,10 +226,51 @@ fn main() -> Result<()> {
                         if detail { println!("biome mismatch at quart {} {} {}: ours {ours} vanilla {theirs}", cx * 4 + (j & 3) as i32, (si * 4 + (j >> 4)) as i32 - 16, cz * 4 + ((j >> 2) & 3) as i32); } *bio_conf.entry((ours, theirs.clone())).or_default() += 1; }
                 }
             }
+            if std::env::var("BASES").is_ok() && cx == cx0 && cz == cz0 {
+                let is_log = |id: u16| { let n = BlockState(id as u32).name(); n.ends_with("_log") || n.ends_with("mushroom_stem") };
+                for (label, get) in [("ours", &(|i: usize| c.blocks[i >> 12][i & 4095]) as &dyn Fn(usize) -> u16), ("vanilla", &|i: usize| v.blocks[i])] {
+                    let mut out = Vec::new();
+                    for i in 4096..98304 {
+                        if is_log(get(i)) && !is_log(get(i - 256)) {
+                            out.push(format!("({},{},{} {})", cx * 16 + (i & 15) as i32, (i >> 8) as i32 + MIN_Y, cz * 16 + ((i >> 4) & 15) as i32, BlockState(get(i) as u32).name()));
+                        }
+                    }
+                    println!("{label} log bases: {}", out.join(" "));
+                }
+            }
+            if let Ok(hs) = std::env::var("HSLICE") {
+                if cx == cx0 && cz == cz0 {
+                    let ch = |id: u16| {
+                        let n = BlockState(id as u32).name();
+                        if n.ends_with("_log") { 'L' } else if n.ends_with("_leaves") { 'l' } else if n == "snow" { 's' } else {
+                            match cat(id) { Cat::Air => '.', Cat::Fluid => '~', Cat::Solid => if terrain(id) { '#' } else { 'f' } }
+                        }
+                    };
+                    for ys in hs.split(',') {
+                        let y: i32 = ys.parse().unwrap_or(64);
+                        println!("y={y}  (rows z, cols x)");
+                        for z in 0..16usize {
+                            let mut l1 = String::new();
+                            let mut l2 = String::new();
+                            for x in 0..16usize {
+                                let i = (((y - MIN_Y) as usize) << 8) | (z << 4) | x;
+                                l1.push(ch(c.blocks[i >> 12][i & 4095]));
+                                l2.push(ch(v.blocks[i]));
+                            }
+                            println!("{z:3} {l1}  {l2}");
+                        }
+                    }
+                }
+            }
             if let Ok(sl) = std::env::var("SLICE") {
                 if cx == cx0 && cz == cz0 {
                     let lx: usize = sl.parse().unwrap_or(0);
-                    let ch = |id: u16| match cat(id) { Cat::Air => '.', Cat::Fluid => '~', Cat::Solid => if terrain(id) { '#' } else { 'f' } };
+                    let ch = |id: u16| {
+                        let n = BlockState(id as u32).name();
+                        if n.ends_with("_log") { 'L' } else if n.ends_with("_leaves") { 'l' } else if n == "snow" { 's' } else {
+                            match cat(id) { Cat::Air => '.', Cat::Fluid => '~', Cat::Solid => if terrain(id) { '#' } else { 'f' } }
+                        }
+                    };
                     for yy in (0..384).rev() {
                         let mut l1 = String::new();
                         let mut l2 = String::new();

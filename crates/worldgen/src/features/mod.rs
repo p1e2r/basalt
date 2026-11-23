@@ -248,7 +248,7 @@ const SUPPORT_TAGS: &[&str] = &[
     "supports_vegetation", "supports_mangrove_propagule", "supports_azalea", "supports_dry_vegetation", "overrides_mushroom_light_requirement",
     "supports_sugar_cane", "supports_sugar_cane_adjacently", "supports_cactus", "supports_lily_pad", "cannot_support_seagrass", "cannot_support_kelp",
     "cannot_support_snow_layer", "support_override_snow_layer", "supports_crops", "supports_bamboo", "supports_small_dripleaf",
-    "supports_big_dripleaf", "logs", "leaves", "replaceable_by_trees", "cannot_replace_below_tree_trunk",
+    "supports_big_dripleaf", "logs", "leaves", "substrate_overworld", "replaceable_by_mushrooms", "replaceable_by_trees", "cannot_replace_below_tree_trunk",
 ];
 
 impl Features {
@@ -483,6 +483,12 @@ impl Features {
             Modifier::Biome => {
                 let Some(t) = top else { return false };
                 let b = reg.biome(x, y, z);
+                if let Some(dbg) = debug_filter() {
+                    let name = &self.steps[t.0 as usize][t.1 as usize];
+                    if name.contains(dbg.as_str()) {
+                        eprintln!("[feat] {name} at {x} {y} {z} biome {} pass {}", reg.g.biome_names[b as usize], self.biome_has[b as usize].contains(&t));
+                    }
+                }
                 if self.biome_has[b as usize].contains(&t) { next(self, reg, r, x, y, z) } else { false }
             }
             Modifier::Rarity(c) => if r.next_float() < 1.0 / *c as f32 { next(self, reg, r, x, y, z) } else { false },
@@ -593,6 +599,11 @@ impl Features {
 
     pub fn is_air(&self, s: u16) -> bool { flag(s, F_AIR) }
     pub fn is_fluid(&self, s: u16) -> bool { flag(s, F_FLUID) }
+}
+
+pub fn debug_filter() -> Option<&'static String> {
+    static D: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    D.get_or_init(|| std::env::var("BASALT_DEBUG_FEATURE").ok()).as_ref()
 }
 
 #[cfg(test)]

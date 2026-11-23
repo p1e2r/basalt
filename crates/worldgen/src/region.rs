@@ -78,13 +78,21 @@ pub enum Hm {
     OceanFloor = 1,
     MotionBlocking = 2,
     MotionBlockingNoLeaves = 3,
+    /// The worldgen variants are not updated during decoration (vanilla keeps them at
+    /// their carver-stage values), only the final ones are.
+    WorldSurfaceWg = 4,
+    OceanFloorWg = 5,
 }
+
+const HM_ALL: [Hm; 6] = [Hm::WorldSurface, Hm::OceanFloor, Hm::MotionBlocking, Hm::MotionBlockingNoLeaves, Hm::WorldSurfaceWg, Hm::OceanFloorWg];
 
 impl Hm {
     pub fn parse(s: &str) -> Option<Hm> {
         Some(match s {
-            "WORLD_SURFACE" | "WORLD_SURFACE_WG" => Hm::WorldSurface,
-            "OCEAN_FLOOR" | "OCEAN_FLOOR_WG" => Hm::OceanFloor,
+            "WORLD_SURFACE" => Hm::WorldSurface,
+            "OCEAN_FLOOR" => Hm::OceanFloor,
+            "WORLD_SURFACE_WG" => Hm::WorldSurfaceWg,
+            "OCEAN_FLOOR_WG" => Hm::OceanFloorWg,
             "MOTION_BLOCKING" => Hm::MotionBlocking,
             "MOTION_BLOCKING_NO_LEAVES" => Hm::MotionBlockingNoLeaves,
             _ => return None,
@@ -94,8 +102,8 @@ impl Hm {
     fn counts(self, s: u16) -> bool {
         let f = flags()[s as usize];
         match self {
-            Hm::WorldSurface => f & F_AIR == 0,
-            Hm::OceanFloor => f & F_MOTION != 0,
+            Hm::WorldSurface | Hm::WorldSurfaceWg => f & F_AIR == 0,
+            Hm::OceanFloor | Hm::OceanFloorWg => f & F_MOTION != 0,
             Hm::MotionBlocking => f & (F_MOTION | F_FLUID) != 0,
             Hm::MotionBlockingNoLeaves => f & (F_MOTION | F_FLUID) != 0 && f & F_LEAVES == 0,
         }
@@ -111,7 +119,7 @@ pub struct Region<'g> {
     pub n: i32,
     pub blocks: Vec<Vec<[u16; 4096]>>,
     pub biomes: Vec<Vec<[u8; 64]>>,
-    heights: Vec<[[i32; 256]; 4]>,
+    heights: Vec<[[i32; 256]; 6]>,
     /// Inclusive block bounds that may be written (min x, max x, min z, max z).
     pub write: (i32, i32, i32, i32),
     prelim: HashMap<(i32, i32), i32>,
@@ -126,8 +134,8 @@ impl<'g> Region<'g> {
             prelim: HashMap::new(), biome_cache: HashMap::new(), last_leaf: None,
         };
         for c in 0..(n * n) as usize {
-            let mut hm = [[MIN_Y; 256]; 4];
-            for (t, kind) in [Hm::WorldSurface, Hm::OceanFloor, Hm::MotionBlocking, Hm::MotionBlockingNoLeaves].iter().enumerate() {
+            let mut hm = [[MIN_Y; 256]; 6];
+            for (t, kind) in HM_ALL.iter().enumerate() {
                 for col in 0..256 {
                     hm[t][col] = scan(&r.blocks[c], col as i32 & 15, col as i32 >> 4, MIN_Y + HEIGHT - 1, *kind);
                 }
@@ -168,7 +176,7 @@ impl<'g> Region<'g> {
         let yy = y - MIN_Y;
         self.blocks[c][(yy >> 4) as usize][(((yy & 15) << 8) | ((z & 15) << 4) | (x & 15)) as usize] = s;
         let col = (((z & 15) << 4) | (x & 15)) as usize;
-        for (t, kind) in [Hm::WorldSurface, Hm::OceanFloor, Hm::MotionBlocking, Hm::MotionBlockingNoLeaves].iter().enumerate() {
+        for (t, kind) in HM_ALL.iter().enumerate().take(4) {
             let h = self.heights[c][t][col];
             if kind.counts(s) {
                 if y >= h { self.heights[c][t][col] = y + 1; }

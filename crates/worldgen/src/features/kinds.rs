@@ -39,8 +39,9 @@ pub enum Kind {
     Seagrass(f32),
     Kelp,
     Tree(Box<super::tree::Tree>),
-    HugeMushroom { red: bool, cap: StateProvider, stem: StateProvider, radius: i32, can_place_on: Arc<Vec<bool>> },
+    HugeMushroom { red: bool, cap: StateProvider, stem: StateProvider, radius: i32, can_place_on: Pred },
     Vines,
+    FallenTree(Box<super::tree::FallenTree>),
 }
 
 fn rule_test(f: &Features, v: &Value) -> Result<Arc<Vec<bool>>> {
@@ -104,13 +105,14 @@ pub fn parse(f: &mut Features, ty: &str, c: &Value) -> Result<Kind> {
         "seagrass" => Kind::Seagrass(c["probability"].as_f64().unwrap_or(0.0) as f32),
         "kelp" => Kind::Kelp,
         "vines" => Kind::Vines,
+        "fallen_tree" => Kind::FallenTree(Box::new(super::tree::FallenTree::parse(f, c)?)),
         "tree" => Kind::Tree(Box::new(super::tree::Tree::parse(f, c)?)),
         "huge_red_mushroom" | "huge_brown_mushroom" => Kind::HugeMushroom {
             red: ty == "huge_red_mushroom",
             cap: StateProvider::parse(&f.tags, &c["cap_provider"])?,
             stem: StateProvider::parse(&f.tags, &c["stem_provider"])?,
             radius: c.get("foliage_radius").and_then(|x| x.as_i64()).unwrap_or(2) as i32,
-            can_place_on: block_set(&f.tags, &c["can_place_on"]),
+            can_place_on: Pred::parse(&f.tags, &c["can_place_on"])?,
         },
         t => bail!("unsupported feature type {t}"),
     })
@@ -125,10 +127,17 @@ pub fn place(f: &Features, reg: &mut Region, r: &mut R, id: usize, x: i32, y: i3
         Kind::Freeze => { freeze(reg, x, z); true }
         Kind::SimpleBlock(p) => simple_block(f, p, reg, r, x, y, z),
         Kind::RandomSelector(list, default) => {
-            for (ch, pid) in list {
-                if r.next_float() < *ch { return f.place_placed(reg, r, *pid, None, x, y, z); }
+            let dbg = super::debug_filter().map(|d| d == "sel").unwrap_or(false);
+            for (i, (ch, pid)) in list.iter().enumerate() {
+                if r.next_float() < *ch {
+                    let ok = f.place_placed(reg, r, *pid, None, x, y, z);
+                    if dbg { eprintln!("[sel] at {x} {y} {z} choice {i} -> {ok}"); }
+                    return ok;
+                }
             }
-            f.place_placed(reg, r, *default, None, x, y, z)
+            let ok = f.place_placed(reg, r, *default, None, x, y, z);
+            if dbg { eprintln!("[sel] at {x} {y} {z} default -> {ok}"); }
+            ok
         }
         Kind::SimpleRandomSelector(list) => {
             let i = r.next_int_bounded(list.len() as i32) as usize;
@@ -147,6 +156,7 @@ pub fn place(f: &Features, reg: &mut Region, r: &mut R, id: usize, x: i32, y: i3
         Kind::Kelp => kelp(f, reg, r, x, y, z),
         Kind::Vines => vines(f, reg, x, y, z),
         Kind::Tree(t) => t.place(f, reg, r, x, y, z),
+        Kind::FallenTree(t) => t.place(f, reg, r, x, y, z),
         Kind::HugeMushroom { red, cap, stem, radius, can_place_on } => super::tree::huge_mushroom(f, *red, cap, stem, *radius, can_place_on, reg, r, x, y, z),
     }
 }
@@ -175,7 +185,7 @@ fn ore(f: &Features, c: &Ore, reg: &mut Region, r: &mut R, ox: i32, oy: i32, oz:
     let mut ok = false;
     'outer: for s in n..=n + q {
         for t in p..=p + q {
-            if o <= reg.height(Hm::OceanFloor, s, t) { ok = true; break 'outer; }
+            if o <= reg.height(Hm::OceanFloorWg, s, t) { ok = true; break 'outer; }
         }
     }
     if !ok { return false; }

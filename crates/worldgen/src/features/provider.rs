@@ -58,6 +58,12 @@ impl IntProvider {
                 0
             }
             IntProvider::Trapezoid(min, max, plateau) => {
+                // Measured against vanilla: the plateau-free case is the classic triangular
+                // `nextInt(h+1) - nextInt(h+1)` around the centre.
+                if *plateau == 0 && (max - min) % 2 == 0 {
+                    let h = (max - min) / 2;
+                    return (min + max) / 2 + r.next_int_bounded(h + 1) - r.next_int_bounded(h + 1);
+                }
                 let k = max - min;
                 if *plateau >= k { return r.next_int_bounded(k + 1) + min; }
                 let l = (k - plateau) / 2;

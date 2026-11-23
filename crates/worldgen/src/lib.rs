@@ -50,8 +50,9 @@ impl GeneratedChunk {
 }
 
 /// Order in which the chunk and its neighbours are decorated.
-/// (Vanilla's order depends on thread scheduling; measured differences are tiny.)
-const DECORATION_ORDER: [(i32, i32); 9] = [(0, 0), (-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)];
+/// Vanilla's order depends on its scheduling; for a block of loaded chunks, ascending x then
+/// z matches the saved worlds best (measured with the compare tool, e.g. 351/351 spruce logs).
+const DECORATION_ORDER: [(i32, i32); 9] = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 0), (0, 1), (1, -1), (1, 0), (1, 1)];
 
 /// Generation stages, in order.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
