@@ -6,6 +6,11 @@
 //!   compare REGION R SEED   — Basalt's structure starts vs vanilla's in the square, per structure
 //!                             type, plus block-exact % inside the vanilla structure boxes of fully
 //!                             generated chunks. Last line `RESULT ...`.
+//!   adapt   REGION R SEED NOSTRUCT_REGION OUT — terrain adaptation measuring data: for the starts of
+//!                             $ONLY in the square, OUT.pieces.json (vanilla piece boxes, ground delta,
+//!                             projection, junctions) and OUT.bin (per block near the pieces: x y z i32,
+//!                             vanilla state with structures u16, without u16, Basalt's pre-adaptation
+//!                             density f32, Basalt's state without structures u16) + OUT.states.json.
 
 #![allow(clippy::type_complexity)]
 
@@ -201,6 +206,87 @@ fn main() -> Result<()> {
             r,
             args.get(4).map(|s| s.parse()).transpose()?.unwrap_or(12345),
         )?,
+        "adapt" => adapt(dir, r, args[4].parse()?, Path::new(&args[5]), &args[6])?,
+        "blocks" => {
+            // blocks REGION R X0,Y0,Z0,X1,Y1,Z1: vanilla block states in the box ("x y z state" lines)
+            let v: Vec<i32> = args[4].split(',').map(|x| x.parse().unwrap()).collect();
+            for cx in (v[0] >> 4)..=(v[3] >> 4) {
+                for cz in (v[2] >> 4)..=(v[5] >> 4) {
+                    let Some(b) = vanilla_blocks(dir, cx, cz)? else {
+                        continue;
+                    };
+                    for x in v[0].max(cx * 16)..=v[3].min(cx * 16 + 15) {
+                        for z in v[2].max(cz * 16)..=v[5].min(cz * 16 + 15) {
+                            for y in v[1]..=v[4] {
+                                let i = (((y + 64) as usize) << 8)
+                                    | (((z & 15) as usize) << 4)
+                                    | (x & 15) as usize;
+                                println!(
+                                    "{x} {y} {z} {}",
+                                    basalt_data::BlockState(b[i] as u32).to_string()
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        "bstarts" => {
+            // bstarts CX,CZ R SEED ID (dir argument = "CX,CZ"): Basalt's starts of ID in the square
+            let v: Vec<i32> = args[2].split(',').map(|x| x.parse().unwrap()).collect();
+            let g = basalt_worldgen::Generator::new(args[4].parse()?);
+            let s = g.structures().unwrap();
+            for cx in v[0] - r..v[0] + r {
+                for cz in v[1] - r..v[1] + r {
+                    for st in g.structure_starts(cx, cz).iter() {
+                        if s.defs[st.def].name.contains(args[5].as_str()) {
+                            println!("{cx} {cz} {:?}", st.pieces.first().map(|p| (&p.kind, p.bb)));
+                        }
+                    }
+                }
+            }
+        }
+        "wsheight" => {
+            // wsheight SEED X,Z... (dir argument = seed): WORLD_SURFACE_WG / OCEAN_FLOOR_WG first free y
+            let g = basalt_worldgen::Generator::new(args[2].parse()?);
+            for p in &args[3..] {
+                let v: Vec<i32> = p.split(',').map(|x| x.parse().unwrap()).collect();
+                println!(
+                    "{p}: ws={} of={}",
+                    g.first_free(v[0], v[1], false),
+                    g.first_free(v[0], v[1], true)
+                );
+            }
+        }
+        "bpieces" => {
+            // bpieces CX,CZ SEED (dir argument = "CX,CZ"): Basalt's pieces of the starts in that
+            // chunk as JSON lines (box, ground delta, rigid, junctions) for checking against vanilla
+            use basalt_worldgen::structure::PieceKind;
+            let v: Vec<i32> = args[2].split(',').map(|x| x.parse().unwrap()).collect();
+            let g = basalt_worldgen::Generator::new(args[3].parse()?);
+            for st in g.structure_starts(v[0], v[1]).iter() {
+                for p in &st.pieces {
+                    if let PieceKind::Pool {
+                        element,
+                        ground_delta,
+                        junctions,
+                        ..
+                    } = &p.kind
+                    {
+                        let js: Vec<_> = junctions
+                            .iter()
+                            .map(|j| serde_json::json!([j.x, j.y, j.z, j.dy, j.rigid]))
+                            .collect();
+                        let b = p.bb;
+                        println!(
+                            "{}",
+                            serde_json::json!({"bb": [b.min[0], b.min[1], b.min[2], b.max[0], b.max[1], b.max[2]],
+                                "gd": ground_delta, "rigid": element.rigid(), "junctions": js})
+                        );
+                    }
+                }
+            }
+        }
         "probe" => {
             // probe SET: placement chunks of a set in the square with vanilla presence + biomes at several points
             let seed: i64 = args[5].parse()?;
@@ -307,10 +393,11 @@ fn main() -> Result<()> {
                     let f = (x >> 8) as f32 / (1 << 24) as f32;
                     let n31 = (x >> 1) as i32;
                     line += &format!(
-                        " [{f:.3} i10={} i4={} i3={}]",
+                        " [{f:.3} i10={} i4={} i3={} i8={}]",
                         n31 % 10,
                         ((4i64 * n31 as i64) >> 31),
-                        n31 % 3
+                        n31 % 3,
+                        ((8i64 * n31 as i64) >> 31)
                     );
                 }
                 println!("{line}");
@@ -619,14 +706,41 @@ fn block_parity(
     let g0 = basalt_worldgen::Generator::new(g.seed);
     std::env::remove_var("BASALT_NO_STRUCTURES");
     let mut chunks: BTreeMap<(i32, i32), Vec<(String, [i32; 6])>> = BTreeMap::new();
-    for st in starts {
-        for (_, bb) in &st.pieces {
-            for cx in (bb[0] >> 4)..=(bb[3] >> 4) {
-                for cz in (bb[2] >> 4)..=(bb[5] >> 4) {
-                    chunks
-                        .entry((cx, cz))
-                        .or_default()
-                        .push((st.id.clone(), *bb));
+    // HALO=n: also count the blocks within n of a piece box (outside every box) as "<id> halo"
+    // (terrain adaptation reaches beyond the boxes); listed after the boxes of each chunk.
+    let halo: i32 = std::env::var("HALO")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    for pass in 0..2 {
+        if pass == 1 && halo == 0 {
+            break;
+        }
+        for st in starts {
+            for (_, bb) in &st.pieces {
+                let (bb, id) = if pass == 0 {
+                    (*bb, st.id.clone())
+                } else {
+                    let h = halo;
+                    (
+                        [
+                            bb[0] - h,
+                            bb[1] - h,
+                            bb[2] - h,
+                            bb[3] + h,
+                            bb[4] + h,
+                            bb[5] + h,
+                        ],
+                        format!("{} halo", st.id),
+                    )
+                };
+                for cx in (bb[0] >> 4)..=(bb[3] >> 4) {
+                    for cz in (bb[2] >> 4)..=(bb[5] >> 4) {
+                        if pass == 1 && !chunks.contains_key(&(cx, cz)) {
+                            continue;
+                        }
+                        chunks.entry((cx, cz)).or_default().push((id.clone(), bb));
+                    }
                 }
             }
         }
@@ -672,4 +786,132 @@ fn block_parity(
         }
     }
     Ok(per)
+}
+
+/// Terrain adaptation measuring dump (see the module doc, `adapt`).
+fn adapt(dir: &Path, r: i32, seed: i64, dir0: &Path, out: &str) -> Result<()> {
+    use std::io::Write;
+    let only = std::env::var("ONLY").unwrap_or_default();
+    let margin: i32 = std::env::var("MARGIN")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(16);
+    std::env::set_var("BASALT_NO_STRUCTURES", "1");
+    let g0 = basalt_worldgen::Generator::new(seed);
+    let (ox, oz) = center();
+    let mut pieces = Vec::new();
+    let mut boxes: Vec<[i32; 6]> = Vec::new();
+    for cx in ox - r..ox + r {
+        for cz in oz - r..oz + r {
+            let Some(root) = read_nbt(dir, cx, cz)? else {
+                continue;
+            };
+            let Some(Tag::Compound(starts)) = root.get("structures").and_then(|s| s.get("starts"))
+            else {
+                continue;
+            };
+            for (id, s) in starts {
+                if s.get("id").and_then(|i| i.as_str()) == Some("INVALID")
+                    || !id.contains(only.as_str())
+                {
+                    continue;
+                }
+                for c in s
+                    .get("Children")
+                    .and_then(|c| c.as_list())
+                    .map(|l| l.as_slice())
+                    .unwrap_or(&[])
+                {
+                    let Some(Tag::IntArray(bb)) = c.get("BB") else {
+                        continue;
+                    };
+                    let gi = |t: &Tag, k: &str| t.get(k).and_then(|v| v.as_i64()).unwrap_or(0);
+                    let mut js = Vec::new();
+                    for j in c
+                        .get("junctions")
+                        .and_then(|c| c.as_list())
+                        .map(|l| l.as_slice())
+                        .unwrap_or(&[])
+                    {
+                        js.push(serde_json::json!([
+                            gi(j, "source_x"),
+                            gi(j, "source_ground_y"),
+                            gi(j, "source_z"),
+                            gi(j, "delta_y"),
+                            j.get("dest_proj").and_then(|v| v.as_str()).unwrap_or("")
+                        ]));
+                    }
+                    let el = c.get("pool_element");
+                    pieces.push(serde_json::json!({
+                        "start": format!("{id} {cx} {cz}"),
+                        "bb": bb,
+                        "gd": gi(c, "ground_level_delta"),
+                        "proj": el.and_then(|e| e.get("projection")).and_then(|v| v.as_str()).unwrap_or(""),
+                        "loc": el.and_then(|e| e.get("location")).and_then(|v| v.as_str())
+                            .or_else(|| c.get("Template").and_then(|t| t.as_str())).unwrap_or(""),
+                        "piece": c.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+                        "junctions": js,
+                    }));
+                    boxes.push([bb[0], bb[1], bb[2], bb[3], bb[4], bb[5]]);
+                }
+            }
+        }
+    }
+    std::fs::write(
+        format!("{out}.pieces.json"),
+        serde_json::to_string(&pieces)?,
+    )?;
+    // chunks within `margin` of a box, y range of the boxes in reach +- margin
+    let mut chunks: BTreeMap<(i32, i32), (i32, i32)> = BTreeMap::new();
+    for b in &boxes {
+        for cx in ((b[0] - margin) >> 4)..=((b[3] + margin) >> 4) {
+            for cz in ((b[2] - margin) >> 4)..=((b[5] + margin) >> 4) {
+                let e = chunks.entry((cx, cz)).or_insert((i32::MAX, i32::MIN));
+                e.0 = e.0.min(b[1] - margin);
+                e.1 = e.1.max(b[4] + margin);
+            }
+        }
+    }
+    let mut f = std::io::BufWriter::new(std::fs::File::create(format!("{out}.bin"))?);
+    let mut states: BTreeMap<u16, String> = BTreeMap::new();
+    let mut n = 0usize;
+    for (&(cx, cz), &(y0, y1)) in &chunks {
+        let (Some(v), Some(v0)) = (vanilla_blocks(dir, cx, cz)?, vanilla_blocks(dir0, cx, cz)?)
+        else {
+            continue;
+        };
+        let d = g0.density_dump(cx, cz);
+        let b0 = g0.generate_chunk(cx, cz);
+        for y in y0.max(-64)..=y1.min(319) {
+            for lz in 0..16usize {
+                for lx in 0..16usize {
+                    let i = (((y + 64) as usize) << 8) | (lz << 4) | lx;
+                    let bs = b0.get(lx, y, lz);
+                    for st in [v[i], v0[i], bs] {
+                        states
+                            .entry(st)
+                            .or_insert_with(|| basalt_data::BlockState(st as u32).to_string());
+                    }
+                    f.write_all(&(cx * 16 + lx as i32).to_le_bytes())?;
+                    f.write_all(&y.to_le_bytes())?;
+                    f.write_all(&(cz * 16 + lz as i32).to_le_bytes())?;
+                    f.write_all(&v[i].to_le_bytes())?;
+                    f.write_all(&v0[i].to_le_bytes())?;
+                    f.write_all(&(d[i] as f32).to_le_bytes())?;
+                    f.write_all(&bs.to_le_bytes())?;
+                    n += 1;
+                }
+            }
+        }
+    }
+    std::fs::write(
+        format!("{out}.states.json"),
+        serde_json::to_string(&states)?,
+    )?;
+    println!(
+        "pieces={} chunks={} samples={n}",
+        pieces.len(),
+        chunks.len()
+    );
+    Ok(())
 }

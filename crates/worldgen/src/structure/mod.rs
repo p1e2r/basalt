@@ -11,6 +11,7 @@
     clippy::result_unit_err
 )]
 
+pub mod adapt;
 pub mod jigsaw;
 pub mod place;
 pub mod template;
@@ -152,6 +153,9 @@ pub enum PieceKind {
     },
     /// Buried treasure chest.
     Chest { pos: [i32; 3], loot: String },
+    /// Swamp hut (measured layout, place::swamp_hut) with its box corner and orientation
+    /// (vanilla's `O`: 0 south, 1 west, 2 north, 3 east).
+    SwampHut { origin: [i32; 3], o: u8 },
 }
 
 #[derive(Clone, Debug, Default)]
@@ -161,6 +165,9 @@ pub struct TemplateOpts {
     pub processors: Option<String>,
     /// Re-take y from the region's OCEAN_FLOOR_WG height at the origin when placing.
     pub floor_y: bool,
+    /// Blocks set (world coordinates) after the template (measured variations, e.g. the igloo
+    /// trapdoor without a laboratory).
+    pub set: Vec<([i32; 3], u16)>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -217,6 +224,8 @@ pub struct Structures {
     starts: Mutex<HashMap<(i32, i32), Arc<Vec<Start>>>>,
     heights: Mutex<HashMap<(i32, i32, bool), i32>>,
     rings: Mutex<HashMap<usize, Arc<Vec<(i32, i32)>>>>,
+    /// Terrain adaptation on (env BASALT_NO_BEARD turns it off, for measuring).
+    pub beard: bool,
 }
 
 fn read_json(p: &Path) -> Result<Value> {
@@ -486,6 +495,7 @@ impl Structures {
             starts: Mutex::new(HashMap::new()),
             heights: Mutex::new(HashMap::new()),
             rings: Mutex::new(HashMap::new()),
+            beard: std::env::var("BASALT_NO_BEARD").is_err(),
         })
     }
 
@@ -748,7 +758,7 @@ impl Generator {
                 let y = self.first_free(mx, mz, false) - 1;
                 Some(Stub {
                     pos: [mx, y, mz],
-                    pieces: Vec::new(),
+                    pieces: vec![place::swamp_hut(self, cx, cz, r)],
                 })
             }
             Kind::DesertPyramid | Kind::JunglePyramid => {
@@ -796,9 +806,14 @@ impl Generator {
 
     /// Structure starts whose pieces may reach into chunk (cx, cz) (starts up to 8 chunks away).
     pub fn structure_refs(&self, cx: i32, cz: i32) -> Vec<Arc<Vec<Start>>> {
+        self.structure_refs_reach(cx, cz, 0)
+    }
+
+    /// [`Generator::structure_refs`] for the chunk grown by `reach` blocks horizontally.
+    pub fn structure_refs_reach(&self, cx: i32, cz: i32, reach: i32) -> Vec<Arc<Vec<Start>>> {
         let clip = BBox {
-            min: [cx * 16, -64, cz * 16],
-            max: [cx * 16 + 15, 319, cz * 16 + 15],
+            min: [cx * 16 - reach, -64, cz * 16 - reach],
+            max: [cx * 16 + 15 + reach, 319, cz * 16 + 15 + reach],
         };
         let mut out = Vec::new();
         for dx in -8..=8 {

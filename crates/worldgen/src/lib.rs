@@ -441,7 +441,8 @@ impl Generator {
     fn generate_raw(&self, cx: i32, cz: i32, stage: Stage) -> GeneratedChunk {
         let mut e = Eval::new(&self.graph);
         let mut aq = Aquifer::new(self.router.aq, self.aquifer_rand, self.sea_level, self.aquifers_enabled);
-        let mut blocks = self.fill_noise(&mut e, &mut aq, cx, cz);
+        let beard = self.structures.as_ref().and_then(|_| self.beard(cx, cz));
+        let mut blocks = self.fill_noise_ex(&mut e, &mut aq, cx, cz, beard.as_ref(), None);
         let biomes = self.fill_biomes(&mut e, cx, cz);
         if stage >= Stage::Surface {
             let mut cache = HashMap::new();
@@ -538,6 +539,25 @@ impl Generator {
 
     /// Noise stage: stone / water / lava / air (+ ore veins).
     pub fn fill_noise(&self, e: &mut Eval, aq: &mut Aquifer, cx: i32, cz: i32) -> Vec<[u16; 4096]> {
+        self.fill_noise_ex(e, aq, cx, cz, None, None)
+    }
+
+    /// Noise-stage density of chunk (cx, cz) before structure terrain adaptation, index
+    /// `(y - gen_min_y) << 8 | z << 4 | x` (measuring aid for structure terrain adaptation).
+    pub fn density_dump(&self, cx: i32, cz: i32) -> Vec<f64> {
+        let mut e = Eval::new(&self.graph);
+        let mut aq = Aquifer::new(self.router.aq, self.aquifer_rand, self.sea_level, self.aquifers_enabled);
+        let mut out = vec![0.0; (self.gen_height as usize) << 8];
+        self.fill_noise_ex(&mut e, &mut aq, cx, cz, None, Some(&mut out));
+        out
+    }
+
+    /// [`Generator::fill_noise`] with an optional structure terrain adaptation (added to the final
+    /// density per block) and an optional dump of the density before it.
+    pub(crate) fn fill_noise_ex(
+        &self, e: &mut Eval, aq: &mut Aquifer, cx: i32, cz: i32,
+        extra: Option<&structure::adapt::Beard>, mut dump: Option<&mut [f64]>,
+    ) -> Vec<[u16; 4096]> {
         let x0 = cx * 16;
         let z0 = cz * 16;
         const CW: i32 = 4;
@@ -563,6 +583,9 @@ impl Generator {
         }
         let mut out = vec![[self.blocks.air; 4096]; SECTIONS];
         let bl = self.blocks;
+        let cols: Option<Vec<structure::adapt::Column>> = extra.map(|b| {
+            (0..256).map(|i| b.column(x0 + (i & 15), z0 + (i >> 4))).collect()
+        });
         for lx in 0..16i32 {
             let ix = (lx / CW) as usize;
             let fx = (lx % CW) as f64 / CW as f64;
@@ -586,7 +609,9 @@ impl Generator {
                     let x = x0 + lx;
                     let z = z0 + lz;
                     let y = self.gen_min_y + yy;
-                    let d = e.eval(self.router.final_density, x, y, z);
+                    let mut d = e.eval(self.router.final_density, x, y, z);
+                    if let Some(out) = dump.as_deref_mut() { out[((yy as usize) << 8) | ((lz as usize) << 4) | lx as usize] = d; }
+                    if let Some(c) = &cols { d += c[((lz << 4) | lx) as usize].at(y); }
                     let st = match aq.compute(e, x, y, z, d) {
                         Some(Fluid::Air) => bl.air,
                         Some(Fluid::Water) => self.default_fluid,

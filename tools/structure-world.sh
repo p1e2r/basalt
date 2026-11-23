@@ -2,12 +2,16 @@
 # Generate (once) a vanilla reference world for structure parity: chunks -R..R-1 square force-loaded
 # with the official server jar, cached in vanilla/structures/<seed> (marker done-26.2, gitignored).
 # usage: tools/structure-world.sh SEED [R=32] [CX CZ]   (square centred on chunk CX,CZ; cached in
-#   vanilla/structures/<seed>_<cx>_<cz> then)     env: JAVA, PARITY_PORT_BASE (25700..25799)
+#   vanilla/structures/<seed>_<cx>_<cz> then)     env: JAVA, PARITY_PORT_BASE (25700..25799),
+#   NO_STRUCTURES=1: the same world with generate-structures=false (dir suffix _nostruct; reference for
+#   measuring terrain adaptation, see NOTES.md "Terrain adaptation")
 set -uo pipefail
 cd "$(dirname "$0")/.."
 seed=$1; R=${2:-32}; CX=${3:-0}; CZ=${4:-0}
 dir=vanilla/structures/$seed
 [ "$CX" != 0 ] || [ "$CZ" != 0 ] && dir=vanilla/structures/${seed}_${CX}_${CZ}
+gs=true
+[ -n "${NO_STRUCTURES:-}" ] && { dir=${dir}_nostruct; gs=false; }
 [ -f "$dir/done-26.2" ] && exit 0
 [ -f vanilla/server.jar ] || { echo "vanilla/server.jar missing"; exit 1; }
 [ -x target/release/examples/structures ] || cargo build --release -q -p basalt-worldgen --example structures
@@ -29,7 +33,7 @@ level-seed=$seed
 server-port=$port
 online-mode=false
 level-type=minecraft\:normal
-generate-structures=true
+generate-structures=$gs
 spawn-protection=0
 view-distance=2
 simulation-distance=2
