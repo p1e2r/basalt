@@ -237,6 +237,14 @@ pub fn run_harnesses(ids: &[&'static Harness], o: Opts, vanilla: Option<(PathBuf
             Err(e) => reports.push(FuzzReport { id: h.id.into(), cases: 0, mismatches: 0, new: 0, info: 0, errors: 0, skipped: Some(format!("cannot load cases: {e:#}")), secs: 0.0, text: String::new(), new_classes: vec![] }),
         }
     }
+    if vanilla.is_none() {
+        // differential harnesses need the reference server: skip cleanly (and don't spend minutes on Basalt alone)
+        for (h, cases, _) in meta {
+            let why = "no vanilla server (fuzz harnesses are differential; pass --vanilla ADDR)".to_string();
+            reports.push(FuzzReport { id: h.id.into(), cases: cases.len(), mismatches: 0, new: 0, info: 0, errors: 0, skipped: Some(why.clone()), secs: 0.0, text: format!("== fuzz_{}: SKIPPED ({why})\n", h.id), new_classes: vec![] });
+        }
+        return reports;
+    }
     let ropts = Arc::new(RunOpts { out_dir: out_dir.into(), vanilla: vanilla.clone() });
     let specs: Vec<(usize, &'static Spec)> = meta.iter().map(|(h, _, _)| { let id = format!("fuzz_{}", h.id); let i = SPECS.iter().position(|s| s.id == id).unwrap(); (60 + i, &SPECS[i]) }).collect();
     let outcomes: Mutex<Vec<Outcome>> = Mutex::new(Vec::new());

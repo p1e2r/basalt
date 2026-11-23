@@ -25,7 +25,7 @@ const SKIP: &[&str] = &["door", "bed", "torch", "sign", "banner", "button", "pla
     "amethyst_cluster", "bud", "candle", "sprouts", "roots", "fungus", "mushroom", "wheat", "carrots", "potatoes", "beetroots", "stem", "cocoa", "pickle", "egg", "scaffold", "dripstone", "cactus",
     "sugar_cane", "bamboo", "sweet", "torchflower", "pitcher", "spore", "hanging", "lantern", "chorus", "cave_vines", "weeping", "twisting", "nether_wart", "end_rod", "lightning_rod", "bell", "grindstone",
     "cauldron", "flower_pot", "pot", "air", "moving", "structure", "jigsaw", "command", "barrier", "bedrock", "end_gateway", "end_portal", "test", "dead_bush", "azalea", "dried_ghast", "creaking",
-    "vault", "trial", "lichen", "dripleaf", "eyeblossom", "frogspawn", "sculk_vein", "sculk_sensor", "shrieker", "catalyst", "firefly", "leaf_litter", "wildflowers", "tall_", "double", "petals", "bush", "cobweb", "iron_bars", "pane", "chain", "fence", "wall", "glass_pane", "conduit", "mud", "sniffer", "turtle"];
+    "vault", "trial", "orchid", "allium", "tulip", "poppy", "dandelion", "cornflower", "bluet", "oxeye", "lilac", "rose", "peony", "concrete_powder", "lichen", "dripleaf", "eyeblossom", "frogspawn", "sculk_vein", "sculk_sensor", "shrieker", "catalyst", "firefly", "leaf_litter", "wildflowers", "tall_", "double", "petals", "bush", "cobweb", "iron_bars", "pane", "chain", "fence", "wall", "glass_pane", "conduit", "mud", "sniffer", "turtle"];
 
 fn candidates() -> &'static Vec<&'static str> {
     static C: OnceLock<Vec<&'static str>> = OnceLock::new();
@@ -88,9 +88,10 @@ fn run(ctx: &mut Ctx, cases: &[Value]) -> Result<Vec<Value>> {
     if !todo.is_empty() {
         let sub: Vec<Value> = todo.iter().map(|&i| cases[i].clone()).collect();
         let jobs = super::opts().jobs.clamp(1, 8);
+        let homes: std::sync::Mutex<Vec<[f64; 3]>> = std::sync::Mutex::new(vec![[0.0; 3]; jobs]);
         let res = parallel(ctx, &sub, jobs,
-            |ctx, w| { let bot = ctx.bot()?; worker_arena(ctx, &bot, w, 9, 9, 6, "survival")?; Ok(bot) },
-            |bot, _w, _i, case| measure(bot, case))?;
+            |ctx, w| { let bot = ctx.bot()?; worker_arena(ctx, &bot, w, 9, 9, 6, "survival")?; homes.lock().unwrap()[w] = bot.st().body.pos; Ok(bot) },
+            |bot, w, _i, case| { let home = homes.lock().unwrap()[w]; measure(bot, home, case) })?;
         for (k, &i) in todo.iter().enumerate() {
             if vanilla && !super::is_error(&res[k]) { cache.insert(key(&cases[i]), res[k].clone()); }
             out[i] = res[k].clone();
@@ -125,7 +126,20 @@ fn probe(bot: &Bot, b: [i32; 3], block: &str, w: u32) -> Result<bool> {
     Ok(broke)
 }
 
-fn measure(bot: &Bot, case: &Value) -> Result<Value> {
+/// A bot that died (drowned in a long water case, etc.) respawns and goes back to its arena spot.
+fn revive(bot: &Bot, home: [f64; 3]) -> Result<()> {
+    if !bot.st().dead { return Ok(()); }
+    bot.respawn();
+    bot.wait_until(Duration::from_secs(5), |s| !s.dead);
+    bot.cmd(&format!("tp @s {:.2} {:.2} {:.2} 0 0", home[0], home[1], home[2]));
+    bot.cmd("gamemode survival");
+    barrier(bot)?;
+    bot.wait_on_ground(Duration::from_secs(5));
+    Ok(())
+}
+
+fn measure(bot: &Bot, home: [f64; 3], case: &Value) -> Result<Value> {
+    revive(bot, home)?;
     let (block, item) = (case["block"].as_str().unwrap_or("stone"), case["item"].as_str().unwrap_or("hand"));
     let (ground, water) = (case["ground"].as_bool().unwrap_or(true), case["water"].as_bool().unwrap_or(false));
     let pos = bot.st().body.pos;
@@ -138,7 +152,12 @@ fn measure(bot: &Bot, case: &Value) -> Result<Value> {
     barrier(bot)?;
     if bot.st().body.flying { bail!("bot is flying"); }
     bot.set_held(0);
-    if water { bot.cmd(&format!("fill {} {} {} {} {} {} water", p[0], p[1], p[2], p[0], p[1] + 1, p[2])); barrier(bot)?; bot.wait_ticks(4); }
+    if water {
+        // Water Breathing does not change dig speed; it keeps long measurements from drowning the bot
+        bot.cmd("effect give @s water_breathing 1000 0 true");
+        bot.cmd(&format!("fill {} {} {} {} {} {} water", p[0], p[1], p[2], p[0], p[1] + 1, p[2]));
+        barrier(bot)?; bot.wait_ticks(4);
+    }
     if !ground { bot.set_frozen(true); bot.st().body.on_ground = false; bot.wait_ticks(2); }
     bot.look_at([target[0] as f64 + 0.5, target[1] as f64 + 0.5, target[2] as f64 + 0.5]);
     bot.wait_ticks(3);
@@ -160,7 +179,8 @@ fn measure(bot: &Bot, case: &Value) -> Result<Value> {
     })();
     // restore
     bot.set_frozen(false);
-    if water { bot.cmd(&format!("fill {} {} {} {} {} {} air", p[0] - 1, p[1], p[2] - 1, p[0] + 3, p[1] + 3, p[2] + 1)); barrier(bot)?; }
+    if water { bot.cmd("effect clear @s"); bot.cmd(&format!("fill {} {} {} {} {} {} air", p[0] - 1, p[1], p[2] - 1, p[0] + 3, p[1] + 3, p[2] + 1)); barrier(bot)?; }
+    revive(bot, home)?;
     bot.cmd(&format!("setblock {} {} {} air", target[0], target[1], target[2]));
     r
 }

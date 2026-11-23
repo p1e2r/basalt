@@ -6,7 +6,8 @@
 #   and cached in vanilla/parity/<seed> (marker done-26.2; shared with tools/check-all.sh), so only the
 #   first run of a seed is slow. Each seed is compared at the sites below (centre chunk + radius, all
 #   inside the force-loaded chunk square -5..4) with the check-all thresholds:
-#   biomes >= 99.9, shape >= 99.0, exact >= 98.5, features >= 98.5.
+#   biomes >= 99.9, shape >= 99.0, exact >= 98.5, features >= 98.5. Sites under the thresholds that are listed in
+#   crates/check/known-divergences.txt (`worldgen seed=<s> site=<cx,cz,r>`) count as `mismatches` but not `new`.
 # Output: one `PARITY seed=.. site=cx,cz,r chunks=.. biomes=.. shape=.. exact=.. features=.. ok=0|1` per
 #   site and a final `RESULT fuzz=worldgen cases=.. mismatches=.. new=.. errors=.. skipped=.. seeds=..`.
 # env: JAVA (java), PARITY_PORT_BASE (25700; vanilla generation servers use 25700-25799)
@@ -83,7 +84,8 @@ EOF
 }
 
 T0=$(date +%s)
-cases=0; bad=0; errors=0; evaluated=0
+cases=0; bad=0; newbad=0; errors=0; evaluated=0
+KNOWN=${CHECK_KNOWN:-crates/check/known-divergences.txt}   # lines `worldgen seed=<s> site=<cx,cz,r>` are accepted gaps
 for seed in "${SEEDS[@]}"; do
   if ! gen_vanilla_world "$seed" > "$OUT/parity-gen-$seed.log" 2>&1; then
     echo "note: seed $seed: vanilla world generation failed: $(tail -1 "$OUT/parity-gen-$seed.log")"
@@ -106,9 +108,14 @@ EOF
 )
     ok=${verdict%% *}
     evaluated=$((evaluated+1))
-    [ "$ok" = 1 ] || bad=$((bad+1))
+    if [ "$ok" != 1 ]; then
+      bad=$((bad+1)); known=0
+      grep -qx "worldgen seed=$seed site=$1,$2,$3" "$KNOWN" 2>/dev/null && known=1
+      [ $known = 1 ] || newbad=$((newbad+1))
+      verdict="$verdict (known=$known)"
+    fi
     echo "PARITY seed=$seed site=$1,$2,$3 ${verdict#* } ok=$ok"
   done
 done
-echo "RESULT fuzz=worldgen cases=$cases mismatches=$bad new=$bad info=0 errors=$errors skipped=$([ $evaluated -eq 0 ] && echo 1 || echo 0) seeds=${#SEEDS[@]} secs=$(( $(date +%s) - T0 ))"
-[ $bad -eq 0 ] && [ $errors -eq 0 ]
+echo "RESULT fuzz=worldgen cases=$cases mismatches=$bad new=$newbad info=0 errors=$errors skipped=$([ $evaluated -eq 0 ] && echo 1 || echo 0) seeds=${#SEEDS[@]} secs=$(( $(date +%s) - T0 ))"
+[ $newbad -eq 0 ] && [ $errors -eq 0 ]

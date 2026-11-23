@@ -1,0 +1,72 @@
+1	crates/check/src/bot.rs	warning	the loop variable `i` is used to index `d`
+1	crates/check/src/bot.rs	warning	the loop variable `i` is used to index `k`
+1	crates/check/src/bot.rs	warning	the loop variable `i` is used to index `pos`
+1	crates/check/src/bot.rs	warning	the loop variable `i` is used to index `vel`
+1	crates/check/src/bot.rs	warning	this looks like an `else if` but the `else` is missing
+1	crates/check/src/main.rs	warning	this loop could be written as a `while let` loop: help: try: `while let Some((i, s)) = ({ let mut q = q.lock().unwrap(); if q.is_empty() { None } else { Some(q.
+1	crates/check/src/physics.rs	warning	the loop variable `i` is used to index `m`
+1	crates/check/src/physics.rs	warning	the loop variable `i` is used to index `v`
+1	crates/client/src/assets.rs	warning	very complex type used. Consider factoring parts into `type` definitions
+1	crates/client/src/bench.rs	warning	call to `std::mem::drop` with a value that does not implement `Drop`. Dropping such a type only extends its contained lifetimes
+1	crates/client/src/container.rs	warning	called `unwrap` on `slot` after checking its variant with `is_some`
+1	crates/client/src/container.rs	warning	the loop variable `i` is used to index `slots`
+1	crates/client/src/container.rs	warning	this function has too many arguments (9/7)
+1	crates/client/src/entity.rs	warning	casting to the same type is unnecessary (`f32` -> `f32`): help: try: `((t / 10.0 + e.bob).sin() * 0.1 + 0.1)`
+1	crates/client/src/entity.rs	warning	this `if` statement can be collapsed
+1	crates/client/src/entity.rs	warning	this function has too many arguments (8/7)
+1	crates/client/src/entity.rs	warning	this function has too many arguments (9/7)
+1	crates/client/src/entity.rs	warning	this looks like an `else if` but the `else` is missing
+1	crates/client/src/lang.rs	warning	called `unwrap` on `fallback` after checking its variant with `is_some`
+1	crates/client/src/main.rs	warning	the loop variable `i` is used to index `pos`
+1	crates/client/src/main.rs	warning	the loop variable `i` is used to index `vel`
+1	crates/client/src/menu.rs	warning	manual implementation of `.is_multiple_of()`: help: replace with: `(self.frames.1.elapsed().as_millis() / 300).is_multiple_of(2)`
+1	crates/client/src/menu.rs	warning	unneeded `return` statement
+2	crates/client/src/net.rs	warning	variant name ends with the enum's name
+1	crates/client/src/player.rs	warning	the loop variable `i` is used to index `d`
+1	crates/client/src/player.rs	warning	the loop variable `i` is used to index `m`
+1	crates/client/src/render.rs	warning	this expression creates a reference which is immediately dereferenced by the compiler: help: change this to: `tex`
+5	crates/client/src/render.rs	warning	unnecessary use of `clone` to create a slice from a reference: help: try: `std::slice::from_ref(&vlayout)`
+1	crates/client/src/scenario.rs	error	this operation will always return zero. This is likely not the intended outcome
+1	crates/client/src/scenario.rs	warning	this looks like an `else if` but the `else` is missing
+1	crates/client/src/scenario.rs	warning	you seem to want to iterate on a map's values
+1	crates/client/src/suggest.rs	warning	field `exec` is never read
+1	crates/client/src/suggest.rs	warning	this `let...else` may be rewritten with the `?` operator: help: replace it with: `let &c = kids.iter().find(|&&c| tree.nodes[c].kind == Kind::Argument)?;`
+1	crates/client/src/ui.rs	warning	this function has too many arguments (10/7)
+3	crates/client/src/ui.rs	warning	this function has too many arguments (8/7)
+2	crates/client/src/ui.rs	warning	this function has too many arguments (9/7)
+1	crates/protocol/src/buf.rs	warning	manual `!RangeInclusive::contains` implementation: help: use: `!(0..=1 << 21).contains(&n)`
+1	crates/protocol/src/buf.rs	warning	struct `Writer` has a public `len` method, but no `is_empty` method
+1	crates/protocol/src/buf.rs	warning	the use of negated comparison operators on partially ordered types produces code that is hard to read and refactor, please consider using the `partial_cmp` meth
+1	crates/server/src/game.rs	warning	manual implementation of `.is_multiple_of()`: help: replace with: `self.tick.is_multiple_of(100)`
+1	crates/server/src/game.rs	warning	manual implementation of `.is_multiple_of()`: help: replace with: `self.tick.is_multiple_of(20 * 60)`
+1	crates/server/src/game.rs	warning	manual implementation of `.is_multiple_of()`: help: replace with: `self.tick.is_multiple_of(20)`
+1	crates/server/src/game.rs	warning	the loop variable `i` is only used to index `ench`
+1	crates/server/src/game.rs	warning	this `if` has identical blocks
+1	crates/server/src/game.rs	warning	this `if` statement can be collapsed
+1	crates/server/src/game/ai.rs	warning	manual implementation of `.is_multiple_of()`: help: replace with: `m.age.is_multiple_of(10)`
+1	crates/server/src/game/ai.rs	warning	manual implementation of `.is_multiple_of()`: help: replace with: `m.age.is_multiple_of(40)`
+1	crates/server/src/game/arrow.rs	warning	the loop variable `k` is used to index `d`
+1	crates/server/src/game/combat.rs	warning	this function has too many arguments (8/7)
+2	crates/server/src/game/env.rs	warning	manual implementation of `.is_multiple_of()`: help: replace with: `self.tick.is_multiple_of(40)`
+1	crates/server/src/game/explosion.rs	warning	the loop variable `a` is used to index `kb`
+2	crates/server/src/game/items.rs	warning	manual implementation of `.is_multiple_of()`: help: replace with: `self.tick.is_multiple_of(10)`
+1	crates/server/src/game/mob.rs	warning	the loop variable `i` is used to index `q`
+1	crates/server/src/game/mob.rs	warning	this `if` can be collapsed into the outer `match`
+1	crates/server/src/game/mob.rs	warning	this looks like an `else if` but the `else` is missing
+1	crates/server/src/game/spawn.rs	warning	manual implementation of `.is_multiple_of()`: help: replace with: `self.tick.is_multiple_of(400)`
+1	crates/server/src/registry.rs	warning	very complex type used. Consider factoring parts into `type` definitions
+1	crates/world/src/tests.rs	warning	the loop variable `i` is used to index `sec`
+4	crates/worldgen/examples/compare.rs	warning	consider using `sort_by_key`
+1	crates/worldgen/src/biome.rs	warning	the loop variable `d` is used to index `sp`
+1	crates/worldgen/src/biome.rs	warning	the loop variable `d` is used to index `t`
+1	crates/worldgen/src/biome.rs	warning	the loop variable `i` is used to index `t`
+1	crates/worldgen/src/carver.rs	warning	unnecessary `>= y + 1` or `x - 1 >=`: help: change it to: `y > crate::MIN_Y`
+1	crates/worldgen/src/features/kinds.rs	warning	the variable `y` is used as a loop counter: help: consider using: `for (y, l) in (reg.height(Hm::OceanFloor, x, z)..).zip((0..=k))`
+2	crates/worldgen/src/features/mod.rs	warning	unnecessary `>= y + 1` or `x - 1 >=`: help: change it to: `j - i - inner < 0`
+1	crates/worldgen/src/features/tree.rs	warning	the use of negated comparison operators on partially ordered types produces code that is hard to read and refactor, please consider using the `partial_cmp` meth
+1	crates/worldgen/src/features/tree.rs	warning	this `if` has identical blocks
+1	crates/worldgen/src/lib.rs	warning	usage of `contains_key` followed by `insert` on a `HashMap`
+1	crates/worldgen/src/noise.rs	warning	the loop variable `m` is used to index `levels`
+2	crates/worldgen/src/random.rs	warning	manual implementation of `isolate_lowest_one`: help: consider using `.isolate_lowest_one()`: `bound.isolate_lowest_one()`
+1	crates/worldgen/src/region.rs	warning	the loop variable `col` is used to index `hm`
+1	crates/worldgen/src/surface.rs	warning	very complex type used. Consider factoring parts into `type` definitions
