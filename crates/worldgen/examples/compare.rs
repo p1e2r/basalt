@@ -142,7 +142,10 @@ fn main() -> Result<()> {
                     let (a, b) = (cat(ours), cat(theirs));
                     // Features (trees, plants, snow layers) add solids in air above the terrain: ignore those.
                     let tn = BlockState(theirs as u32).name();
-                    let feature = (a != Cat::Solid && b == Cat::Solid && !terrain(theirs)) || matches!(tn, "snow" | "ice");
+                    let on = BlockState(ours as u32).name();
+                    let feature = (a != Cat::Solid && b == Cat::Solid && !terrain(theirs))
+                        || (b != Cat::Solid && a == Cat::Solid && !terrain(ours))
+                        || matches!(tn, "snow" | "ice") || matches!(on, "snow" | "ice");
                     if !feature {
                         shape_n += 1; cn += 1;
                         if a == b { shape_ok += 1; cok += 1; } else { *confusion.entry((a, b)).or_default() += 1; }

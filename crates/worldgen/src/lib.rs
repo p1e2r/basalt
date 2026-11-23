@@ -146,6 +146,7 @@ impl features::OreWorld for OreChunk<'_, '_, '_> {
         let yy = y - MIN_Y;
         Some(self.blocks[(yy >> 4) as usize][(((yy & 15) << 8) | (lz << 4) | lx) as usize])
     }
+    fn bounds(&self) -> (i32, i32, i32, i32) { (self.cx * 16, self.cx * 16 + 15, self.cz * 16, self.cz * 16 + 15) }
     fn set(&mut self, x: i32, y: i32, z: i32, state: u16) {
         let (lx, lz) = (x - self.cx * 16, z - self.cz * 16);
         if !(0..16).contains(&lx) || !(0..16).contains(&lz) || !(MIN_Y..MIN_Y + HEIGHT).contains(&y) { return; }
@@ -339,11 +340,18 @@ impl Generator {
     }
 
     fn decorate(&self, env: &mut Env, cx: i32, cz: i32, blocks: &mut [[u16; 4096]], own: &[[u8; 64]]) {
-        // Biomes present in each chunk of the 5x5 area (for the per-chunk feature sets).
+        // Biomes present in each chunk of the 3x3 area. Vanilla uses each decorated chunk's own
+        // 3x3 neighbourhood; chunks two away are skipped here (their biomes can only matter
+        // through the biome filter at positions inside the decorated chunk, which is rare).
         let mut present: HashMap<(i32, i32), Vec<bool>> = HashMap::new();
-        for dx in -2..=2 {
-            for dz in -2..=2 {
+        for dx in -1..=1 {
+            for dz in -1..=1 {
                 let b = if dx == 0 && dz == 0 { own.to_vec() } else { self.fill_biomes(env.e, cx + dx, cz + dz) };
+                for (si, sec) in b.iter().enumerate() {
+                    for (j, v) in sec.iter().enumerate() {
+                        env.cache.insert(((cx + dx) * 4 + (j & 3) as i32, si as i32 * 4 + (j >> 4) as i32 + MIN_Y / 4, (cz + dz) * 4 + ((j >> 2) & 3) as i32), *v);
+                    }
+                }
                 let mut set = vec![false; self.biome_names.len()];
                 for sec in &b { for v in sec { set[*v as usize] = true; } }
                 present.insert((cx + dx, cz + dz), set);
@@ -370,11 +378,56 @@ impl Generator {
                 let mut set = vec![false; self.biome_names.len()];
                 for ex in -1..=1 {
                     for ez in -1..=1 {
-                        for (i, v) in present[&(nx + ex, nz + ez)].iter().enumerate() { if *v { set[i] = true; } }
+                        let Some(p) = present.get(&(nx + ex, nz + ez)) else { continue };
+                        for (i, v) in p.iter().enumerate() { if *v { set[i] = true; } }
                     }
                 }
                 let list: Vec<u8> = set.iter().enumerate().filter(|(_, v)| **v).map(|(i, _)| i as u8).collect();
                 self.features.decorate_ores(&self.trig, self.seed, nx, nz, &list, &mut w);
+            }
+        }
+        self.freeze_top_layer(w.env, cx, cz, w.blocks);
+    }
+
+    /// The final "freeze_top_layer" feature: ice on cold water, snow on cold ground.
+    fn freeze_top_layer(&self, env: &mut Env, cx: i32, cz: i32, blocks: &mut [[u16; 4096]]) {
+        let ids = &self.surface.ids;
+        let snow = state("snow").unwrap_or(0);
+        let idx = |y: i32, lx: i32, lz: i32| { let yy = y - MIN_Y; ((yy >> 4) as usize, (((yy & 15) << 8) | (lz << 4) | lx) as usize) };
+        for lx in 0..16 {
+            for lz in 0..16 {
+                let (x, z) = (cx * 16 + lx, cz * 16 + lz);
+                // MOTION_BLOCKING: highest solid or fluid block, plus one.
+                let mut y = MIN_Y + HEIGHT - 1;
+                while y >= MIN_Y {
+                    let (s, i) = idx(y, lx, lz);
+                    if !BlockState(blocks[s][i] as u32).is_air() { break; }
+                    y -= 1;
+                }
+                let n = y + 1;
+                if n >= MIN_Y + HEIGHT { continue; }
+                let biome = self.surface.zoomed_biome(env, x, n, z);
+                if n - 1 >= MIN_Y {
+                    let (s, i) = idx(n - 1, lx, lz);
+                    if blocks[s][i] == self.default_fluid && self.surface.cold_enough_to_snow(biome, x, n - 1, z) {
+                        blocks[s][i] = ids.ice;
+                    }
+                }
+                if !self.surface.cold_enough_to_snow(biome, x, n, z) || n - 1 < MIN_Y { continue; }
+                let (s, i) = idx(n - 1, lx, lz);
+                let below = BlockState(blocks[s][i] as u32);
+                let survives = match below.name() {
+                    "ice" | "packed_ice" | "barrier" => false,
+                    "honey_block" | "soul_sand" | "mud" => true,
+                    "water" | "lava" | "powder_snow" => false,
+                    _ => true,
+                };
+                if !survives { continue; }
+                let (s2, i2) = idx(n, lx, lz);
+                blocks[s2][i2] = snow;
+                if below.get("snowy").is_some() {
+                    if let Some(v) = below.with("snowy", "true") { blocks[s][i] = v.0 as u16; }
+                }
             }
         }
     }

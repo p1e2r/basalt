@@ -116,6 +116,8 @@ pub struct Features {
 pub trait OreWorld {
     /// Block at a world position, or None if unknown (outside the chunk being built).
     fn get(&self, x: i32, y: i32, z: i32) -> Option<u16>;
+    /// Inclusive x/z block bounds of the writable area (min x, max x, min z, max z).
+    fn bounds(&self) -> (i32, i32, i32, i32);
     fn set(&mut self, x: i32, y: i32, z: i32, state: u16);
     /// OCEAN_FLOOR_WG height of a column (possibly approximated outside the chunk).
     fn ocean_floor(&mut self, x: i32, z: i32) -> i32;
@@ -359,7 +361,19 @@ impl Features {
         }
         let width = q;
         let height = rr;
-        let mut bits: HashSet<i64> = HashSet::new();
+        // Visited-position set, indexed like vanilla (indices may alias, which is kept).
+        let mut maxi = 0i64;
+        for t in 0..k {
+            let rad = ds[t * 4 + 3];
+            if rad < 0.0 { continue; }
+            let a = ((ds[t * 4] + rad).floor() as i32).max(n) - n;
+            let b = ((ds[t * 4 + 1] + rad).floor() as i32).max(o) - o;
+            let c2 = ((ds[t * 4 + 2] + rad).floor() as i32).max(p) - p;
+            maxi = maxi.max(a as i64 + b as i64 * width as i64 + c2 as i64 * (width * height) as i64);
+        }
+        let mut bits = vec![false; maxi as usize + 1];
+        let no_rng = c.discard <= 0.0 || c.discard >= 1.0;
+        let (bx0, bx1, bz0, bz1) = w.bounds();
         for t in 0..k {
             let rad = ds[t * 4 + 3];
             if rad < 0.0 { continue; }
@@ -370,6 +384,8 @@ impl Features {
             let aa = ((cx + rad).floor() as i32).max(u);
             let ab = ((cy + rad).floor() as i32).max(v);
             let ac = ((cz + rad).floor() as i32).max(ww);
+            // Spheres that cannot touch the chunk and draw no randoms can be skipped.
+            if no_rng && (aa < bx0 || u > bx1 || ac < bz0 || ww > bz1) { continue; }
             for ad in u..=aa {
                 let ae = (ad as f64 + 0.5 - cx) / rad;
                 if ae * ae >= 1.0 { continue; }
@@ -379,8 +395,9 @@ impl Features {
                     for ah in ww..=ac {
                         let ai = (ah as f64 + 0.5 - cz) / rad;
                         if ae * ae + ag * ag + ai * ai >= 1.0 || !(crate::MIN_Y..crate::MIN_Y + crate::HEIGHT).contains(&af) { continue; }
-                        let aj = (ad - n + (af - o) * width + (ah - p) * width * height) as i64;
-                        if !bits.insert(aj) { continue; }
+                        let aj = (ad - n + (af - o) * width + (ah - p) * width * height) as usize;
+                        if bits[aj] { continue; }
+                        bits[aj] = true;
                         let cur = w.get(ad, af, ah);
                         for (si, st) in &c.targets {
                             // Unknown blocks (outside the chunk) are assumed to be replaceable stone.

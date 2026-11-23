@@ -89,6 +89,8 @@ pub struct SurfaceSystem {
     sea_level: i32,
     biome_names: Vec<String>,
     wg_root: std::path::PathBuf,
+    /// iceberg surface/pillar/roof, badlands surface/pillar/roof noises.
+    ext: [usize; 6],
     pub ids: Ids,
 }
 
@@ -156,11 +158,15 @@ impl SurfaceSystem {
             sea_level,
             biome_names: biome_names.to_vec(),
             wg_root: wg.to_path_buf(),
+            ext: [0; 6],
             ids,
         };
         s.surface = s.noise("minecraft:surface")?;
         s.secondary = s.noise("minecraft:surface_secondary")?;
         s.band_offset = s.noise("minecraft:clay_bands_offset")?;
+        for (i, n) in ["iceberg_surface", "iceberg_pillar", "iceberg_pillar_roof", "badlands_surface", "badlands_pillar", "badlands_pillar_roof"].iter().enumerate() {
+            s.ext[i] = s.noise(n)?;
+        }
         s.bands = make_bands(&mut root.from_hash("minecraft:clay_bands"))?;
         s.rule = s.parse_rule(&settings["surface_rule"])?;
         Ok(s)
@@ -275,7 +281,10 @@ impl SurfaceSystem {
         self.bands[(y + i + n).rem_euclid(n) as usize]
     }
 
-    fn cold_enough_to_snow(&self, biome: u8, x: i32, y: i32, z: i32) -> bool {
+    pub fn cold_enough_to_snow(&self, biome: u8, x: i32, y: i32, z: i32) -> bool { self.temperature(biome, x, y, z) < 0.15 }
+
+    /// Height-adjusted biome temperature.
+    pub fn temperature(&self, biome: u8, x: i32, y: i32, z: i32) -> f32 {
         let c = &self.climate[biome as usize];
         let mut t = c.temperature;
         if c.frozen {
@@ -291,7 +300,7 @@ impl SurfaceSystem {
             let g = (self.temperature_noise.get((x as f32 / 8.0) as f64, (z as f32 / 8.0) as f64, false) * 8.0) as f32;
             t -= (g + y as f32 - i as f32) * 0.05 / 40.0;
         }
-        t < 0.15
+        t
     }
 
     fn test(&self, c: &Cond, ctx: &mut Ctx, env: &mut dyn SurfaceEnv) -> bool {
@@ -418,15 +427,28 @@ impl SurfaceSystem {
         let get = |b: &[[u16; 4096]], x: i32, y: i32, z: i32| get(b, x, y, z, air);
         let is_air = |id: u16| BlockState(id as u32).is_air();
         let is_fluid = |id: u16| { let n = BlockState(id as u32).name(); n == "water" || n == "lava" };
-        let (heights, corners) = self.column_info(env, cx, cz, blocks);
+        let (mut heights, corners) = self.column_info(env, cx, cz, blocks);
+        let set = |b: &mut [[u16; 4096]], x: i32, y: i32, z: i32, v: u16| {
+            let yy = y - crate::MIN_Y;
+            if (0..crate::HEIGHT).contains(&yy) { b[(yy >> 4) as usize][(((yy & 15) << 8) | (z << 4) | x) as usize] = v; }
+        };
         for lx in 0..16 {
             for lz in 0..16 {
                 let x = x0 + lx;
                 let z = z0 + lz;
+                let start = heights[(lz * 16 + lx) as usize] + 1;
+                let col_biome = self.zoomed_biome(env, x, start, z);
+                if col_biome == self.ids.eroded_badlands {
+                    self.eroded_badlands(blocks, lx, lz, x, z, start);
+                    let mut y = crate::MIN_Y + crate::HEIGHT - 1;
+                    while y >= crate::MIN_Y && is_air(get(blocks, lx, y, lz)) { y -= 1; }
+                    heights[(lz * 16 + lx) as usize] = y + 1;
+                }
                 let top = heights[(lz * 16 + lx) as usize] + 1;
+                let heights_ref = &heights;
                 let mut ctx = Ctx {
                     x, y: 0, z, surface_depth: self.surface_depth(x, z), secondary: None, min_surface: None,
-                    stone_above: 0, stone_below: 0, water_height: i32::MIN, biome: None, steep: None, heights: &heights, corners,
+                    stone_above: 0, stone_below: 0, water_height: i32::MIN, biome: None, steep: None, heights: heights_ref, corners,
                 };
                 let mut q = 0;
                 let mut r = i32::MIN;
@@ -460,7 +482,76 @@ impl SurfaceSystem {
                     }
                     y -= 1;
                 }
+                if col_biome == self.ids.frozen_ocean || col_biome == self.ids.deep_frozen_ocean {
+                    let min_surface = self.min_surface_level(&mut ctx);
+                    self.frozen_ocean(env, blocks, &set, col_biome, lx, lz, x, z, start, min_surface);
+                }
             }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn eroded_badlands(&self, blocks: &mut [[u16; 4096]], lx: i32, lz: i32, x: i32, z: i32, height: i32) {
+        let n = |i: usize, x: f64, z: f64| self.noises[self.ext[i]].get(x, 0.0, z);
+        let e = (n(3, x as f64, z as f64) * 8.25).abs().min(n(4, x as f64 * 0.2, z as f64 * 0.2) * 15.0);
+        if e <= 0.0 { return; }
+        let h = (n(5, x as f64 * 0.75, z as f64 * 0.75) * 1.5).abs();
+        let i = 64.0 + (e * e * 2.5).min((h * 50.0).ceil() + 24.0);
+        let j = i.floor() as i32;
+        if height > j { return; }
+        let air = self.ids.air;
+        let mut k = j;
+        while k >= crate::MIN_Y {
+            let b = get(blocks, lx, k, lz, air);
+            if b == self.default_block { break; }
+            if b == self.ids.water { return; }
+            k -= 1;
+        }
+        let mut k = j;
+        while k >= crate::MIN_Y && BlockState(get(blocks, lx, k, lz, air) as u32).is_air() {
+            let yy = k - crate::MIN_Y;
+            if yy < crate::HEIGHT { blocks[(yy >> 4) as usize][(((yy & 15) << 8) | (lz << 4) | lx) as usize] = self.default_block; }
+            k -= 1;
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn frozen_ocean(&self, _env: &mut dyn SurfaceEnv, blocks: &mut [[u16; 4096]], set: &dyn Fn(&mut [[u16; 4096]], i32, i32, i32, u16),
+                    biome: u8, lx: i32, lz: i32, x: i32, z: i32, height: i32, min_surface: i32) {
+        let n = |i: usize, x: f64, z: f64| self.noises[self.ext[i]].get(x, 0.0, z);
+        let e = (n(0, x as f64, z as f64) * 8.25).abs().min(n(1, x as f64 * 1.28, z as f64 * 1.28) * 15.0);
+        if e <= 1.8 { return; }
+        let h = (n(2, x as f64 * 1.17, z as f64 * 1.17) * 1.5).abs();
+        let mut i = (e * e * 1.2).min((h * 40.0).ceil() + 14.0);
+        if self.temperature(biome, x, 63, z) > 0.1 { i -= 2.0; }
+        let j;
+        if i > 2.0 {
+            j = self.sea_level as f64 - i - 7.0;
+            i += self.sea_level as f64;
+        } else {
+            i = 0.0;
+            j = 0.0;
+        }
+        let k = i;
+        let mut rs = self.root.at(x, 0, z);
+        let l = 2 + rs.next_int_bounded(4);
+        let m = self.sea_level + 18 + rs.next_int_bounded(10);
+        let mut cnt = 0;
+        let air = self.ids.air;
+        let mut o = height.max(k as i32 + 1);
+        while o >= min_surface {
+            let b = get(blocks, lx, o, lz, air);
+            let a = BlockState(b as u32).is_air() && o < k as i32 && rs.next_double() > 0.01;
+            let w = !a && b == self.ids.water && o > j as i32 && o < self.sea_level && j != 0.0 && rs.next_double() > 0.15;
+            if a || w {
+                if cnt <= l && o > m {
+                    set(blocks, lx, o, lz, self.ids.snow_block);
+                    cnt += 1;
+                } else {
+                    set(blocks, lx, o, lz, self.ids.packed_ice);
+                }
+            }
+            o -= 1;
         }
     }
 }
