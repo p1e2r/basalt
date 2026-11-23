@@ -47,6 +47,10 @@ Read NOTES.md for verified packet formats.
 - [ ] M3c structures (overworld; may move into M8)
 - [ ] M4 survival gameplay   - [ ] M5 mobs   - [ ] M6 world logic   - [ ] M7 client parity
 - [ ] M8 Nether/End, portals, structures
+- [ ] M9 redstone  - [ ] M10 enchant/anvil/brewing/smithing/XP  - [ ] M11 villagers/raids/AI
+- [ ] M12 bosses/endgame  - [ ] M13 commands/datapacks/advancements/scoreboards
+- [ ] M14 client polish  - [ ] M15 online-mode/encryption/chat signing
+- [ ] M16 lossless vanilla worlds + admin files  - [ ] M17 performance  - [ ] M18 tests/CI/docs/plugins
 - Server gaps: survival drops go straight to inventory (no item entities), no container_click /
   crafting, no mobs, no fluids/redstone ticking, no online-mode auth. Real-client walking/
   breaking driven by a human not yet verified (only bot-driven).
@@ -79,3 +83,15 @@ Read NOTES.md for verified packet formats.
 7. Client parity: inventory/crafting UI, sounds, entity models, menus (title, server list,
    pause, settings).
 8. Nether/End: dimensions, portals, structures.
+9. Redstone: vanilla update order, pistons, hoppers, observers, rails.
+10. Enchanting, anvil, brewing, smithing, XP.
+11. Villagers + trading, raids, full mob AI.
+12. Bosses/endgame: ender dragon, wither, warden, elytra, end cities, 26.x features.
+13. Full commands + datapacks/functions, advancements, scoreboards.
+14. Client polish: all screens, particles, animations, lighting/AO, sky, sounds/music,
+    resource packs, keybinds.
+15. Online-mode auth, encryption, chat signing.
+16. Lossless vanilla world compatibility + server admin files (server.properties, ops,
+    whitelist, bans).
+17. Performance: multithreading, lighting engine, LOD.
+18. Parity test suite, CI builds for macOS/Windows/Linux, docs, plugin API.
