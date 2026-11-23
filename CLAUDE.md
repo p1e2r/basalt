@@ -53,6 +53,17 @@ Read NOTES.md for verified packet formats.
   `--list`; `--probe ADDR name cmd...` for poking a server by hand. CI: .github/workflows/check.yml.
   Vanilla-measured behaviour learned by the harness is in NOTES.md ("Test harness findings").
 
+- Client oracle (M7/M14 parity, stage 1 = block meshing): tools/oracle-mod is a TEST-ONLY Fabric
+  client mod (never shipped, not built by cargo/CI; `tools/oracle-mod/build.sh`, `launch.py`) that
+  runs the installed vanilla 26.2 client and dumps its own outputs (schema: tools/oracle-mod/SCHEMA.md;
+  dumps stay in vanilla/oracle, gitignored). `basalt-check client-mesh [--seed S --n N]` generates
+  scenes, runs the oracle + `basalt-client --mesh-dump`, diffs quads by geometry. Seed 1 / n 20000:
+  84,726 scenes, 1,231,508 vanilla quads; mismatching quads 1,402,649 -> 623,922 after fixing UV
+  inset, smooth light/AO (partial faces), per-quad render layer, emission, tints, shape culling,
+  uvlock. Remaining (prioritised): fluid renderer (~370k: double-sided faces, flow sprite, heights,
+  inset), inset-face smooth light (~146k), weighted model variants (~12k), sculk sensor /
+  propagule / hanging-sign geometry (~80k), uv on vein/lichen/fence (~10k).
+
 ### Task list
 - [x] M1 client builds, joins vanilla, renders chunks
 - [x] M2 crates/world: sections/paletted containers, light, Anvil region read/write

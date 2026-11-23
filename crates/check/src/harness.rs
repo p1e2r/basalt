@@ -75,6 +75,10 @@ pub fn all() -> Vec<Entry> {
         v.push(Entry { id: format!("fuzz_{}", h.id), kind: HKind::Fuzz, group: "Fuzz".into(), paths: fuzz_paths(h.id).into_iter().map(String::from).collect(), desc: h.desc.into() });
     }
     v.push(Entry { id: "fuzz_worldgen".into(), kind: HKind::Script, group: "Fuzz".into(), paths: ["crates/worldgen/**", "crates/data/**", "crates/nbt/**", "tools/parity.sh", "crates/check/src/driver.rs"].map(String::from).to_vec(), desc: "worldgen parity vs vanilla over N seeds x several sites (tools/parity.sh)".into() });
+    // the client oracle's block-meshing parity (crates/check/src/client): `basalt-check client-mesh`
+    let mut client_paths: Vec<String> = crate::client::MESH_AFFECTED.iter().map(|s| s.to_string()).collect();
+    client_paths.extend(["crates/check/src/client/**", "tools/oracle-mod/**", "crates/check/Cargo.toml", "crates/data/**", "crates/world/**", "Cargo.lock"].map(String::from));
+    v.push(Entry { id: "client_mesh".into(), kind: HKind::Script, group: "client".into(), paths: client_paths, desc: "block-meshing parity of basalt-client vs the vanilla client oracle".into() });
     for (id, group, paths, desc) in EXTRA { v.push(Entry { id: (*id).into(), kind: HKind::Script, group: (*group).into(), paths: paths.iter().map(|s| s.to_string()).collect(), desc: (*desc).into() }); }
     v
 }

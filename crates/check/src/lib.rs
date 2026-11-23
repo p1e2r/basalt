@@ -5,6 +5,7 @@ pub mod bot;
 pub mod driver;
 pub mod fuzz;
 pub mod harness;
+pub mod client;
 pub mod physics;
 pub mod proto;
 pub mod query;

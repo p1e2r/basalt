@@ -118,7 +118,7 @@ pub fn try_main() -> Option<i32> {
     if let Some(ids) = &a.fuzz {
         sel.retain(|e| e.id.starts_with("fuzz_") && (ids.is_empty() || ids.iter().any(|i| e.id.trim_start_matches("fuzz_") == i.trim_start_matches("fuzz_"))));
     }
-    if let Some(g) = &a.group { sel.retain(|e| e.group.eq_ignore_ascii_case(g)); }
+    match &a.group { Some(g) => sel.retain(|e| e.group.eq_ignore_ascii_case(g)), None => sel.retain(|e| !e.group.eq_ignore_ascii_case("client")) } // client group only on request
     if !a.filter.is_empty() { sel.retain(|e| a.filter.iter().any(|f| e.id.contains(f.as_str()))); }
     if a.affected {
         let hit: std::collections::HashSet<String> = harness::affected(&entries, &changed).into_iter().map(|(e, _)| e.id.clone()).collect();
@@ -230,6 +230,17 @@ pub fn try_main() -> Option<i32> {
             let detail = if res.is_empty() { "parity script produced no RESULT line".into() } else { res.trim_start_matches("RESULT ").to_string() };
             if pass && a.opts.replay.is_none() { cache.store_pass(&key_of(e, &a), &detail); }
             rows.push(RunRow { id: e.id.clone(), kind: "script", result, secs: t.elapsed().as_secs_f64(), detail });
+        } else if e.id == "client_mesh" {
+            let exe = std::env::current_exe().unwrap_or_else(|_| "target/release/basalt-check".into());
+            eprintln!("== client-mesh (oracle block-meshing parity)");
+            let o = Command::new(exe).arg("client-mesh").arg("--out").arg(&out).output();
+            let txt = o.map(|o| String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr)).unwrap_or_default();
+            let res = txt.lines().rev().find(|l| l.starts_with("RESULT client_mesh")).unwrap_or("").to_string();
+            let kv: std::collections::HashMap<&str, &str> = res.split_whitespace().skip(2).filter_map(|p| p.split_once('=')).collect();
+            let pass = !res.is_empty() && kv.get("mismatches") == Some(&"0");
+            let detail = if res.is_empty() { format!("client-mesh produced no RESULT line: {}", txt.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("")) } else { res.trim_start_matches("RESULT ").to_string() };
+            if pass && a.opts.replay.is_none() { cache.store_pass(&key_of(e, &a), &detail); }
+            rows.push(RunRow { id: e.id.clone(), kind: "script", result: if pass { "pass" } else { "FAIL" }, secs: t.elapsed().as_secs_f64(), detail });
         } else {
             rows.push(RunRow { id: e.id.clone(), kind: "script", result: "SKIP", secs: 0.0, detail: "no runner registered for this script harness here".into() });
         }

@@ -21,6 +21,8 @@ pub struct Quad {
     pub tinted: bool,
     pub layer: u8,
     pub shade: bool,
+    /// the model allows smooth lighting / ambient occlusion ("ambientocclusion", default true)
+    pub ao: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -35,6 +37,33 @@ pub struct Model {
     pub full_cube: bool,
     /// a face referenced a texture that could not be resolved / is not in the atlas
     pub missing: bool,
+    /// For models drawn entirely in the solid layer: per direction, a 16x16 mask of the block
+    /// boundary face covered by its element boxes (row = first in-plane axis, bit = second).
+    /// A neighbour's face is hidden when this mask covers it (shape-based face culling).
+    pub occl: Option<Box<[[u16; 16]; 6]>>,
+}
+
+/// In-plane axes of a face direction's axis (shared by culling masks and smooth lighting).
+pub fn plane_axes(dir: u8) -> (usize, usize, usize) {
+    match dir { DOWN | UP => (1, 0, 2), NORTH | SOUTH => (2, 0, 1), _ => (0, 1, 2) }
+}
+
+impl Model {
+    fn compute_occlusion(&mut self) {
+        if self.boxes.is_empty() || self.quads.is_empty() || self.quads.iter().any(|q| q.layer != LAYER_OPAQUE) { return; }
+        let mut m = [[0u16; 16]; 6];
+        for b in &self.boxes {
+            for d in 0..6u8 {
+                let (ax, t1, t2) = plane_axes(d);
+                let touches = if DIR_VEC[d as usize][ax] > 0 { b[3 + ax] >= 0.999 } else { b[ax] <= 0.001 };
+                if !touches { continue; }
+                let r = |lo: f32, hi: f32| ((lo * 16.0 + 0.01).floor().max(0.0) as usize, ((hi * 16.0 - 0.01).ceil() as usize).min(16));
+                let (a0, a1) = r(b[t1], b[3 + t1]); let (b0, b1) = r(b[t2], b[3 + t2]);
+                for i in a0..a1 { for j in b0..b1 { m[d as usize][i] |= 1 << j; } }
+            }
+        }
+        self.occl = Some(Box::new(m));
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -50,6 +79,12 @@ pub struct StateInfo {
     /// fluid level 0..8 (0 = source), 8+ = falling
     pub fluid_level: u8,
     pub emits_light: bool,
+    /// block light emitted (0..15)
+    pub emission: u8,
+    /// drawn at full block light regardless of surroundings (magma, active sculk sensors)
+    pub full_bright: bool,
+    /// casts ambient occlusion on neighbouring faces (full-cube collidable models that are not glass-like)
+    pub ao_occluder: bool,
 }
 
 #[derive(Clone, Copy, Default, Debug)]
@@ -60,7 +95,7 @@ pub struct Image { pub w: u32, pub h: u32, pub rgba: Vec<u8> }
 pub struct Atlas { pub w: u32, pub h: u32, pub rgba: Vec<u8>, pub rects: HashMap<String, (Rect, u8)> }
 
 #[derive(Clone, Debug)]
-pub struct Biome { pub name: String, pub grass: u32, pub foliage: u32, pub water: u32, pub sky: u32, pub fog: u32 }
+pub struct Biome { pub name: String, pub grass: u32, pub foliage: u32, pub dry_foliage: u32, pub water: u32, pub sky: u32, pub fog: u32 }
 
 #[derive(Clone, Debug)]
 pub struct DimensionType { pub name: String, pub min_y: i32, pub height: i32, pub has_skylight: bool }
@@ -120,7 +155,8 @@ fn parse_color(v: Option<&Value>) -> Option<u32> {
 
 // ------------------------------------------------------------------ models
 
-struct RawModel { textures: HashMap<String, String>, elements: Option<Vec<Value>>, ao: bool }
+/// `forced`: texture variables declared as {"sprite": .., "force_translucent": true}
+struct RawModel { textures: HashMap<String, String>, forced: std::collections::HashSet<String>, elements: Option<Vec<Value>>, ao: bool }
 
 struct Baker<'a> {
     jar: &'a Jar,
@@ -163,29 +199,35 @@ impl<'a> Baker<'a> {
         let name = strip(name).to_string();
         if let Some(m) = self.raw.get(&name) { return Some(m.clone()); }
         let v = self.jar.json(&format!("assets/minecraft/models/{name}.json"))?;
-        let mut textures = HashMap::new(); let mut elements = None; let mut ao = true;
+        let mut textures = HashMap::new(); let mut forced = std::collections::HashSet::new(); let mut elements = None; let mut ao = true;
         if let Some(p) = v.get("parent").and_then(|p| p.as_str()) {
-            if let Some(pm) = self.raw(p) { textures = pm.textures.clone(); elements = pm.elements.clone(); ao = pm.ao; }
+            if let Some(pm) = self.raw(p) { textures = pm.textures.clone(); forced = pm.forced.clone(); elements = pm.elements.clone(); ao = pm.ao; }
         }
         if let Some(t) = v.get("textures").and_then(|t| t.as_object()) {
             for (k, val) in t {
                 let s = match val { Value::String(s) => s.clone(), Value::Object(o) => o.get("sprite").and_then(|s| s.as_str()).unwrap_or("").to_string(), _ => continue };
+                if val.get("force_translucent").and_then(|f| f.as_bool()).unwrap_or(false) { forced.insert(k.clone()); } else { forced.remove(k); }
                 textures.insert(k.clone(), s);
             }
         }
         if let Some(e) = v.get("elements").and_then(|e| e.as_array()) { elements = Some(e.clone()); }
         if let Some(a) = v.get("ambientocclusion").and_then(|a| a.as_bool()) { ao = a; }
-        let m = std::rc::Rc::new(RawModel { textures, elements, ao });
+        let m = std::rc::Rc::new(RawModel { textures, forced, elements, ao });
         self.raw.insert(name, m.clone());
         Some(m)
     }
 
-    fn resolve_tex(m: &RawModel, t: &str) -> Option<String> {
+    /// Resolve a face texture reference; also reports whether a variable on the way was force_translucent.
+    fn resolve_tex(m: &RawModel, t: &str) -> Option<(String, bool)> {
         let mut t = t.to_string();
+        let mut forced = false;
         // a bare key ("all") is a texture variable reference too
         if !t.starts_with('#') && !t.contains('/') && !t.contains(':') && m.textures.contains_key(&t) { t = format!("#{t}"); }
         for _ in 0..16 {
-            match t.strip_prefix('#') { Some(k) => t = m.textures.get(k)?.clone(), None => return Some(strip(&t).to_string()) }
+            match t.strip_prefix('#') {
+                Some(k) => { forced |= m.forced.contains(k); t = m.textures.get(k)?.clone() }
+                None => return Some((strip(&t).to_string(), forced)),
+            }
         }
         None
     }
@@ -194,7 +236,6 @@ impl<'a> Baker<'a> {
     fn bake(&mut self, model: &str, rx: i32, ry: i32, uvlock: bool, out: &mut Model) {
         let Some(m) = self.raw(model) else { out.missing = true; return };
         let Some(elements) = &m.elements else { return };
-        let _ = m.ao;
         for el in elements {
             let f = |k: &str| -> [f32; 3] { let a = el[k].as_array(); let g = |i: usize| a.and_then(|a| a.get(i)).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32; [g(0), g(1), g(2)] };
             let (from, to) = (f("from"), f("to"));
@@ -252,27 +293,35 @@ impl<'a> Baker<'a> {
                 if rx != 0 { for p in pos.iter_mut() { *p = rot_point(*p, 0, -(rx as f32), [8.0; 3]); } cull = rot_dir(cull, 0, -rx / 90); }
                 if ry != 0 { for p in pos.iter_mut() { *p = rot_point(*p, 1, -(ry as f32), [8.0; 3]); } cull = rot_dir(cull, 1, -ry / 90); }
                 let dir = face_normal_dir(&pos);
-                if uvlock && (rx != 0 || ry != 0) {
+                // uvlock (matches the vanilla client): under a pure y rotation side faces keep their authored
+                // UVs; otherwise the UVs follow the face position in world space
+                if uvlock && (rx != 0 || ry != 0) && !(rx == 0 && dir != UP && dir != DOWN) {
                     for i in 0..4 {
                         let p = pos[i];
                         uvs[i] = match dir { DOWN => [p[0], 16.0 - p[2]], UP => [p[0], p[2]], NORTH => [16.0 - p[0], 16.0 - p[1]], SOUTH => [p[0], 16.0 - p[1]], WEST => [p[2], 16.0 - p[1]], _ => [16.0 - p[2], 16.0 - p[1]] };
                     }
                 }
-                let Some(tex) = face.get("texture").and_then(|t| t.as_str()).and_then(|t| Self::resolve_tex(&m, t)) else { out.missing = true; continue };
+                let Some((tex, forced)) = face.get("texture").and_then(|t| t.as_str()).and_then(|t| Self::resolve_tex(&m, t)) else { out.missing = true; continue };
                 if !self.atlas.rects.contains_key(&tex) { out.missing = true; }
-                let (rect, layer) = self.atlas.rects.get(&tex).or_else(|| self.atlas.rects.get("missing")).copied().unwrap();
+                let (rect, _) = self.atlas.rects.get(&tex).or_else(|| self.atlas.rects.get("missing")).copied().unwrap();
+                // render layer from the alpha of the texture region this face samples (matches the
+                // vanilla client per quad, see basalt-check client-mesh): any partially transparent
+                // pixel -> translucent, any fully transparent pixel -> cutout, else solid
+                let layer = if forced || matches!(tex.as_str(), "block/glass" | "block/glass_pane_top") { LAYER_TRANSLUCENT } else {
+                    let (mut u0, mut u1, mut v0, mut v1) = (16f32, 0f32, 16f32, 0f32);
+                    for u in &uvs { u0 = u0.min(u[0]); u1 = u1.max(u[0]); v0 = v0.min(u[1]); v1 = v1.max(u[1]); }
+                    self.atlas.region_layer(rect, [u0 / 16.0, v0 / 16.0, u1 / 16.0, v1 / 16.0])
+                };
                 for u in uvs.iter_mut() {
-                    // inset slightly to avoid bleeding
                     let cu = u[0].clamp(0.0, 16.0) / 16.0; let cv = u[1].clamp(0.0, 16.0) / 16.0;
                     u[0] = (rect.x as f32 + cu * rect.w as f32) / self.atlas.w as f32;
                     u[1] = (rect.y as f32 + cv * rect.h as f32) / self.atlas.h as f32;
                 }
-                // shrink UVs toward centre by a hair
-                let cu = (uvs[0][0] + uvs[1][0] + uvs[2][0] + uvs[3][0]) / 4.0; let cv = (uvs[0][1] + uvs[1][1] + uvs[2][1] + uvs[3][1]) / 4.0;
-                for u in uvs.iter_mut() { u[0] += (cu - u[0]) * 0.002; u[1] += (cv - u[1]) * 0.002; }
+                // no UV inset: the vanilla client's quads use the exact face UVs (client-mesh harness); the
+                // atlas pads every sprite with its edge pixels instead
                 for p in pos.iter_mut() { for a in 0..3 { p[a] /= 16.0; el_min[a] = el_min[a].min(p[a]); el_max[a] = el_max[a].max(p[a]); } }
                 if layer == LAYER_OPAQUE { opaque_faces += 1; }
-                out.quads.push(Quad { pos, uv: uvs, cull, dir, tinted: face.get("tintindex").and_then(|t| t.as_i64()).map(|t| t >= 0).unwrap_or(false), layer, shade });
+                out.quads.push(Quad { pos, uv: uvs, cull, dir, tinted: face.get("tintindex").and_then(|t| t.as_i64()).map(|t| t >= 0).unwrap_or(false), layer, shade, ao: m.ao });
             }
             if el_min[0] <= el_max[0] {
                 let b = [el_min[0], el_min[1], el_min[2], el_max[0], el_max[1], el_max[2]];
@@ -281,6 +330,21 @@ impl<'a> Baker<'a> {
                 out.boxes.push(b);
             }
         }
+    }
+}
+
+impl Atlas {
+    /// Layer for the sub-rectangle [u0, v0, u1, v1] (0..1 within the sprite) of a sprite.
+    pub fn region_layer(&self, r: Rect, uv: [f32; 4]) -> u8 {
+        let px = |f: f32, n: u32| f.clamp(0.0, 1.0) * n as f32;
+        let x0 = (px(uv[0], r.w) + 1e-3).floor() as u32; let x1 = ((px(uv[2], r.w) - 1e-3).ceil() as u32).max(x0 + 1).min(r.w);
+        let y0 = (px(uv[1], r.h) + 1e-3).floor() as u32; let y1 = ((px(uv[3], r.h) - 1e-3).ceil() as u32).max(y0 + 1).min(r.h);
+        let (mut zero, mut part) = (false, false);
+        for y in y0.min(r.h - 1)..y1 { for x in x0.min(r.w - 1)..x1 {
+            let a = self.rgba[(((r.y + y) * self.w + r.x + x) * 4 + 3) as usize];
+            if a == 0 { zero = true } else if a < 255 { part = true }
+        } }
+        if part { LAYER_TRANSLUCENT } else if zero { LAYER_CUTOUT } else { LAYER_OPAQUE }
     }
 }
 
@@ -367,6 +431,21 @@ const NO_COLLIDE_KINDS: &[&str] = &["air", "attached_stem", "bamboo_sapling", "b
     "trip_wire_hook", "tripwire", "twisting_vines", "twisting_vines_plant", "vine", "wall_banner", "wall_torch", "web", "weeping_vines", "weeping_vines_plant", "weighted_pressure_plate", "wither_rose",
     "big_dripleaf_stem", "cactus_flower", "nether_sprouts", "moving_piston"];
 
+/// Redstone dust colour per power level (measured from the vanilla client with the client-mesh oracle).
+const REDSTONE_TINT: [u32; 16] = [0x4C0000, 0x700000, 0x7A0000, 0x840000, 0x8E0000, 0x990000, 0xA30000, 0xAD0000,
+    0xB70000, 0xC10000, 0xCC0000, 0xD60000, 0xE00000, 0xEA0600, 0xF41B00, 0xFF3200];
+
+/// Per-state tint: state-dependent colours first, then the per-block table.
+fn tint_for_state(name: &str, st: BlockState) -> Tint {
+    let num = |p: &str| st.get(p).and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+    match name {
+        "redstone_wire" => Tint::Fixed(REDSTONE_TINT[num("power").min(15) as usize]),
+        // stem colour moves linearly from green to yellow with age (measured)
+        "melon_stem" | "pumpkin_stem" => { let a = num("age").min(7); Tint::Fixed((a * 32) << 16 | (255 - a * 8) << 8 | a * 4) }
+        _ => tint_for(name),
+    }
+}
+
 fn tint_for(name: &str) -> Tint {
     match name {
         "grass_block" | "short_grass" | "tall_grass" | "fern" | "large_fern" | "potted_fern" | "sugar_cane" | "bush" => Tint::Grass,
@@ -402,6 +481,8 @@ pub struct Assets {
     /// per block state: the blockstate file applied no model at all
     /// 0 = has a model, 1 = the blockstate file applied no model, 2 = multipart with no matching part (renders nothing, like vanilla)
     pub no_model: Vec<u8>,
+    /// per block state: the blockstate file offers several weighted models (vanilla picks one by position)
+    pub random_variant: Vec<bool>,
 }
 
 impl Assets {
@@ -412,6 +493,7 @@ impl Assets {
         let mut states = Vec::with_capacity(basalt_data::blocks::STATE_COUNT);
         crate::lang::init(jar.files.get("assets/minecraft/lang/en_us.json").map(|v| v.as_slice()));
         let mut no_model = Vec::with_capacity(basalt_data::blocks::STATE_COUNT);
+        let mut random_variant = Vec::with_capacity(basalt_data::blocks::STATE_COUNT);
         let (mut item_models, mut item_tint, mut item_icons): (Vec<Option<u32>>, Vec<Option<u32>>, Vec<Option<String>>) = (Vec::new(), Vec::new(), Vec::new());
         {
             let mut baker = Baker { jar: &jar, raw: HashMap::new(), atlas: &atlas };
@@ -422,7 +504,9 @@ impl Assets {
                 let bs = bs_cache.entry(b.name).or_insert_with(|| jar.json(&format!("assets/minecraft/blockstates/{}.json", b.name)));
                 // collect applied (model, x, y, uvlock)
                 let mut applied: Vec<(String, i32, i32, bool)> = Vec::new();
+                let mut random = false;
                 let mut push = |v: &Value| {
+                    if v.as_array().map(|a| a.len() > 1).unwrap_or(false) { random = true; }
                     let v = if let Some(a) = v.as_array() { &a[0] } else { v };
                     if let Some(m) = v.get("model").and_then(|m| m.as_str()) {
                         applied.push((m.to_string(), v.get("x").and_then(|x| x.as_i64()).unwrap_or(0) as i32, v.get("y").and_then(|x| x.as_i64()).unwrap_or(0) as i32, v.get("uvlock").and_then(|x| x.as_bool()).unwrap_or(false)));
@@ -436,11 +520,14 @@ impl Assets {
                     }
                 }
                 // a multipart state matching no part renders nothing in vanilla either (e.g. an isolated wall without post)
+                random_variant.push(random);
                 no_model.push(if !applied.is_empty() { 0 } else if bs.as_ref().map(|b| b.get("multipart").is_some()).unwrap_or(false) { 2 } else { 1 });
                 let key = format!("{applied:?}");
                 let mi = match cache.get(&key) { Some(i) => *i, None => {
                     let mut m = Model::default();
                     for (name, x, y, uvl) in &applied { baker.bake(name, *x, *y, *uvl, &mut m); }
+                    // blocks drawn like entities (signs, beds, banners, heads) never hide neighbour faces
+                    if !matches!(b.kind, "bed" | "standing_sign" | "wall_sign" | "ceiling_hanging_sign" | "wall_hanging_sign" | "banner" | "wall_banner" | "skull" | "wall_skull" | "piglinwallskull" | "player_head" | "player_wall_head" | "wither_skull" | "wither_wall_skull") { m.compute_occlusion(); }
                     models.push(m); let i = models.len() as u32 - 1; cache.insert(key, i); i
                 } };
                 let m = &models[mi as usize];
@@ -453,8 +540,10 @@ impl Assets {
                 if name == "snow" { collides = st.get("layers") != Some("1"); }
                 if b.kind == "fence_gate" && st.get("open") == Some("true") { collides = false; }
                 states.push(StateInfo {
-                    model: mi, tint: tint_for(name), occludes: m.occludes, self_cull: m.full_cube && !m.occludes && !name.ends_with("leaves"), collides, fluid, fluid_level: level,
-                    emits_light: matches!(name, "lava" | "glowstone" | "torch" | "wall_torch" | "lantern" | "sea_lantern" | "fire" | "jack_o_lantern" | "shroomlight" | "magma_block"),
+                    model: mi, tint: tint_for_state(name, st), occludes: m.occludes, self_cull: m.full_cube && !m.occludes && !name.ends_with("leaves"), collides, fluid, fluid_level: level,
+                    emits_light: basalt_world::props::emission(id) > 0, emission: basalt_world::props::emission(id),
+                    full_bright: name == "magma_block" || (name.ends_with("sculk_sensor") && st.get("sculk_sensor_phase") == Some("active")),
+                    ao_occluder: m.full_cube && collides && !(m.full_cube && !m.occludes && !name.ends_with("leaves")),
                 });
             }
             // items: items/<name>.json → a block model (3D icon) or an item model's layer0 texture
@@ -527,7 +616,7 @@ impl Assets {
             water_still: uvrect("block/water_still"), water_flow: uvrect("block/water_flow"), lava_still: uvrect("block/lava_still"),
             grass_map: jar.png("assets/minecraft/textures/colormap/grass.png"), foliage_map: jar.png("assets/minecraft/textures/colormap/foliage.png"),
             font: jar.png("assets/minecraft/textures/font/ascii.png"),
-            atlas, models, states, biome_json, dimension_types, gui, entity_tex, item_icons, item_models, item_tint, no_model,
+            atlas, models, states, biome_json, dimension_types, gui, entity_tex, item_icons, item_models, item_tint, no_model, random_variant,
         })
     }
 
@@ -570,6 +659,7 @@ impl Assets {
             Biome {
                 name: n.clone(), grass,
                 foliage: parse_color(fx.get("foliage_color")).unwrap_or_else(|| Self::colormap(&self.foliage_map, temp, down, 0x59AE30)),
+                dry_foliage: parse_color(fx.get("dry_foliage_color")).unwrap_or(0x7B5334),
                 water: parse_color(fx.get("water_color")).unwrap_or(0x3F76E4),
                 sky: parse_color(at.get("minecraft:visual/sky_color")).or(parse_color(fx.get("sky_color"))).unwrap_or(0x78A7FF),
                 fog: parse_color(at.get("minecraft:visual/fog_color")).or(parse_color(fx.get("fog_color"))).unwrap_or(0xC0D8FF),

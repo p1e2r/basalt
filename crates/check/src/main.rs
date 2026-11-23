@@ -2,6 +2,7 @@
 //!
 //! basalt-check [--basalt] [--vanilla HOST:PORT] [--vanilla-dir DIR] [--diff] [--filter S[,S..]]
 //!              [--jobs N] [--out DIR] [--json FILE] [--list]
+//! basalt-check client-mesh [--seed S] [--n N] ...   (see client/mesh_diff.rs)
 //!
 //! Default: all scenarios against fresh Basalt servers (target/release/basalt-server, one per
 //! scenario). `--vanilla` also runs them against the vanilla server (sequentially; bots are op'd
@@ -16,6 +17,11 @@ use std::time::Instant;
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     if let Some(code) = basalt_check::driver::try_main() { std::process::exit(code); }
+    // subcommand: client-mesh (block-meshing parity vs the vanilla client oracle, see client/mesh_diff.rs)
+    if std::env::args().nth(1).as_deref() == Some("client-mesh") {
+        let a: Vec<String> = std::env::args().skip(2).collect();
+        std::process::exit(basalt_check::client::mesh_diff::main(&a));
+    }
     let mut basalt = false; let mut vanilla: Option<String> = None; let mut vdir = "vanilla/srv".to_string(); let mut diff = false;
     let mut filter: Vec<String> = Vec::new(); let mut jobs = 4usize; let mut out = "target/check".to_string(); let mut json: Option<String> = None;
     let mut it = std::env::args().skip(1);
