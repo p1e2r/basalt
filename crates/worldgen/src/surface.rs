@@ -83,7 +83,7 @@ pub struct SurfaceSystem {
     climate: Vec<BiomeClimate>,
     temperature_noise: PerlinSimplexNoise,
     frozen_noise: PerlinSimplexNoise,
-    info_noise: PerlinSimplexNoise,
+    pub info_noise: PerlinSimplexNoise,
     default_block: u16,
     zoom_seed: i64,
     sea_level: i32,

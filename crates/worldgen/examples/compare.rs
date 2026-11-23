@@ -19,9 +19,11 @@ use std::time::Instant;
 struct VanillaChunk {
     blocks: Vec<u16>, // 98304, index (y-MIN_Y)<<8 | z<<4 | x
     biomes: Vec<String>, // 24*64
+    /// The chunk references or starts a structure.
+    structure: bool,
 }
 
-fn read_chunk(dir: &Path, cx: i32, cz: i32) -> Result<Option<VanillaChunk>> {
+fn read_nbt(dir: &Path, cx: i32, cz: i32) -> Result<Option<Tag>> {
     let path = dir.join(format!("r.{}.{}.mca", cx >> 5, cz >> 5));
     let Ok(data) = std::fs::read(&path) else { return Ok(None) };
     if data.len() < 8192 { return Ok(None); }
@@ -39,6 +41,25 @@ fn read_chunk(dir: &Path, cx: i32, cz: i32) -> Result<Option<VanillaChunk>> {
         c => bail!("unsupported compression {c}"),
     }
     let (_, root) = basalt_nbt::Reader::new(&buf).named()?;
+    Ok(Some(root))
+}
+
+/// Bounding boxes of all structure pieces started in a chunk.
+fn structure_boxes(root: &Tag) -> Vec<[i32; 6]> {
+    let mut out = Vec::new();
+    let Some(Tag::Compound(starts)) = root.get("structures").and_then(|s| s.get("starts")) else { return out };
+    for st in starts.values() {
+        for c in st.get("Children").and_then(|c| c.as_list()).map(|l| l.as_slice()).unwrap_or(&[]) {
+            if let Some(Tag::IntArray(bb)) = c.get("BB") {
+                if bb.len() == 6 { out.push([bb[0], bb[1], bb[2], bb[3], bb[4], bb[5]]); }
+            }
+        }
+    }
+    out
+}
+
+fn read_chunk(dir: &Path, cx: i32, cz: i32) -> Result<Option<VanillaChunk>> {
+    let Some(root) = read_nbt(dir, cx, cz)? else { return Ok(None) };
     let status = root.get("Status").and_then(|s| s.as_str()).unwrap_or("");
     if status != "minecraft:full" { return Ok(None); }
     let mut blocks = vec![0u16; 98304];
@@ -70,7 +91,9 @@ fn read_chunk(dir: &Path, cx: i32, cz: i32) -> Result<Option<VanillaChunk>> {
             for (j, v) in out.iter().enumerate() { biomes[si as usize * 64 + j] = pal[*v as usize].clone(); }
         }
     }
-    Ok(Some(VanillaChunk { blocks, biomes }))
+    let nonempty = |k: &str| root.get("structures").and_then(|s| s.get(k)).and_then(|r| r.as_compound()).map(|c| !c.is_empty()).unwrap_or(false);
+    let structure = nonempty("References") || nonempty("starts");
+    Ok(Some(VanillaChunk { blocks, biomes, structure }))
 }
 
 fn unpack(pal: &[u16], data: &[i64], min_bits: u32, n: usize, out: &mut [u16]) {
@@ -126,7 +149,16 @@ fn main() -> Result<()> {
     let mut bio_conf: HashMap<(String, String), u64> = HashMap::new();
     let mut gen_time = 0f64;
     let mut chunks = 0;
+    let mut boxes: Vec<[i32; 6]> = Vec::new();
+    for cx in cx0 - rad - 8..=cx0 + rad + 8 {
+        for cz in cz0 - rad - 8..=cz0 + rad + 8 {
+            if let Ok(Some(t)) = read_nbt(dir, cx, cz) { boxes.extend(structure_boxes(&t)); }
+        }
+    }
     let mut pair_count = 0;
+    let (mut feat_ok, mut feat_n, mut struct_chunks) = (0u64, 0u64, 0);
+    // vanilla block name -> (vanilla count, matched, ours-wrong count)
+    let mut feat_types: HashMap<&'static str, (u64, u64, u64)> = HashMap::new();
     for cx in cx0 - rad..=cx0 + rad {
         for cz in cz0 - rad..=cz0 + rad {
             let Some(v) = read_chunk(dir, cx, cz)? else { continue };
@@ -134,6 +166,9 @@ fn main() -> Result<()> {
             let c: GeneratedChunk = g.generate_chunk(cx, cz);
             gen_time += t.elapsed().as_secs_f64();
             chunks += 1;
+            let (bx0, bz0) = (cx * 16, cz * 16);
+            let cboxes: Vec<[i32; 6]> = boxes.iter().filter(|b| b[3] >= bx0 - 1 && b[0] <= bx0 + 16 && b[5] >= bz0 - 1 && b[2] <= bz0 + 16).copied().collect();
+            if v.structure { struct_chunks += 1; }
             let (mut cok, mut cn) = (0, 0);
             for si in 0..24 {
                 for i in 0..4096 {
@@ -149,6 +184,16 @@ fn main() -> Result<()> {
                     if !feature {
                         shape_n += 1; cn += 1;
                         if a == b { shape_ok += 1; cok += 1; } else { *confusion.entry((a, b)).or_default() += 1; }
+                    }
+                    let (wx, wy, wz) = (cx * 16 + (i & 15) as i32, (si * 16 + (i >> 8)) as i32 + MIN_Y, cz * 16 + ((i >> 4) & 15) as i32);
+                    let in_structure = cboxes.iter().any(|b| wx >= b[0] - 1 && wx <= b[3] + 1 && wy >= b[1] - 1 && wy <= b[4] + 1 && wz >= b[2] - 1 && wz <= b[5] + 1);
+                    if !in_structure {
+                        feat_n += 1;
+                        let e = feat_types.entry(BlockState(theirs as u32).name()).or_insert((0, 0, 0));
+                        e.0 += 1;
+                        if ours == theirs { feat_ok += 1; e.1 += 1; } else {
+                            feat_types.entry(BlockState(ours as u32).name()).or_insert((0, 0, 0)).2 += 1;
+                        }
                     }
                     if terrain(ours) && terrain(theirs) {
                         blk_n += 1;
@@ -208,5 +253,13 @@ fn main() -> Result<()> {
     let mut kv: Vec<_> = blk_conf.into_iter().collect();
     kv.sort_by(|a, b| b.1.cmp(&a.1));
     for ((a, b), n) in kv.iter().take(std::env::var("TOP").ok().and_then(|t| t.parse().ok()).unwrap_or(12)) { println!("    ours {a} vanilla {b}: {n}"); }
+    let _ = struct_chunks;
+    println!("features (all blocks outside structure pieces, exact): {:.3}% of {feat_n}", pct(feat_ok, feat_n));
+    let mut fv: Vec<_> = feat_types.into_iter().filter(|(_, v)| v.0 != v.1 || v.2 > 0).collect();
+    fv.sort_by(|a, b| ((b.1).0 - (b.1).1 + (b.1).2).cmp(&((a.1).0 - (a.1).1 + (a.1).2)));
+    println!("    {:<28} {:>9} {:>9} {:>9}", "block", "vanilla", "matched", "ours-only");
+    for (n, (a, b, c)) in fv.iter().take(std::env::var("FTOP").ok().and_then(|t| t.parse().ok()).unwrap_or(25)) {
+        println!("    {n:<28} {a:>9} {b:>9} {c:>9}");
+    }
     Ok(())
 }
