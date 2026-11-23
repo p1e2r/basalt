@@ -10,7 +10,9 @@
 #   `PARITY site=.. starts=<matched>/<vanilla> extra=<basalt-only> pieces=<m>/<n> blocks=<%> ok=0|1`.
 #   Final line: `RESULT fuzz=structures cases=.. mismatches=.. new=.. errors=.. skipped=..`.
 #   Thresholds: every vanilla start of a placed type found (types in KNOWN_TYPES may differ) and
-#   jigsaw pieces 100 %. Known gaps: crates/check/known-divergences.txt lines `structures <type>`.
+#   jigsaw pieces 100 %, and block parity inside the piece boxes at least BLOCK_FLOOR per type (terrain
+#   adaptation, 2026-11-24: villages / outposts 98.5, ancient cities 95, trial chambers 99; a miss is
+#   the mismatch class `blocks-<type>`). Known gaps: crates/check/known-divergences.txt lines `structures <type>`.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 OUT=target/check
@@ -65,6 +67,16 @@ for l in open(log):
     if not ok:
         bad.append(t)
         if t not in kn: new.append(t)
+FLOOR = {"village": 98.5, "pillager": 98.5, "ancient": 95.0, "trial": 99.0}
+for l in open(log):
+    m = re.match(r"BLOCKS (\S+)\s+([\d.]+)% of (\d+)", l)
+    if not m or int(m.group(3)) < 1000: continue
+    t, pct = m.group(1), float(m.group(2))
+    fl = next((v for k, v in FLOOR.items() if t.startswith(k)), None)
+    if fl is not None and pct < fl:
+        c = "blocks-" + t
+        bad.append(c)
+        if c not in kn: new.append(c)
 blocks = "n/a"
 for l in open(log):
     m = re.search(r"blocks=([\d.]+)", l)

@@ -541,6 +541,11 @@ fn place_piece(g: &Generator, s: &Structures, p: &Piece, reg: &mut Region, clip:
                     palette: 0,
                 },
             );
+            for (p, st) in &opts.set {
+                if clip.contains(*p) {
+                    reg.set(p[0], p[1], p[2], *st);
+                }
+            }
         }
         PieceKind::Chest { pos, .. } => {
             let chest = BlockState::parse("chest[facing=north,type=single,waterlogged=false]")
@@ -709,6 +714,7 @@ pub fn shipwreck(
                         integrity: 1.0,
                         processors: None,
                         floor_y: false,
+                        set: Vec::new(),
                     },
                 },
             }]
@@ -721,14 +727,62 @@ pub fn shipwreck(
     })
 }
 
-pub fn igloo(
-    _g: &Generator,
-    _s: &Structures,
-    _cx: i32,
-    _cz: i32,
-    _r: &mut JavaRandom,
-) -> Vec<Piece> {
-    Vec::new()
+/// Igloo (measured against 9 vanilla igloos of seed 12345, 2026-11-24): rotation `nextInt(4)`,
+/// laboratory if `nextDouble() < 0.5`, then `nextInt(8) + 3` ladder pieces. Template origins from
+/// the chunk corner: top (0, 0, 0) pivot (3, 0, 5); ladder i (2, -3 - 3i, 4) pivot (1, 0, 1); bottom
+/// (0, -3n - 6, -2) pivot (3, 0, 7) (one shared world pivot). The top's floor y is the top solid
+/// block (WORLD_SURFACE_WG - 1) at the top template's local (3, 0) after rotation.
+pub fn igloo(g: &Generator, s: &Structures, cx: i32, cz: i32, r: &mut JavaRandom) -> Vec<Piece> {
+    let rot = Rotation::ALL[r.next_int_bounded(4) as usize];
+    let lab = r.next_double() < 0.5;
+    let n = if lab { r.next_int_bounded(8) + 3 } else { 0 };
+    let (x0, z0) = (cx * 16, cz * 16);
+    let probe = transform_pos([3, 0, 0], rot, false, [3, 0, 5]);
+    let y = g.first_free(x0 + probe[0], z0 + probe[2], false) - 1;
+    // piece order as saved by vanilla: bottom, ladders top-down, top
+    let mut parts: Vec<(&str, [i32; 3], [i32; 3])> = Vec::new();
+    if lab {
+        parts.push(("bottom", [0, -3 * n - 6, -2], [3, 0, 7]));
+        for i in 0..n {
+            parts.push(("middle", [2, -3 - 3 * i, 4], [1, 0, 1]));
+        }
+    }
+    parts.push(("top", [0, 0, 0], [3, 0, 5]));
+    // without a laboratory the top's trapdoor (at the pivot) is snow (measured, seed 12345 igloo 36,41)
+    let snow = BlockState::from_name("snow_block")
+        .map(|b| b.0 as u16)
+        .unwrap_or(0);
+    let mut out = Vec::new();
+    for (name, off, pivot) in parts {
+        let set = if name == "top" && !lab {
+            vec![([x0 + 3, y, z0 + 5], snow)]
+        } else {
+            Vec::new()
+        };
+        let name = format!("minecraft:igloo/{name}");
+        let Some(t) = s.templates.get(&name) else {
+            return Vec::new();
+        };
+        let pos = [x0 + off[0], y + off[1], z0 + off[2]];
+        out.push(Piece {
+            bb: template_bbox(&t, pos, rot, false, pivot),
+            kind: PieceKind::Template {
+                name,
+                pos,
+                rot,
+                mirror: false,
+                pivot,
+                opts: TemplateOpts {
+                    ignore_air: false,
+                    integrity: 1.0,
+                    processors: None,
+                    floor_y: false,
+                    set,
+                },
+            },
+        });
+    }
+    out
 }
 /// Ocean ruins (measured by replaying the start random against 26 vanilla cold ruins): rotation,
 /// large (< large_probability), template index (cold: brick_1..8 / big_brick_1,2,3,8 drawn with
@@ -790,6 +844,7 @@ pub fn ocean_ruin(
                     integrity,
                     processors: None,
                     floor_y: true,
+                    set: Vec::new(),
                 },
             },
         });
@@ -890,6 +945,7 @@ pub fn ruined_portal(
                     integrity: 1.0,
                     processors: None,
                     floor_y: false,
+                    set: Vec::new(),
                 },
             },
         }],

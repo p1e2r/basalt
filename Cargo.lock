@@ -302,6 +302,7 @@ dependencies = [
  "basalt-world",
  "basalt-worldgen",
  "env_logger",
+ "flate2",
  "log",
  "md-5",
  "rand",
