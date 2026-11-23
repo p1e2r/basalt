@@ -21,6 +21,18 @@ pub struct LootContext {
     pub fortune: u8,
     /// Set when the loot comes from an explosion (survives_explosion / explosion_decay).
     pub explosion_radius: Option<f32>,
+    /// State of the entity the table runs for (`entity_properties` with `entity: this`).
+    pub this_entity: Option<EntityProps>,
+}
+
+/// The parts of an entity's state that entity loot tables test.
+#[derive(Debug, Clone, Default)]
+pub struct EntityProps {
+    pub on_fire: bool,
+    /// Sheep wool colour name ("white", "lime", …).
+    pub sheep_color: Option<String>,
+    pub sheared: bool,
+    pub baby: bool,
 }
 
 pub(crate) fn load_tables(dir: &Path) -> anyhow::Result<HashMap<String, Value>> {
@@ -301,8 +313,7 @@ fn cond<R: Rng + ?Sized>(ctx: &Ctx, c: &Value, rng: &mut R) -> bool {
         "inverted" => !cond(ctx, &c["term"], rng),
         "any_of" | "alternative" => c["terms"].as_array().into_iter().flatten().any(|t| cond(ctx, t, rng)),
         "all_of" => c["terms"].as_array().into_iter().flatten().all(|t| cond(ctx, t, rng)),
-        // No entity state is modelled; burning (furnace_smelt gating) is assumed false.
-        "entity_properties" => !c["predicate"]["flags"]["is_on_fire"].as_bool().unwrap_or(false),
+        "entity_properties" => entity_props(ctx, c),
         "reference" => false,
         _ => false, // location_check, damage_source_properties, weather/time checks, …
     }
@@ -406,6 +417,38 @@ fn block_state_prop(ctx: &Ctx, c: &Value) -> bool {
     true
 }
 
+/// `entity_properties` for `this` against [`LootContext::this_entity`]; predicates on other
+/// entities (killer equipment etc.) are false since no enchantments are modelled.
+fn entity_props(ctx: &Ctx, c: &Value) -> bool {
+    if short(c["entity"].as_str().unwrap_or("this")) != "this" {
+        return false;
+    }
+    let e = ctx.lc.this_entity.clone().unwrap_or_default();
+    let p = &c["predicate"];
+    let flags = if p["minecraft:flags"].is_object() { &p["minecraft:flags"] } else { &p["flags"] };
+    if let Some(f) = flags["is_on_fire"].as_bool() {
+        if f != e.on_fire {
+            return false;
+        }
+    }
+    if let Some(f) = flags["is_baby"].as_bool() {
+        if f != e.baby {
+            return false;
+        }
+    }
+    if let Some(col) = p["minecraft:components"]["minecraft:sheep/color"].as_str() {
+        if Some(short(col)) != e.sheep_color.as_deref() {
+            return false;
+        }
+    }
+    if let Some(sh) = p["minecraft:type_specific/sheep"]["sheared"].as_bool() {
+        if sh != e.sheared {
+            return false;
+        }
+    }
+    true
+}
+
 // ---------------------------------------------------------------- functions
 
 fn apply_fns<R: Rng + ?Sized>(ctx: &Ctx, fns: &Value, rng: &mut R, stacks: &mut [(i32, i32)]) {
@@ -480,7 +523,12 @@ fn apply_fn<R: Rng + ?Sized>(ctx: &Ctx, f: &Value, rng: &mut R, s: &mut (i32, i3
                 }
             }
         }
-        // furnace_smelt needs a burning entity (not modelled); copy_*/set_* only touch components.
+        "furnace_smelt" => {
+            if let Some((out, _, _)) = ctx.gd.recipes.cook(crate::CookKind::Smelting, s.0) {
+                s.0 = out;
+            }
+        }
+        // copy_*/set_* only touch components.
         _ => {}
     }
 }
