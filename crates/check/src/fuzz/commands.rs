@@ -142,7 +142,7 @@ fn run(ctx: &mut Ctx, cases: &[Value]) -> Result<Vec<Value>> {
         })
 }
 
-fn run_case(bot: &Bot, home: [f64; 3], vanilla: bool, case: &Value) -> Result<Value> {
+fn run_case(bot: &Bot, home: [f64; 3], _vanilla: bool, case: &Value) -> Result<Value> {
     if bot.st().dead { bot.respawn(); bot.wait_until(Duration::from_secs(5), |s| !s.dead); }
     for p in case["pre"].as_array().into_iter().flatten() { bot.cmd(p.as_str().unwrap_or("")); }
     if case["pre"].as_array().map(|a| !a.is_empty()).unwrap_or(false) { barrier(bot)?; }
@@ -155,7 +155,7 @@ fn run_case(bot: &Bot, home: [f64; 3], vanilla: bool, case: &Value) -> Result<Va
     bot.cmd("gamemode survival");
     bot.cmd("effect clear @s");
     bot.cmd("clear");
-    bot.cmd(if vanilla { "kill @e[type=!minecraft:player,distance=..12]" } else { "kill @e" });
+    bot.cmd("kill @e[type=!minecraft:player,distance=..12]");
     if head == "weather" { bot.cmd("weather clear"); }
     if head == "time" { bot.cmd("time set day"); }
     barrier(bot)?;
@@ -169,7 +169,7 @@ fn run_case(bot: &Bot, home: [f64; 3], vanilla: bool, case: &Value) -> Result<Va
 pub struct Outcome { pub fail: bool, pub key: String, pub plain: String }
 
 fn is_failure_key(k: &str) -> bool {
-    ["argument.", "arguments.", "command.", "parsing."].iter().any(|p| k.starts_with(p))
+    ["argument.", "arguments.", "command.", "parsing.", "snbt.", "entity.not_summonable"].iter().any(|p| k.starts_with(p))
         || [".failed", "invalid", "toobig", "no_time_marker", "notfound", "unknown", "too_low", "too_high", "toolow", "toohigh"].iter().any(|p| k.contains(p))
 }
 
@@ -189,10 +189,14 @@ pub fn vanilla_outcome(lines: &[Value]) -> Outcome {
     }
 }
 
-/// Basalt answers in plain English: (failure?, vanilla-equivalent key or `basalt:<text>` when unmapped).
+/// Basalt's reply: its translation key when it sent one (it mirrors vanilla's), else plain English mapped
+/// through [`basalt_key`] (failure?, vanilla-equivalent key or `basalt:<text>` when unmapped).
 pub fn basalt_outcome(cmd: &str, lines: &[Value]) -> Outcome {
     let Some(l) = first_line(lines) else { return Outcome { fail: false, key: String::new(), plain: String::new() } };
     let p = l["plain"].as_str().unwrap_or("");
+    // Basalt now answers with vanilla translation keys; only its own plain-text commands go through the table
+    if let Some(k) = l["key"].as_str() { return Outcome { fail: is_failure_key(k), key: k.to_string(), plain: p.to_string() }; }
+    if p.starts_with('/') { return Outcome { fail: false, key: String::new(), plain: p.to_string() }; }
     let c = cmd.split_whitespace().next().unwrap_or("");
     let (fail, key) = basalt_key(c, p);
     Outcome { fail, key, plain: p.to_string() }
