@@ -126,7 +126,8 @@ fn parse_color(v: Option<&Value>) -> Option<u32> {
 
 // ------------------------------------------------------------------ models
 
-struct RawModel { textures: HashMap<String, String>, elements: Option<Vec<Value>>, ao: bool }
+/// `forced`: texture variables declared as {"sprite": .., "force_translucent": true}
+struct RawModel { textures: HashMap<String, String>, forced: std::collections::HashSet<String>, elements: Option<Vec<Value>>, ao: bool }
 
 struct Baker<'a> {
     jar: &'a Jar,
@@ -169,29 +170,35 @@ impl<'a> Baker<'a> {
         let name = strip(name).to_string();
         if let Some(m) = self.raw.get(&name) { return Some(m.clone()); }
         let v = self.jar.json(&format!("assets/minecraft/models/{name}.json"))?;
-        let mut textures = HashMap::new(); let mut elements = None; let mut ao = true;
+        let mut textures = HashMap::new(); let mut forced = std::collections::HashSet::new(); let mut elements = None; let mut ao = true;
         if let Some(p) = v.get("parent").and_then(|p| p.as_str()) {
-            if let Some(pm) = self.raw(p) { textures = pm.textures.clone(); elements = pm.elements.clone(); ao = pm.ao; }
+            if let Some(pm) = self.raw(p) { textures = pm.textures.clone(); forced = pm.forced.clone(); elements = pm.elements.clone(); ao = pm.ao; }
         }
         if let Some(t) = v.get("textures").and_then(|t| t.as_object()) {
             for (k, val) in t {
                 let s = match val { Value::String(s) => s.clone(), Value::Object(o) => o.get("sprite").and_then(|s| s.as_str()).unwrap_or("").to_string(), _ => continue };
+                if val.get("force_translucent").and_then(|f| f.as_bool()).unwrap_or(false) { forced.insert(k.clone()); } else { forced.remove(k); }
                 textures.insert(k.clone(), s);
             }
         }
         if let Some(e) = v.get("elements").and_then(|e| e.as_array()) { elements = Some(e.clone()); }
         if let Some(a) = v.get("ambientocclusion").and_then(|a| a.as_bool()) { ao = a; }
-        let m = std::rc::Rc::new(RawModel { textures, elements, ao });
+        let m = std::rc::Rc::new(RawModel { textures, forced, elements, ao });
         self.raw.insert(name, m.clone());
         Some(m)
     }
 
-    fn resolve_tex(m: &RawModel, t: &str) -> Option<String> {
+    /// Resolve a face texture reference; also reports whether a variable on the way was force_translucent.
+    fn resolve_tex(m: &RawModel, t: &str) -> Option<(String, bool)> {
         let mut t = t.to_string();
+        let mut forced = false;
         // a bare key ("all") is a texture variable reference too
         if !t.starts_with('#') && !t.contains('/') && !t.contains(':') && m.textures.contains_key(&t) { t = format!("#{t}"); }
         for _ in 0..16 {
-            match t.strip_prefix('#') { Some(k) => t = m.textures.get(k)?.clone(), None => return Some(strip(&t).to_string()) }
+            match t.strip_prefix('#') {
+                Some(k) => { forced |= m.forced.contains(k); t = m.textures.get(k)?.clone() }
+                None => return Some((strip(&t).to_string(), forced)),
+            }
         }
         None
     }
@@ -263,9 +270,17 @@ impl<'a> Baker<'a> {
                         uvs[i] = match dir { DOWN => [p[0], 16.0 - p[2]], UP => [p[0], p[2]], NORTH => [16.0 - p[0], 16.0 - p[1]], SOUTH => [p[0], 16.0 - p[1]], WEST => [p[2], 16.0 - p[1]], _ => [16.0 - p[2], 16.0 - p[1]] };
                     }
                 }
-                let Some(tex) = face.get("texture").and_then(|t| t.as_str()).and_then(|t| Self::resolve_tex(&m, t)) else { out.missing = true; continue };
+                let Some((tex, forced)) = face.get("texture").and_then(|t| t.as_str()).and_then(|t| Self::resolve_tex(&m, t)) else { out.missing = true; continue };
                 if !self.atlas.rects.contains_key(&tex) { out.missing = true; }
-                let (rect, layer) = self.atlas.rects.get(&tex).or_else(|| self.atlas.rects.get("missing")).copied().unwrap();
+                let (rect, _) = self.atlas.rects.get(&tex).or_else(|| self.atlas.rects.get("missing")).copied().unwrap();
+                // render layer from the alpha of the texture region this face samples (matches the
+                // vanilla client per quad, see basalt-check client-mesh): any partially transparent
+                // pixel -> translucent, any fully transparent pixel -> cutout, else solid
+                let layer = if forced || matches!(tex.as_str(), "block/glass" | "block/glass_pane_top") { LAYER_TRANSLUCENT } else {
+                    let (mut u0, mut u1, mut v0, mut v1) = (16f32, 0f32, 16f32, 0f32);
+                    for u in &uvs { u0 = u0.min(u[0]); u1 = u1.max(u[0]); v0 = v0.min(u[1]); v1 = v1.max(u[1]); }
+                    self.atlas.region_layer(rect, [u0 / 16.0, v0 / 16.0, u1 / 16.0, v1 / 16.0])
+                };
                 for u in uvs.iter_mut() {
                     let cu = u[0].clamp(0.0, 16.0) / 16.0; let cv = u[1].clamp(0.0, 16.0) / 16.0;
                     u[0] = (rect.x as f32 + cu * rect.w as f32) / self.atlas.w as f32;
@@ -284,6 +299,21 @@ impl<'a> Baker<'a> {
                 out.boxes.push(b);
             }
         }
+    }
+}
+
+impl Atlas {
+    /// Layer for the sub-rectangle [u0, v0, u1, v1] (0..1 within the sprite) of a sprite.
+    pub fn region_layer(&self, r: Rect, uv: [f32; 4]) -> u8 {
+        let px = |f: f32, n: u32| f.clamp(0.0, 1.0) * n as f32;
+        let x0 = (px(uv[0], r.w) + 1e-3).floor() as u32; let x1 = ((px(uv[2], r.w) - 1e-3).ceil() as u32).max(x0 + 1).min(r.w);
+        let y0 = (px(uv[1], r.h) + 1e-3).floor() as u32; let y1 = ((px(uv[3], r.h) - 1e-3).ceil() as u32).max(y0 + 1).min(r.h);
+        let (mut zero, mut part) = (false, false);
+        for y in y0.min(r.h - 1)..y1 { for x in x0.min(r.w - 1)..x1 {
+            let a = self.rgba[(((r.y + y) * self.w + r.x + x) * 4 + 3) as usize];
+            if a == 0 { zero = true } else if a < 255 { part = true }
+        } }
+        if part { LAYER_TRANSLUCENT } else if zero { LAYER_CUTOUT } else { LAYER_OPAQUE }
     }
 }
 

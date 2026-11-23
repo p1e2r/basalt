@@ -222,7 +222,8 @@ fn diff_scene(rep: &mut Report, scene: &Value, van: &Value, bas: &Value, show: u
     // differences there are reported as "variant" rather than as mesher bugs
     let random = bas["random_variant"].as_bool().unwrap_or(false);
     let iso = scene["blocks"].as_array().map(|a| a.len() <= 1).unwrap_or(true);
-    let add = |rep: &mut Report, class: &'static str, detail: String| {
+    // fluid quads are reported in their own "fluid-*" classes
+    let add = |rep: &mut Report, class: &'static str, fluid: bool, detail: String| {
         let class = match class {
             "uv" | "texture" | "missing-quad" | "extra-quad" | "culling-over" | "culling-under" | "cullface" | "geometry" if random => "variant",
             // colour differences with no neighbours cannot be ambient occlusion
@@ -230,7 +231,7 @@ fn diff_scene(rep: &mut Report, scene: &Value, van: &Value, bas: &Value, show: u
             "shade" if !iso => "ao",
             c => c,
         };
-        rep.add(class, scene, detail, show);
+        if fluid { rep.add(&format!("fluid-{class}"), scene, detail, show) } else { rep.add(class, scene, detail, show) }
     };
     let mut pool: HashMap<(String, usize, [[i64; 3]; 4]), Vec<usize>> = HashMap::new();
     for (i, q) in bq.iter().enumerate() { pool.entry(key(q)).or_default().push(i); }
@@ -252,7 +253,7 @@ fn diff_scene(rep: &mut Report, scene: &Value, van: &Value, bas: &Value, show: u
                 used[j] = true;
                 let cls = compare(q, &bq[j]);
                 if !cls.is_empty() { rep.mismatched_quads += 1; }
-                for (c, d) in cls { add(rep, c, format!("[{} {}] {d}", q.tex, DIRS[k.1].0)); }
+                for (c, d) in cls { add(rep, c, q.src == "fluid", format!("[{} {}] {d}", q.tex, DIRS[k.1].0)); }
             }
             None => unmatched_v.push(q),
         }
@@ -261,14 +262,14 @@ fn diff_scene(rep: &mut Report, scene: &Value, van: &Value, bas: &Value, show: u
         rep.mismatched_quads += 1;
         let over = q.cull.as_deref().map(|c| c != "?" && neighbour_solid(c)).unwrap_or(false);
         let pos: Vec<[f64; 3]> = q.v.iter().map(|v| [v[0], v[1], v[2]]).collect();
-        add(rep, if over { "culling-over" } else { "missing-quad" }, format!("[{} {} cull {:?}] {:?}", q.tex, DIRS[normal_dir(q)].0, q.cull, pos));
+        add(rep, if over { "culling-over" } else { "missing-quad" }, q.src == "fluid", format!("[{} {} cull {:?}] {:?}", q.tex, DIRS[normal_dir(q)].0, q.cull, pos));
     }
     for (j, q) in bq.iter().enumerate() {
         if used[j] { continue; }
         rep.mismatched_quads += 1;
         let under = q.cull.as_deref().map(|c| neighbour_solid(c)).unwrap_or(false);
         let pos: Vec<[f64; 3]> = q.v.iter().map(|v| [v[0], v[1], v[2]]).collect();
-        add(rep, if under { "culling-under" } else { "extra-quad" }, format!("[{} {} cull {:?}] {:?}", q.tex, DIRS[normal_dir(q)].0, q.cull, pos));
+        add(rep, if under { "culling-under" } else { "extra-quad" }, q.src == "fluid", format!("[{} {} cull {:?}] {:?}", q.tex, DIRS[normal_dir(q)].0, q.cull, pos));
     }
 }
 

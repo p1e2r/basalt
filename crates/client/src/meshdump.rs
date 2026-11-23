@@ -85,10 +85,10 @@ fn mesh_scene(a: &Assets, tex: &TexIndex, s: &Value) -> Result<Vec<Value>> {
         }).collect();
         let mut o = json!({
             "src": if q.src == 0 { "block" } else { "fluid" }, "layer": LAYERS[q.layer as usize], "dir": DIRS[q.dir as usize],
-            "tex": name, "ti": if q.tinted { 0 } else { -1 }, "shade": q.shade, "v": verts,
+            "tex": name, "ti": if q.tinted && q.src == 0 { 0 } else { -1 }, "shade": q.shade, "v": verts,
         });
         if q.src == 0 && q.cull < 6 { o["cull"] = json!(DIRS[q.cull as usize]); }
-        if q.tinted {
+        if q.tinted && q.src == 0 {
             let c = ((q.tint[0] * 255.0).round() as u32) << 16 | ((q.tint[1] * 255.0).round() as u32) << 8 | (q.tint[2] * 255.0).round() as u32;
             o["tint"] = json!(c);
         }
