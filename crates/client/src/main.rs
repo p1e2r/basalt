@@ -29,16 +29,17 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
-struct Args { addr: String, name: String, jar: String, screenshot: Option<String>, wait: f32, size: (u32, u32), pos: Option<[f64; 3]>, look: Option<(f32, f32)>, cmds: Vec<String>, walk: f32, chat: Vec<String>, click: Option<char> }
+struct Args { data: String, addr: String, name: String, jar: String, screenshot: Option<String>, wait: f32, size: (u32, u32), pos: Option<[f64; 3]>, look: Option<(f32, f32)>, cmds: Vec<String>, walk: f32, chat: Vec<String>, click: Option<char>, clicks: Vec<(i16, i8, i32)>, hold: f32 }
 
 fn parse_args() -> Args {
-    let mut a = Args { addr: "127.0.0.1:25566".into(), name: "Basalt".into(), jar: std::env::var("BASALT_JAR").unwrap_or_else(|_| "vanilla/client.jar".into()),
-        screenshot: None, wait: 8.0, size: (1280, 720), pos: None, look: None, cmds: Vec::new(), walk: 0.0, chat: Vec::new(), click: None };
+    let mut a = Args { data: "data".into(), addr: "127.0.0.1:25566".into(), name: "Basalt".into(), jar: std::env::var("BASALT_JAR").unwrap_or_else(|_| "vanilla/client.jar".into()),
+        screenshot: None, wait: 8.0, size: (1280, 720), pos: None, look: None, cmds: Vec::new(), walk: 0.0, chat: Vec::new(), click: None, clicks: Vec::new(), hold: 1.0 };
     let mut it = std::env::args().skip(1);
     let triple = |s: String| -> Option<[f64; 3]> { let v: Vec<f64> = s.split(',').filter_map(|p| p.parse().ok()).collect(); (v.len() == 3).then(|| [v[0], v[1], v[2]]) };
     while let Some(k) = it.next() {
         let mut v = || it.next().unwrap_or_default();
         match k.as_str() {
+            "--data" => a.data = v(),
             "--addr" => a.addr = v(), "--name" => a.name = v(), "--jar" => a.jar = v(),
             "--screenshot" => a.screenshot = Some(v()), "--wait" => a.wait = v().parse().unwrap_or(8.0),
             "--size" => { let s = v(); if let Some((w, h)) = s.split_once('x') { a.size = (w.parse().unwrap_or(1280), h.parse().unwrap_or(720)); } }
@@ -46,6 +47,9 @@ fn parse_args() -> Args {
             "--cmd" => a.cmds.push(v()),
             "--chat" => a.chat.push(v()),
             "--click" => a.click = v().chars().next(),
+            "--hold" => a.hold = v().parse().unwrap_or(1.0),
+            // container clicks in the player inventory: "slot:button:mode,..."
+            "--clicks" => a.clicks = v().split(',').filter_map(|c| { let p: Vec<&str> = c.split(':').collect(); Some((p.first()?.parse().ok()?, p.get(1).unwrap_or(&"0").parse().ok()?, p.get(2).unwrap_or(&"0").parse().ok()?)) }).collect(),
             "--walk" => a.walk = v().parse().unwrap_or(0.0),
             "--look" => { let s = v(); if let Some((y, p)) = s.split_once(',') { a.look = Some((y.parse().unwrap_or(0.0), p.parse().unwrap_or(0.0))); } }
             other if !other.starts_with("--") => a.addr = other.to_string(),
@@ -101,6 +105,7 @@ struct Entity { pos: [f64; 3], yaw: f32, kind: i32 }
 struct Game {
     gpu: Gpu,
     assets: Arc<Assets>,
+    rules: Option<Arc<basalt_game::GameData>>,
     ui: UiAtlas,
     biomes: Arc<Mutex<Arc<Vec<Biome>>>>,
     dim_types: Vec<String>,
@@ -117,6 +122,7 @@ struct Game {
     chat_input: Option<String>,
     hp: f32, food: i32,
     hotbar: [ItemStack; 9], held: u8,
+    inventory: Vec<ItemStack>,
     day_time: i64,
     spawned: bool,
     loaded_sent: bool,
@@ -132,13 +138,14 @@ struct Game {
     last_space: Option<Instant>,
     debug: bool,
     disconnected: Option<String>,
+    died: Option<Instant>,
     frames: (u32, Instant, f32),
 }
 
 fn send(out: &tokio::sync::mpsc::UnboundedSender<Vec<u8>>, w: Writer) { let _ = out.send(w.buf); }
 
 impl Game {
-    fn new(gpu_window: Option<Arc<Window>>, size: (u32, u32), assets: Arc<Assets>, args: &Args) -> Result<Game> {
+    fn new(gpu_window: Option<Arc<Window>>, size: (u32, u32), assets: Arc<Assets>, rules: Option<Arc<basalt_game::GameData>>, args: &Args) -> Result<Game> {
         let ui = UiAtlas::build(&assets);
         let skin = assets.skin.as_ref().map(|s| (s.rgba.as_slice(), s.w, s.h)).unwrap_or((&[255; 4], 1, 1));
         let gpu = Gpu::new(gpu_window, size, &assets, (&ui.rgba, ui.w, ui.h), skin)?;
@@ -148,12 +155,12 @@ impl Game {
         let (otx, orx) = tokio::sync::mpsc::unbounded_channel();
         net::spawn(net::Options { addr: args.addr.clone(), name: args.name.clone() }, tx, orx);
         Ok(Game {
-            gpu, assets, ui, biomes, dim_types: Vec::new(), world: World::new(-64, 384), player: Player::new(), mesher,
+            gpu, assets, rules, ui, biomes, dim_types: Vec::new(), world: World::new(-64, 384), player: Player::new(), mesher,
             dirty: HashSet::new(), in_flight: HashSet::new(), events: rx, out: otx, entities: HashMap::new(), my_eid: 0,
-            chat: Vec::new(), chat_input: None, hp: 20.0, food: 20, hotbar: Default::default(), held: 0, day_time: 6000,
+            chat: Vec::new(), chat_input: None, hp: 20.0, food: 20, hotbar: Default::default(), held: 0, inventory: vec![ItemStack::default(); 46], day_time: 6000,
             spawned: false, loaded_sent: false, keys: HashSet::new(), mouse: [false; 2], last_tick: Instant::now(),
             last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None,
-            last_place: Instant::now(), last_space: None, debug: false, disconnected: None, frames: (0, Instant::now(), 0.0),
+            last_place: Instant::now(), last_space: None, debug: false, disconnected: None, died: None, frames: (0, Instant::now(), 0.0),
         })
     }
 
@@ -227,16 +234,18 @@ impl Game {
             Event::Time { day, .. } => self.day_time = day,
             Event::HeldSlot(s) => self.held = s.min(8),
             Event::Slot { window, slot, item } => {
+                if window == 0 && (0..46).contains(&slot) { self.inventory[slot as usize] = item.clone(); }
                 if window == 0 && (36..45).contains(&slot) { self.hotbar[(slot - 36) as usize] = item.clone(); }
                 if window == -2 && (0..9).contains(&slot) { self.hotbar[slot as usize] = item; }
             }
-            Event::Inventory { items } => { for i in 0..9 { if let Some(it) = items.get(36 + i) { self.hotbar[i] = it.clone(); } } }
+            Event::Inventory { items } => { for (i, it) in items.iter().enumerate().take(46) { self.inventory[i] = it.clone(); } for i in 0..9 { if let Some(it) = items.get(36 + i) { self.hotbar[i] = it.clone(); } } }
             Event::AddEntity { id, kind, pos, yaw, .. } => { self.entities.insert(id, Entity { pos, yaw, kind }); }
             Event::MoveEntity { id, delta, rot } => { if let Some(e) = self.entities.get_mut(&id) { for i in 0..3 { e.pos[i] += delta[i]; } if let Some((y, _)) = rot { e.yaw = y; } } }
             Event::TeleportEntity { id, pos, yaw } => { if let Some(e) = self.entities.get_mut(&id) { e.pos = pos; e.yaw = yaw; } }
             Event::RemoveEntities(v) => { for id in v { self.entities.remove(&id); } }
             Event::PlayerName { .. } => {}
             Event::Velocity(v) => self.player.vel = v,
+            Event::Died(m) => { println!("[death] {m}"); self.chat.push((m, Instant::now())); self.died = Some(Instant::now()); }
             Event::Disconnected(m) => { eprintln!("disconnected: {m}"); self.chat.push((format!("Disconnected: {m}"), Instant::now())); self.disconnected = Some(m); }
         }
     }
@@ -302,7 +311,12 @@ impl Game {
     }
 
     fn tick(&mut self) {
-        if !self.spawned { return; }
+        // no death screen yet: respawn automatically after a moment
+        if self.died.map(|t| t.elapsed() > Duration::from_secs(2)).unwrap_or(false) {
+            self.died = None; self.spawned = false;
+            let mut w = Writer::with_id(sb::CLIENT_COMMAND); w.varint(0); send(&self.out, w);
+        }
+        if !self.spawned || self.died.is_some() { return; }
         if !self.loaded_sent && !self.world.chunks.is_empty() {
             send(&self.out, Writer::with_id(sb::PLAYER_LOADED)); self.loaded_sent = true;
         }
@@ -333,8 +347,7 @@ impl Game {
         let hit = self.target();
         match (&self.dig, hit) {
             (Some((b, _, t0)), Some(h)) if *b == h.block => {
-                // survival: finish after a rough hardness-independent delay; the server validates the real time
-                if self.player.gamemode != 1 && t0.elapsed() > Duration::from_millis(1200) {
+                if self.player.gamemode != 1 && t0.elapsed() >= self.dig_time(h.block) {
                     let (b, f) = (*b, h.face); self.player_action(2, b, f); self.dig = None;
                     self.world.set(b[0], b[1], b[2], 0); self.mark_block(b[0], b[1], b[2]);
                 }
@@ -351,6 +364,19 @@ impl Game {
             }
             (Some(_), None) => { if let Some((b, f, _)) = self.dig.take() { self.player_action(1, b, f); } }
             (None, None) => {}
+        }
+    }
+
+    /// Survival break time for the targeted block with the held item (vanilla formula via basalt-game).
+    fn dig_time(&self, b: [i32; 3]) -> Duration {
+        let state = self.world.get(b[0], b[1], b[2]) as u32;
+        let held = self.hotbar[self.held as usize].clone();
+        let held = (held.count > 0).then_some(held.item);
+        let eye = self.eye(1.0);
+        let in_water = self.assets.info(self.world.get(eye[0].floor() as i32, eye[1].floor() as i32, eye[2].floor() as i32)).fluid == 1;
+        match &self.rules {
+            Some(r) => match r.dig_ticks(state, held, self.player.on_ground, in_water) { Some(t) => Duration::from_millis(t as u64 * 50 + 50), None => Duration::from_secs(3600) },
+            None => Duration::from_millis(1200),
         }
     }
 
@@ -590,7 +616,7 @@ impl ApplicationHandler for App {
         let attrs = Window::default_attributes().with_title("Basalt").with_inner_size(winit::dpi::PhysicalSize::new(self.args.size.0, self.args.size.1));
         let w = Arc::new(el.create_window(attrs).expect("create window"));
         let size = w.inner_size();
-        match Game::new(Some(w.clone()), (size.width, size.height), self.assets.clone(), &self.args) {
+        match Game::new(Some(w.clone()), (size.width, size.height), self.assets.clone(), load_rules(&self.args), &self.args) {
             Ok(g) => { self.game = Some(g); self.window = Some(w); }
             Err(e) => { eprintln!("failed to start renderer: {e:#}"); el.exit(); }
         }
@@ -647,11 +673,14 @@ impl ApplicationHandler for App {
 // ---------------------------------------------------------------- headless screenshot
 
 fn run_screenshot(args: &Args, assets: Arc<Assets>, out: &str) -> Result<()> {
-    let mut g = Game::new(None, args.size, assets, args)?;
+    let rules = load_rules(args);
+    let mut g = Game::new(None, args.size, assets, rules, args)?;
     let start = Instant::now();
     let mut placed = false;
     let mut walked_from: Option<Instant> = None;
     let mut clicked = false;
+    let mut clicked_at: Option<Instant> = None;
+    let mut next_click = 0usize;
     while start.elapsed().as_secs_f32() < args.wait {
         g.update();
         if g.spawned && !placed && g.loaded_sent {
@@ -665,7 +694,11 @@ fn run_screenshot(args: &Args, assets: Arc<Assets>, out: &str) -> Result<()> {
             // after the world has settled: l = break the targeted block, r = use/place on it
             match args.click { Some('l') => { g.mouse[0] = true; clicked = true; } Some('r') => { g.use_item(); clicked = true; } _ => {} }
         }
-        if clicked && start.elapsed().as_secs_f32() > args.wait - 1.0 { g.mouse[0] = false; }
+        if clicked && (start.elapsed().as_secs_f32() > args.wait - 1.0 || clicked_at.get_or_insert(Instant::now()).elapsed().as_secs_f32() > args.hold) { g.mouse[0] = false; }
+        if placed && start.elapsed().as_secs_f32() > 4.0 + next_click as f32 * 0.3 && next_click < args.clicks.len() {
+            let (slot, button, mode) = args.clicks[next_click]; next_click += 1;
+            let mut w = Writer::with_id(sb::CONTAINER_CLICK); w.varint(0).varint(0).i16(slot).i8(button).varint(mode).varint(0).bool(false); send(&g.out, w);
+        }
         if placed && args.walk > 0.0 {
             let walking = start.elapsed().as_secs_f32() < args.wait - 1.0 && walked_from.get_or_insert(Instant::now()).elapsed().as_secs_f32() < args.walk;
             if walking { g.keys.insert(KeyCode::KeyW); if g.player.h_collide { g.keys.insert(KeyCode::Space); } else { g.keys.remove(&KeyCode::Space); } }
@@ -691,8 +724,17 @@ fn run_screenshot(args: &Args, assets: Arc<Assets>, out: &str) -> Result<()> {
         println!("{grid}");
     }
     let p = &g.player;
+    let inv: Vec<String> = g.inventory.iter().enumerate().filter(|(_, s)| s.count > 0).map(|(i, s)| format!("{i}:{}x{}", basalt_data::registries::ITEM.get(s.item as usize).unwrap_or(&"?"), s.count)).collect();
+    println!("state: hp {} food {} gamemode {} inv [{}]", g.hp, g.food, g.player.gamemode, inv.join(" "));
     println!("screenshot {out}: pos {:.2},{:.2},{:.2} chunks {} sections {} entities {}", p.pos[0], p.pos[1], p.pos[2], g.world.chunks.len(), g.gpu.sections.len(), g.entities.len());
     Ok(())
+}
+
+fn load_rules(args: &Args) -> Option<Arc<basalt_game::GameData>> {
+    match basalt_game::GameData::load(std::path::Path::new(&args.data)) {
+        Ok(d) => Some(Arc::new(d)),
+        Err(e) => { log::warn!("no game rules from {} ({e:#}); survival dig times will be approximate", args.data); None }
+    }
 }
 
 fn main() -> Result<()> {

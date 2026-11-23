@@ -162,6 +162,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "basalt-data",
+ "basalt-game",
  "basalt-nbt",
  "basalt-protocol",
  "bytemuck",
@@ -234,6 +235,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "basalt-data",
+ "basalt-game",
  "basalt-nbt",
  "basalt-protocol",
  "basalt-world",
@@ -241,6 +243,7 @@ dependencies = [
  "env_logger",
  "log",
  "md-5",
+ "rand",
  "serde_json",
  "tokio",
  "uuid",

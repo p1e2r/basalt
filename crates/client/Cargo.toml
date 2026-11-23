@@ -16,6 +16,7 @@ md-5.workspace = true
 basalt-protocol = { path = "../protocol" }
 basalt-nbt = { path = "../nbt" }
 basalt-data = { path = "../data" }
+basalt-game = { path = "../game" }
 wgpu = { version = "22", default-features = false, features = ["wgsl", "vulkan-portability", "metal", "dx12", "webgl"] }
 winit = { version = "0.30", default-features = false, features = ["x11", "rwh_06"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }

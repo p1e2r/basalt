@@ -13,6 +13,7 @@ use uuid::Uuid;
 pub struct Shared {
     pub cfg: Config,
     pub registries: Registries,
+    pub data: Arc<basalt_game::GameData>,
     pub online: AtomicUsize,
     pub next_eid: AtomicI32,
     pub game: std::sync::Mutex<mpsc::Sender<ToGame>>,

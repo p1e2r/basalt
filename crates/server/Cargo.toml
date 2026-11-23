@@ -18,3 +18,5 @@ basalt-nbt = { path = "../nbt" }
 basalt-data = { path = "../data" }
 basalt-world = { path = "../world" }
 basalt-worldgen = { path = "../worldgen" }
+basalt-game = { path = "../game" }
+rand.workspace = true

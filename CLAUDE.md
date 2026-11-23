@@ -45,7 +45,13 @@ Read NOTES.md for verified packet formats.
 - [x] M3a worldgen terrain/biomes/surface/carvers/ores vs vanilla seed 12345, wired into server
 - [ ] M3b features: trees + vegetation, lakes, springs, geodes, monster rooms; exact neighbour mode
 - [ ] M3c structures (overworld; may move into M8)
-- [ ] M4 survival gameplay   - [ ] M5 mobs   - [ ] M6 world logic   - [ ] M7 client parity
+- [~] M4 survival gameplay — implemented & bot-tested (crates/game rules; server game/{items,inv,health}.rs):
+      hardness/tool dig times (server validates), loot-table drops as item entities + pickup/merge/
+      despawn, Q-drop, all container_click modes, 2x2 + crafting table crafting, armor slots,
+      health/hunger/saturation/regen/starve, fall damage, eating, death (drops inventory) + respawn.
+      Missing: tool durability, armor damage reduction, non-food use_item (buckets etc.), death
+      screen in basalt-client (auto-respawns), human-driven real-client inventory test.
+- [ ] M5 mobs   - [ ] M6 world logic   - [ ] M7 client parity
 - [ ] M8 Nether/End, portals, structures
 - [ ] M9 redstone  - [ ] M10 enchant/anvil/brewing/smithing/XP  - [ ] M11 villagers/raids/AI
 - [ ] M12 bosses/endgame  - [ ] M13 commands/datapacks/advancements/scoreboards

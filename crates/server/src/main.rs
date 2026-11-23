@@ -53,10 +53,11 @@ fn main() -> Result<()> {
     let cfg = parse_args();
     let registries = registry::Registries::load(&cfg.data_dir).context("loading registries")?;
     log::info!("loaded {} synced registries, {} tag registries", registries.synced.len(), registries.tags.len());
+    let data = std::sync::Arc::new(basalt_game::GameData::load(&cfg.data_dir).context("loading game data")?);
     let plains = registries.id("minecraft:worldgen/biome", "minecraft:plains").unwrap_or(0) as u8;
     let (tx, rx) = mpsc::channel();
     let port = cfg.port;
-    let sh = Arc::new(conn::Shared { cfg, registries, online: AtomicUsize::new(0), next_eid: AtomicI32::new(1), game: std::sync::Mutex::new(tx) });
+    let sh = Arc::new(conn::Shared { cfg, registries, data, online: AtomicUsize::new(0), next_eid: AtomicI32::new(1), game: std::sync::Mutex::new(tx) });
     let stop = Arc::new(AtomicBool::new(false));
     let generator: Arc<dyn gen::Generator> = if sh.cfg.flat { Arc::new(gen::Flat::new(plains)) } else {
         let t = std::time::Instant::now();

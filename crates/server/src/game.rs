@@ -1,10 +1,15 @@
 //! Game thread: owns the world and all players; runs at 20 TPS.
+mod health;
+mod inv;
+mod items;
+
 use crate::conn::Shared;
 use crate::gen::{GenPool, Generator};
 use anyhow::{anyhow, Result};
 use basalt_data::{registries as reg, registry_id, BlockState};
 use basalt_protocol::{ids::play::clientbound as cb, ids::play::serverbound as sb, text, Reader, Writer};
 use basalt_world::World;
+use rand::SeedableRng;
 use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
@@ -44,6 +49,28 @@ struct Player {
     last_keepalive: Instant,
     last_sent_pos: ([f64; 3], f32, f32),
     sneaking: bool,
+    // survival
+    dead: bool,
+    health: f32,
+    food: i32,
+    saturation: f32,
+    exhaustion: f32,
+    fall_start: Option<f64>,
+    hurt_cooldown: u32,
+    regen_timer: u32,
+    using: Option<(usize, u32)>,
+    sprinting: bool,
+    jump_held: bool,
+    dig_start: Option<([i32; 3], u64)>,
+    // containers
+    cursor: Stack,
+    craft_result: Stack,
+    table_grid: [Stack; 9],
+    window: inv::Window,
+    next_window: i32,
+    state_id: i32,
+    drag: (i8, Vec<i16>),
+    seen_items: HashSet<i32>,
 }
 
 impl Player {
@@ -62,6 +89,9 @@ pub struct Game {
     spawn: [f64; 3],
     player_type: i32,
     dir: Option<std::path::PathBuf>,
+    data: Arc<basalt_game::GameData>,
+    items: HashMap<i32, items::ItemEntity>,
+    rng: rand::rngs::StdRng,
 }
 
 fn angle(deg: f32) -> u8 { ((deg / 360.0 * 256.0).round() as i32 & 0xFF) as u8 }
@@ -102,7 +132,8 @@ impl Game {
         let dir = sh.cfg.world_dir.clone();
         let world = World::new(dir.as_ref().map(|d| d.join("region")));
         let player_type = registry_id(reg::ENTITY_TYPE, "player").unwrap_or(0);
-        let mut g = Game { sh, world, gen: GenPool::new(gen), players: HashMap::new(), tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir };
+        let data = sh.data.clone();
+        let mut g = Game { sh, world, gen: GenPool::new(gen), players: HashMap::new(), tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir, data, items: HashMap::new(), rng: rand::rngs::StdRng::from_entropy() };
         g.load_level();
         g.spawn = g.find_spawn();
         log::info!("spawn at {:.1} {:.1} {:.1}", g.spawn[0], g.spawn[1], g.spawn[2]);
@@ -125,7 +156,8 @@ impl Game {
     fn save_player(&self, p: &Player) {
         let Some(d) = &self.dir else { return };
         let inv: Vec<_> = p.inv.iter().enumerate().filter(|(_, s)| s.count > 0).map(|(i, s)| serde_json::json!([i, s.item, s.count])).collect();
-        let j = serde_json::json!({ "pos": p.pos, "yaw": p.yaw, "pitch": p.pitch, "gamemode": p.gamemode, "held": p.held, "inv": inv, "flying": p.flying });
+        let j = serde_json::json!({ "pos": p.pos, "yaw": p.yaw, "pitch": p.pitch, "gamemode": p.gamemode, "held": p.held, "inv": inv, "flying": p.flying,
+            "health": p.health, "food": p.food, "saturation": p.saturation, "dead": p.dead });
         let _ = std::fs::create_dir_all(d.join("players"));
         let _ = std::fs::write(d.join("players").join(format!("{}.json", p.uuid)), j.to_string());
     }
@@ -137,6 +169,8 @@ impl Game {
         p.yaw = v["yaw"].as_f64().unwrap_or(0.0) as f32; p.pitch = v["pitch"].as_f64().unwrap_or(0.0) as f32;
         p.gamemode = v["gamemode"].as_u64().unwrap_or(p.gamemode as u64) as u8; p.held = v["held"].as_u64().unwrap_or(0).min(8) as usize;
         p.flying = v["flying"].as_bool().unwrap_or(false);
+        p.health = v["health"].as_f64().unwrap_or(20.0) as f32; p.food = v["food"].as_i64().unwrap_or(20) as i32;
+        p.saturation = v["saturation"].as_f64().unwrap_or(5.0) as f32; p.dead = v["dead"].as_bool().unwrap_or(false);
         for e in v["inv"].as_array().into_iter().flatten() {
             if let (Some(i), Some(item), Some(count)) = (e[0].as_u64(), e[1].as_i64(), e[2].as_i64()) { if (i as usize) < 46 { p.inv[i as usize] = Stack { item: item as i32, count: count as i32 }; } }
         }
@@ -248,15 +282,6 @@ impl Game {
         w
     }
 
-    fn send_inventory(p: &Player) {
-        let mut w = Writer::with_id(cb::CONTAINER_SET_CONTENT); w.varint(0).varint(0).varint(46);
-        for s in &p.inv { write_slot(&mut w, *s); }
-        write_slot(&mut w, Stack::default());
-        p.send(w);
-    }
-    fn send_slot(p: &Player, slot: usize) {
-        let mut w = Writer::with_id(cb::CONTAINER_SET_SLOT); w.varint(0).varint(0).i16(slot as i16); write_slot(&mut w, p.inv[slot]); p.send(w);
-    }
     fn send_abilities(p: &Player) {
         let (inv, can_fly, instabuild) = match p.gamemode { 1 => (true, true, true), 3 => (true, true, false), _ => (false, false, false) };
         let flags = inv as u8 | (p.flying as u8) << 1 | (can_fly as u8) << 2 | (instabuild as u8) << 3;
@@ -268,6 +293,8 @@ impl Game {
         w.varint(p.next_tp).f64(p.pos[0]).f64(p.pos[1]).f64(p.pos[2]).f64(0.0).f64(0.0).f64(0.0).f32(p.yaw).f32(p.pitch).i32(0);
         p.send(w);
     }
+    fn hashed_seed(&self) -> i64 { self.sh.cfg.seed.wrapping_mul(0x9E3779B97F4A7C15u64 as i64) }
+
     fn set_time_packet(&self) -> Writer {
         let mut w = Writer::with_id(cb::SET_TIME); w.i64(self.tick as i64).varint(2);
         for clock in 0..2 { w.varint(clock).varlong(self.day_time).f32(0.0).f32(1.0); }
@@ -286,13 +313,16 @@ impl Game {
             gamemode: self.sh.cfg.gamemode, flying: false, inv: [Stack::default(); 46], held: 0, loaded: HashSet::new(), center: (i32::MAX, i32::MAX),
             pending_tp: None, next_tp: 0, batch_outstanding: false, chunks_per_tick: 9.0, keepalive: None, last_keepalive: Instant::now(),
             last_sent_pos: ([0.0; 3], 0.0, 0.0), sneaking: false,
+            dead: false, health: 20.0, food: 20, saturation: 5.0, exhaustion: 0.0, fall_start: None, hurt_cooldown: 0, regen_timer: 0,
+            using: None, sprinting: false, jump_held: false, dig_start: None, cursor: Stack::default(), craft_result: Stack::default(),
+            table_grid: [Stack::default(); 9], window: inv::Window::Inventory, next_window: 0, state_id: 0, drag: (0, Vec::new()), seen_items: HashSet::new(),
         };
         self.load_player(&mut p);
         let dims = self.sh.registries.entries("minecraft:dimension_type");
         let dim_type = dims.iter().position(|d| d == "minecraft:overworld").unwrap_or(0) as i32;
         let mut w = Writer::with_id(cb::LOGIN);
         w.i32(eid).bool(false).varint(1).str("minecraft:overworld").varint(self.sh.cfg.max_players as i32).varint(p.view).varint(p.view)
-            .bool(false).bool(true).bool(false).varint(dim_type).str("minecraft:overworld").i64(self.sh.cfg.seed.wrapping_mul(0x9E3779B97F4A7C15u64 as i64))
+            .bool(false).bool(true).bool(false).varint(dim_type).str("minecraft:overworld").i64(self.hashed_seed())
             .u8(p.gamemode).i8(-1).bool(false).bool(false).bool(false).varint(0).varint(63).bool(false).u8(0);
         p.send(w);
         let mut w = Writer::with_id(cb::CHANGE_DIFFICULTY); w.u8(1).bool(false); p.send(w);
@@ -313,8 +343,8 @@ impl Game {
         let mut w = Writer::with_id(cb::GAME_EVENT); w.u8(13).f32(0.0); p.send(w);
         let mut w = Writer::with_id(cb::TICKING_STATE); w.f32(20.0).bool(false); p.send(w);
         let mut w = Writer::with_id(cb::TICKING_STEP); w.varint(0); p.send(w);
-        Self::send_inventory(&p);
-        let mut w = Writer::with_id(cb::SET_HEALTH); w.f32(20.0).varint(20).f32(5.0); p.send(w);
+        Self::send_window(&mut p);
+        let mut w = Writer::with_id(cb::SET_HEALTH); w.f32(p.health).varint(p.food).f32(p.saturation); p.send(w);
         let mut w = Writer::with_id(cb::SET_EXPERIENCE); w.f32(0.0).varint(0).varint(0); p.send(w);
         self.broadcast(None, || Self::info_add(&p));
         let add = self.add_entity(&p);
@@ -323,9 +353,11 @@ impl Game {
         self.players.insert(eid, p);
         self.system_chat(text::colored(&format!("{name} joined the game"), "yellow"));
         self.stream_chunks(eid);
+        if self.players[&eid].dead { let p = &self.players[&eid]; let mut w = Writer::with_id(cb::PLAYER_COMBAT_KILL); w.varint(eid).nbt(&text::plain("You died")); p.send(w); }
     }
 
     fn leave(&mut self, eid: i32) {
+        if self.players.get(&eid).map(|p| !p.dead).unwrap_or(false) { self.close_window(eid); }
         let Some(p) = self.players.remove(&eid) else { return };
         self.save_player(&p);
         log::info!("{} left", p.name);
@@ -389,15 +421,27 @@ impl Game {
                     if np.iter().any(|v| !v.is_finite() || v.abs() > 3.0e7) { return Err(anyhow!("invalid position")); }
                     let d2: f64 = (0..3).map(|i| (np[i] - p.pos[i]).powi(2)).sum();
                     if d2 > 100.0 * 100.0 { log::warn!("{} moved too quickly ({:.1})", p.name, d2.sqrt()); Self::teleport(p); return Ok(()); }
-                    p.pos = np;
+                    if p.dead { return Ok(()); }
+                    let old = p.pos; p.pos = np;
+                    p.on_ground = flags & 1 != 0;
+                    let jumped = np[1] > old[1] + 0.2 && !p.on_ground && p.jump_held;
+                    let hd = ((np[0] - old[0]).powi(2) + (np[2] - old[2]).powi(2)).sqrt();
+                    self.track_fall(eid, old[1]);
+                    self.add_move_exhaustion(eid, hd, jumped);
+                    let Some(p) = self.players.get_mut(&eid) else { return Ok(()) };
+                    if jumped { p.jump_held = false; }
                 }
+                let Some(p) = self.players.get_mut(&eid) else { return Ok(()) };
                 if let Some((y, pi)) = rot { if y.is_finite() && pi.is_finite() { p.yaw = y; p.pitch = pi.clamp(-90.0, 90.0); } }
                 p.on_ground = flags & 1 != 0;
                 if pos.is_some() && p.chunk() != p.center { self.stream_chunks(eid); }
             }
             sb::PLAYER_ABILITIES => { let f = r.u8()?; if let Some(p) = self.players.get_mut(&eid) { p.flying = f & 2 != 0 && matches!(p.gamemode, 1 | 3); } }
-            sb::PLAYER_COMMAND => { let _id = r.varint()?; let _action = r.varint()?; }
-            sb::PLAYER_INPUT => { let f = r.u8()?; if let Some(p) = self.players.get_mut(&eid) { p.sneaking = f & 32 != 0; } }
+            sb::PLAYER_COMMAND => { let _id = r.varint()?; let action = r.varint()?; if let Some(p) = self.players.get_mut(&eid) { match action { 1 => p.sprinting = true, 2 => p.sprinting = false, _ => {} } } }
+            sb::PLAYER_INPUT => { let f = r.u8()?; if let Some(p) = self.players.get_mut(&eid) { p.sneaking = f & 32 != 0; p.jump_held = f & 16 != 0; p.sprinting = p.sprinting || f & 64 != 0 && f & 1 != 0; if f & 1 == 0 { p.sprinting = false; } } }
+            sb::CONTAINER_CLICK => { self.container_click(eid, &mut r)?; }
+            sb::CONTAINER_CLOSE => { let _id = r.varint()?; self.close_window(eid); }
+            sb::CLIENT_COMMAND => { if r.varint()? == 0 { self.respawn(eid); } }
             sb::SET_CARRIED_ITEM => { let s = r.i16()?; if let Some(p) = self.players.get_mut(&eid) { if (0..9).contains(&s) { p.held = s as usize; } } }
             sb::SWING => {
                 let hand = r.varint()?;
@@ -405,7 +449,7 @@ impl Game {
             }
             sb::SET_CREATIVE_MODE_SLOT => {
                 let slot = r.i16()?; let st = read_slot(&mut r)?;
-                if let Some(p) = self.players.get_mut(&eid) { if p.gamemode == 1 && (0..46).contains(&slot) { p.inv[slot as usize] = st; } }
+                if let Some(p) = self.players.get_mut(&eid) { if p.gamemode == 1 && (1..46).contains(&slot) { p.inv[slot as usize] = st; } }
             }
             sb::PLAYER_ACTION => {
                 let status = r.varint()?; let (x, y, z) = r.position()?; let _face = r.u8()?; let seq = r.varint()?;
@@ -418,7 +462,7 @@ impl Game {
                 if hand == 0 { self.place(eid, [x, y, z], face.clamp(0, 5) as usize, cursor); }
                 if let Some(p) = self.players.get(&eid) { let mut w = Writer::with_id(cb::BLOCK_CHANGED_ACK); w.varint(seq); p.send(w); }
             }
-            sb::USE_ITEM => { let _hand = r.varint()?; let seq = r.varint()?; if let Some(p) = self.players.get(&eid) { let mut w = Writer::with_id(cb::BLOCK_CHANGED_ACK); w.varint(seq); p.send(w); } }
+            sb::USE_ITEM => { let hand = r.varint()?; let seq = r.varint()?; self.start_using(eid, hand); if let Some(p) = self.players.get(&eid) { let mut w = Writer::with_id(cb::BLOCK_CHANGED_ACK); w.varint(seq); p.send(w); } }
             sb::CHAT => {
                 let msg = r.str()?;
                 if msg.len() > 256 || msg.chars().any(|c| c.is_control()) { return Err(anyhow!("illegal chat")); }
@@ -432,35 +476,76 @@ impl Game {
         Ok(())
     }
 
-    fn give(&mut self, eid: i32, item: i32, mut count: i32) {
-        let Some(p) = self.players.get_mut(&eid) else { return };
-        let max = 64;
-        let order: Vec<usize> = (36..45).chain(9..36).collect();
-        for &i in &order { if count == 0 { break; } let s = &mut p.inv[i]; if s.count > 0 && s.item == item && s.count < max { let n = (max - s.count).min(count); s.count += n; count -= n; Self::send_slot(p, i); } }
-        for &i in &order { if count == 0 { break; } let s = &mut p.inv[i]; if s.count == 0 { let n = max.min(count); *s = Stack { item, count: n }; count -= n; Self::send_slot(p, i); } }
-    }
-
     fn dig(&mut self, eid: i32, status: i32, b: [i32; 3]) {
+        match status {
+            3 | 4 => { // drop held stack / one item
+                let Some(p) = self.players.get_mut(&eid) else { return };
+                let slot = 36 + p.held; let s = p.inv[slot];
+                if s.count <= 0 || p.dead { return; }
+                let n = if status == 3 { s.count } else { 1 };
+                p.inv[slot].count -= n; if p.inv[slot].count <= 0 { p.inv[slot] = Stack::default(); }
+                Self::send_window(p);
+                self.throw_item(eid, Stack { item: s.item, count: n }, false);
+                return;
+            }
+            5 => { if let Some(p) = self.players.get_mut(&eid) { p.using = None; } return; }
+            6 => { // swap main/off hand
+                if let Some(p) = self.players.get_mut(&eid) { let slot = 36 + p.held; p.inv.swap(slot, 45); Self::send_window(p); }
+                return;
+            }
+            _ => {}
+        }
         let Some(p) = self.players.get(&eid) else { return };
+        if p.dead { return; }
         let eye = [p.pos[0], p.pos[1] + 1.62, p.pos[2]];
         let d2: f64 = (0..3).map(|i| (b[i] as f64 + 0.5 - eye[i]).powi(2)).sum();
         if d2 > 8.0 * 8.0 { return; }
         let creative = p.gamemode == 1;
-        let breaks = (creative && status == 0) || (!creative && p.gamemode != 2 && status == 2);
-        if !breaks { return; }
+        if p.gamemode == 2 || p.gamemode == 3 { return; }
         let old = self.world.get_block(b[0], b[1], b[2]);
-        if old == 0 || BlockState(old).name() == "bedrock" && !creative { return; }
+        if old == 0 { return; }
+        let held = { let s = p.inv[36 + p.held]; (s.count > 0).then_some(s.item) };
+        let feet = self.world.get_block(p.pos[0].floor() as i32, (p.pos[1] + 1.62).floor() as i32, p.pos[2].floor() as i32);
+        let in_water = basalt_world::props::props(feet).has_fluid();
+        let ticks = self.data.dig_ticks(old, held, p.on_ground, in_water);
+        let breaks = if creative { status == 0 } else {
+            match (status, ticks) {
+                (_, None) => false,
+                (0, Some(0)) => true,
+                (0, Some(_)) => { self.players.get_mut(&eid).unwrap().dig_start = Some((b, self.tick)); false }
+                (1, _) => { self.players.get_mut(&eid).unwrap().dig_start = None; false }
+                (2, Some(t)) => {
+                    let started = self.players.get_mut(&eid).unwrap().dig_start.take();
+                    // allow some latency slack; reject clearly-too-fast breaks
+                    let ok = matches!(started, Some((sb, t0)) if sb == b && (self.tick - t0) as f64 + 6.0 >= t as f64 * 0.7);
+                    if !ok { let st = old; self.players[&eid].send({ let mut w = Writer::with_id(cb::BLOCK_UPDATE); w.position(b[0], b[1], b[2]).varint(st as i32); w }); }
+                    ok
+                }
+                _ => false,
+            }
+        };
+        if !breaks { return; }
         self.set_block(b[0], b[1], b[2], 0);
         // world event 2001: block break particles + sound for others
         self.broadcast_chunk((b[0] >> 4, b[2] >> 4), Some(eid), || { let mut w = Writer::with_id(cb::LEVEL_EVENT); w.i32(2001).position(b[0], b[1], b[2]).i32(old as i32).bool(false); w });
         if !creative {
-            // simplification: drops go straight into the inventory
-            if let Some(item) = registry_id(reg::ITEM, BlockState(old).name()) { self.give(eid, item, 1); }
+            if let Some(p) = self.players.get_mut(&eid) { p.exhaustion += 0.005; }
+            let drops = if self.data.can_harvest(old, held) { self.data.block_drops(old, held, false, 0, &mut self.rng) } else { Vec::new() };
+            self.drop_at_block(b, drops);
+            // doors: the other half goes too
+            if BlockState(old).get("half").is_some() && (BlockState(old).block().kind == "door" || BlockState(old).name().ends_with("_door")) {
+                let oy = if BlockState(old).get("half") == Some("upper") { -1 } else { 1 };
+                if BlockState(self.world.get_block(b[0], b[1] + oy, b[2])).block().name == BlockState(old).block().name { self.set_block(b[0], b[1] + oy, b[2], 0); }
+            }
         }
     }
 
     fn place(&mut self, eid: i32, b: [i32; 3], face: usize, cursor: [f32; 3]) {
         let Some(p) = self.players.get(&eid) else { return };
+        if p.dead { return; }
+        let clicked_name = BlockState(self.world.get_block(b[0], b[1], b[2])).name();
+        if clicked_name == "crafting_table" && !p.sneaking && p.gamemode != 3 { self.open_crafting_table(eid); return; }
+        let p = &self.players[&eid];
         if p.gamemode == 3 || p.gamemode == 2 { return; }
         let slot = 36 + p.held; let st = p.inv[slot];
         if st.count <= 0 { return; }
@@ -501,7 +586,7 @@ impl Game {
             if replaceable(self.world.get_block(t[0], t[1] + 1, t[2])) { self.set_block(t[0], t[1] + 1, t[2], with_prop(state, "half", "upper")); }
         }
         let p = self.players.get_mut(&eid).unwrap();
-        if p.gamemode != 1 { p.inv[slot].count -= 1; if p.inv[slot].count <= 0 { p.inv[slot] = Stack::default(); } Self::send_slot(p, slot); }
+        if p.gamemode != 1 { p.inv[slot].count -= 1; if p.inv[slot].count <= 0 { p.inv[slot] = Stack::default(); } Self::send_window(p); }
     }
 
     fn command(&mut self, eid: i32, cmd: &str) {
@@ -537,7 +622,7 @@ impl Game {
             }
             "give" => {
                 let (item, count) = (args.get(1).copied().unwrap_or(""), args.get(2).and_then(|c| c.parse().ok()).unwrap_or(1));
-                match registry_id(reg::ITEM, item) { Some(id) => { self.give(eid, id, count); reply(self, format!("Gave {count} {item}")); } None => reply(self, format!("Unknown item {item}")) }
+                match registry_id(reg::ITEM, item) { Some(id) => { let left = self.give_stack(eid, Stack { item: id, count }); if left > 0 { self.throw_item(eid, Stack { item: id, count: left }, false); } reply(self, format!("Gave {count} {item}")); } None => reply(self, format!("Unknown item {item}")) }
             }
             "time" => {
                 let v = match args.get(2).copied().or(args.get(1).copied()) { Some("day") => Some(1000), Some("noon") => Some(6000), Some("night") => Some(13000), Some("midnight") => Some(18000), Some(n) => n.parse().ok(), None => None };
@@ -558,6 +643,8 @@ impl Game {
         self.tick += 1;
         self.day_time += 1;
         for c in self.gen.finished() { self.add_generated(c); }
+        self.tick_items();
+        self.tick_survival();
         let ids: Vec<i32> = self.players.keys().copied().collect();
         for &eid in &ids { self.stream_chunks(eid); }
         // movement broadcast
@@ -621,7 +708,7 @@ impl Game {
     }
 }
 
-fn write_slot(w: &mut Writer, s: Stack) {
+pub(crate) fn write_slot(w: &mut Writer, s: Stack) {
     if s.count <= 0 { w.varint(0); } else { w.varint(s.count).varint(s.item).varint(0).varint(0); }
 }
 
