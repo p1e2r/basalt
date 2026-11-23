@@ -30,6 +30,31 @@ real server/client over the wire.
   B70000 C10000 CC0000 D60000 E00000 EA0600 F41B00 FF3200. Stems: age a -> (32a, 255-8a, 4a).
 - Emission: glow lichen 7 only with a face; trial spawner 4 (waiting) / 8 (active, ejecting) / 0;
   vault 6 inactive / 12 otherwise.
+- Element rotation: a positive "angle" about the y axis turns (x, z) offsets from the origin like
+  x' = x cos a + z sin a, z' = -x sin a + z cos a (diagonal tendrils / cross planes of sculk sensors,
+  propagules ... were mirrored before). This one sign also fixed most "weighted variant" mismatches.
+- Fluids (water/lava, also waterlogged blocks), measured with the oracle:
+  - Heights: source and falling (level >= 8) 8/9, flowing level l (1..7) (8-l)/9. A corner height is the
+    average over the 4 cells touching the corner (own, the two side cells, the diagonal): a fluid cell of
+    height >= 0.8 weighs 10, a lower one weighs 1, an open non-fluid cell (air, plants) weighs 1 at height 0,
+    a solid cell does not count; the diagonal counts only if one of the two side cells holds the fluid. Any
+    of the four cells having the same fluid above it makes the corner 1.0. An isolated source is therefore
+    (8/9*10)/12 = 0.7407, drawn at 0.7397: every corner < 1 is drawn 0.001 lower, full corners stay at 1.0.
+  - Top: always drawn (also under stone) unless the cell above has the same fluid; double-sided = two quads
+    with opposite winding; still sprite uv (u = x, v = z), or, when the flow vector (pushes away from higher
+    neighbours / towards fluid below an open neighbour) is non-zero, the flow sprite using only its central
+    half (0.25..0.75) rotated by atan2(flow) - 90 degrees (flow +z = unrotated).
+  - Bottom: one quad (still sprite, u = x, v = z) at y = 0.001, shade 0.5; hidden by the same fluid below, an
+    occluding block below, or the block's own shape covering the whole bottom (stairs, slabs, sculk sensors; NOT
+    trapdoors, mangrove roots, leaves, glass, grates which never occlude). When hidden, side faces start at y = 0.
+  - Sides: inset 0.001 (north z=0.001, south 0.999, west x=0.001, east 0.999), shade 0.8 NS / 0.6 WE, flow sprite
+    at half scale (u 0..0.5, v = (1 - drawn height) * 0.5 at the top, 0.5 at the bottom), drawn double-sided.
+    Culled by the same fluid, by an occluding neighbour, by a neighbour face (or the own block's shape) covering
+    0..h. Water against a full non-opaque cube (glass, leaves) draws one single-sided water_overlay quad instead;
+    lava has no overlay (plain flow quads).
+  - Light is uniform per quad: top and sides = per-channel max(own cell, cell above), bottom = max(own cell, cell
+    below); the block's own emission counts as block light of its cell, full-bright blocks (active sculk sensor,
+    magma) give 15/15, lava block light 15. Tint = biome water colour (water) / white (lava) times the shade.
 
 ## Verified wire formats (26.2)
 - play/login: i32 eid, bool hardcore, varint n + n dim names, varint maxPlayers,

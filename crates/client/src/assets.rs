@@ -33,6 +33,8 @@ pub struct Model {
     pub quads: Vec<Quad>,
     /// Element boxes in block units (0..1).
     pub boxes: Vec<[f32; 6]>,
+    /// boxes of the elements that are not rotated (rotated ones - tendrils, cross plants - do not shape the cell)
+    pub shape_boxes: Vec<[f32; 6]>,
     pub occludes: bool,
     pub full_cube: bool,
     /// a face referenced a texture that could not be resolved / is not in the atlas
@@ -41,6 +43,9 @@ pub struct Model {
     /// boundary face covered by its element boxes (row = first in-plane axis, bit = second).
     /// A neighbour's face is hidden when this mask covers it (shape-based face culling).
     pub occl: Option<Box<[[u16; 16]; 6]>>,
+    /// Same masks from the element boxes regardless of render layer: the block's own shape, used to cull
+    /// fluid faces that the block itself covers (waterlogged stairs, slabs, sculk sensors).
+    pub shape: Option<Box<[[u16; 16]; 6]>>,
 }
 
 /// In-plane axes of a face direction's axis (shared by culling masks and smooth lighting).
@@ -49,10 +54,17 @@ pub fn plane_axes(dir: u8) -> (usize, usize, usize) {
 }
 
 impl Model {
+    fn compute_shape(&mut self) { self.shape = Self::masks(&self.shape_boxes); }
+
     fn compute_occlusion(&mut self) {
         if self.boxes.is_empty() || self.quads.is_empty() || self.quads.iter().any(|q| q.layer != LAYER_OPAQUE) { return; }
+        self.occl = Self::masks(&self.boxes);
+    }
+
+    fn masks(boxes: &[[f32; 6]]) -> Option<Box<[[u16; 16]; 6]>> {
+        if boxes.is_empty() { return None; }
         let mut m = [[0u16; 16]; 6];
-        for b in &self.boxes {
+        for b in boxes {
             for d in 0..6u8 {
                 let (ax, t1, t2) = plane_axes(d);
                 let touches = if DIR_VEC[d as usize][ax] > 0 { b[3 + ax] >= 0.999 } else { b[ax] <= 0.001 };
@@ -62,7 +74,7 @@ impl Model {
                 for i in a0..a1 { for j in b0..b1 { m[d as usize][i] |= 1 << j; } }
             }
         }
-        self.occl = Some(Box::new(m));
+        Some(Box::new(m))
     }
 }
 
@@ -73,6 +85,11 @@ pub struct StateInfo {
     pub occludes: bool,
     /// Full non-opaque cube (glass, ice): cull faces against the same block.
     pub self_cull: bool,
+    /// full non-opaque cube (glass, leaves, ice): a fluid side face against it is drawn with the overlay sprite
+    pub fluid_overlay: bool,
+    /// the block's own shape hides the fluid faces it covers (stairs, slabs, sculk sensors; not
+    /// trapdoors, roots, leaves, glass, which never occlude)
+    pub hides_fluid: bool,
     pub collides: bool,
     /// 0 = none, 1 = water, 2 = lava
     pub fluid: u8,
@@ -274,7 +291,7 @@ impl<'a> Baker<'a> {
                     let mut apply = |axis: usize, angle: f32| {
                         if angle == 0.0 { return; }
                         for p in pos.iter_mut() {
-                            *p = rot_point(*p, axis, -angle * if axis == 1 { 1.0 } else { -1.0 }, origin);
+                            *p = rot_point(*p, axis, angle * if axis == 1 { 1.0 } else { -1.0 }, origin);
                         }
                         if rescale {
                             let s = 1.0 / angle.to_radians().cos().abs().max(0.01);
@@ -328,6 +345,7 @@ impl<'a> Baker<'a> {
                 let full = b[0] <= 0.001 && b[1] <= 0.001 && b[2] <= 0.001 && b[3] >= 0.999 && b[4] >= 0.999 && b[5] >= 0.999;
                 if full { out.full_cube = true; if opaque_faces == 6 { out.occludes = true; } }
                 out.boxes.push(b);
+                if rot.and_then(|r| r.get("angle")).and_then(|a| a.as_f64()).unwrap_or(0.0) == 0.0 && rot.map(|r| r.get("x").is_none() && r.get("y").is_none() && r.get("z").is_none()).unwrap_or(true) { out.shape_boxes.push(b); }
             }
         }
     }
@@ -464,7 +482,7 @@ pub struct Assets {
     pub atlas: Atlas,
     pub models: Vec<Model>,
     pub states: Vec<StateInfo>,
-    pub water_still: [f32; 4], pub water_flow: [f32; 4], pub lava_still: [f32; 4],
+    pub water_still: [f32; 4], pub water_flow: [f32; 4], pub lava_still: [f32; 4], pub water_overlay: [f32; 4], pub lava_flow: [f32; 4],
     pub grass_map: Option<Image>, pub foliage_map: Option<Image>,
     pub biome_json: HashMap<String, Value>,
     pub dimension_types: HashMap<String, DimensionType>,
@@ -528,6 +546,7 @@ impl Assets {
                     for (name, x, y, uvl) in &applied { baker.bake(name, *x, *y, *uvl, &mut m); }
                     // blocks drawn like entities (signs, beds, banners, heads) never hide neighbour faces
                     if !matches!(b.kind, "bed" | "standing_sign" | "wall_sign" | "ceiling_hanging_sign" | "wall_hanging_sign" | "banner" | "wall_banner" | "skull" | "wall_skull" | "piglinwallskull" | "player_head" | "player_wall_head" | "wither_skull" | "wither_wall_skull") { m.compute_occlusion(); }
+                    m.compute_shape();
                     models.push(m); let i = models.len() as u32 - 1; cache.insert(key, i); i
                 } };
                 let m = &models[mi as usize];
@@ -540,7 +559,7 @@ impl Assets {
                 if name == "snow" { collides = st.get("layers") != Some("1"); }
                 if b.kind == "fence_gate" && st.get("open") == Some("true") { collides = false; }
                 states.push(StateInfo {
-                    model: mi, tint: tint_for_state(name, st), occludes: m.occludes, self_cull: m.full_cube && !m.occludes && !name.ends_with("leaves"), collides, fluid, fluid_level: level,
+                    model: mi, tint: tint_for_state(name, st), occludes: m.occludes, self_cull: m.full_cube && !m.occludes && !name.ends_with("leaves"), fluid_overlay: m.full_cube && !m.occludes, hides_fluid: !(name.contains("trapdoor") || name == "mangrove_roots" || name.ends_with("leaves") || name.contains("glass") || name.contains("grate")), collides, fluid, fluid_level: level,
                     emits_light: basalt_world::props::emission(id) > 0, emission: basalt_world::props::emission(id),
                     full_bright: name == "magma_block" || (name.ends_with("sculk_sensor") && st.get("sculk_sensor_phase") == Some("active")),
                     ao_occluder: m.full_cube && collides && !(m.full_cube && !m.occludes && !name.ends_with("leaves")),
@@ -613,7 +632,7 @@ impl Assets {
         }
         let _ = BLOCKS;
         Ok(Assets {
-            water_still: uvrect("block/water_still"), water_flow: uvrect("block/water_flow"), lava_still: uvrect("block/lava_still"),
+            water_still: uvrect("block/water_still"), water_flow: uvrect("block/water_flow"), lava_still: uvrect("block/lava_still"), water_overlay: uvrect("block/water_overlay"), lava_flow: uvrect("block/lava_flow"),
             grass_map: jar.png("assets/minecraft/textures/colormap/grass.png"), foliage_map: jar.png("assets/minecraft/textures/colormap/foliage.png"),
             font: jar.png("assets/minecraft/textures/font/ascii.png"),
             atlas, models, states, biome_json, dimension_types, gui, entity_tex, item_icons, item_models, item_tint, no_model, random_variant,

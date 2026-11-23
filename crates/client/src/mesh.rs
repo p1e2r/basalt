@@ -32,11 +32,67 @@ const FACE_SHADE: [f32; 6] = [0.5, 1.0, 0.8, 0.8, 0.6, 0.6];
 
 fn rgb(c: u32) -> [f32; 3] { [(c >> 16 & 255) as f32 / 255.0, (c >> 8 & 255) as f32 / 255.0, (c & 255) as f32 / 255.0] }
 
-fn fluid_height(a: &Assets, s: &Snapshot, x: i32, y: i32, z: i32, kind: u8) -> f32 {
-    let i = a.info(s.blocks[sidx(x, y, z)]);
-    if i.fluid != kind { return -1.0; }
-    if a.info(s.blocks[sidx(x, (y + 1).min(16), z)]).fluid == kind && y < 16 { return 1.0; }
-    if i.fluid_level >= 8 { 1.0 } else { (8 - i.fluid_level) as f32 / 9.0 }
+/// Logical height of a fluid cell: sources and falling fluid 8/9, flowing level l (1..7) (8-l)/9.
+pub fn fluid_level_height(level: u8) -> f32 { if level >= 8 { 8.0 / 9.0 } else { (8 - level) as f32 / 9.0 } }
+
+/// One cell around a fluid corner, as far as the corner average cares.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum CornerCell { /** same fluid, with its level */ Fluid(u8), /** non-solid, no fluid (air, plants) */ Open, /** solid */ Solid }
+
+/// Logical height of a fluid corner (before the 0.001 inset), measured against the vanilla client
+/// (basalt-check client-mesh): the average over the cells touching the corner - `cells` = own cell,
+/// the two side cells, the diagonal. A fluid cell weighs 10 at height >= 0.8 (sources, falling) and 1
+/// below that, an open non-fluid cell weighs 1 at height 0, a solid cell does not count. The diagonal
+/// counts only when one of the two side cells holds the fluid. `above_same` = a cell above any of the
+/// four holds the same fluid, which makes the corner full (1.0).
+pub fn fluid_corner_height(cells: [CornerCell; 4], above_same: bool) -> f32 {
+    if above_same { return 1.0; }
+    let (mut sum, mut wt) = (0.0f32, 0.0f32);
+    let side_fluid = matches!(cells[1], CornerCell::Fluid(_)) || matches!(cells[2], CornerCell::Fluid(_));
+    for (n, c) in cells.iter().enumerate() {
+        if n == 3 && !side_fluid { continue; }
+        match c {
+            CornerCell::Fluid(l) => { let h = fluid_level_height(*l); if h >= 0.8 { sum += h * 10.0; wt += 10.0; } else { sum += h; wt += 1.0; } }
+            CornerCell::Open => wt += 1.0,
+            CornerCell::Solid => {}
+        }
+    }
+    if wt == 0.0 { 0.0 } else { sum / wt }
+}
+
+/// Horizontal flow direction (x, z) of the fluid at a cell: every horizontal neighbour pushes away from
+/// a higher fluid level; an open neighbour with the fluid below it pulls towards it. (0, 0) = still.
+pub fn fluid_flow(a: &Assets, s: &Snapshot, x: i32, y: i32, z: i32, kind: u8, own_level: u8) -> [f32; 2] {
+    let own = fluid_level_height(own_level);
+    let mut v = [0.0f32; 2];
+    for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+        let n = a.info(s.blocks[sidx(x + dx, y, z + dz)]);
+        let diff = if n.fluid == kind { own - fluid_level_height(n.fluid_level) } else if !n.collides {
+            let b = a.info(s.blocks[sidx(x + dx, y - 1, z + dz)]);
+            if b.fluid == kind { own - (fluid_level_height(b.fluid_level) - 8.0 / 9.0) } else { 0.0 }
+        } else { 0.0 };
+        v[0] += dx as f32 * diff; v[1] += dz as f32 * diff;
+    }
+    v
+}
+
+fn fluid_corner(a: &Assets, s: &Snapshot, x: i32, y: i32, z: i32, kind: u8, cx: i32, cz: i32) -> f32 {
+    let mut cells = [CornerCell::Solid; 4];
+    let mut above_same = false;
+    for (n, (dx, dz)) in [(0, 0), (cx, 0), (0, cz), (cx, cz)].into_iter().enumerate() {
+        let i = a.info(s.blocks[sidx(x + dx, y, z + dz)]);
+        if a.info(s.blocks[sidx(x + dx, y + 1, z + dz)]).fluid == kind { above_same = true; }
+        cells[n] = if i.fluid == kind { CornerCell::Fluid(i.fluid_level) } else if !i.collides { CornerCell::Open } else { CornerCell::Solid };
+    }
+    fluid_corner_height(cells, above_same)
+}
+
+/// Whether a neighbour/own 16x16 face mask covers a fluid side face (the whole width, from the floor up to `h`).
+fn mask_covers_side(m: &[u16; 16], dir: u8, h: f32) -> bool {
+    let (_, t1, _) = plane_axes(dir);
+    let rows = ((h * 16.0 - 0.01).ceil().max(0.0) as usize).min(16);
+    let ymask: u16 = if rows >= 16 { 0xFFFF } else { (1u16 << rows) - 1 };
+    if t1 == 1 { m[..rows].iter().all(|r| *r == 0xFFFF) } else { m.iter().all(|r| r & ymask == ymask) }
 }
 
 /// Per-quad metadata recorded by `mesh_block` when tracing (used by `--mesh-dump`).
@@ -151,44 +207,118 @@ pub fn mesh_block(a: &Assets, biomes: &[Biome], s: &Snapshot, x: i32, y: i32, z:
         }
         if info.fluid != 0 {
             let k = info.fluid;
-            let uvr = if k == 1 { a.water_still } else { a.lava_still };
+            let (still, flow, overlay) = if k == 1 { (a.water_still, a.water_flow, a.water_overlay) } else { (a.lava_still, a.lava_flow, a.lava_flow) }; // lava has no overlay
             let col = if k == 1 { rgb(biome.map(|b| b.water).unwrap_or(0x3F76E4)) } else { [1.0; 3] };
             let layer = if k == 1 { LAYER_TRANSLUCENT } else { LAYER_OPAQUE };
             let above_same = a.info(s.blocks[sidx(x, y + 1, z)]).fluid == k;
-            // corner heights (nw, sw, se, ne)
-            let corner = |cx: i32, cz: i32| -> f32 {
-                if above_same { return 1.0; }
-                let (mut sum, mut n) = (0.0, 0.0);
-                for (dx, dz) in [(0, 0), (cx, 0), (0, cz), (cx, cz)] {
-                    let h = fluid_height(a, s, x + dx, y, z + dz, k);
-                    if h >= 1.0 { return 1.0; }
-                    if h >= 0.0 { sum += h; n += 1.0; }
-                }
-                if n == 0.0 { 8.0 / 9.0 } else { sum / n }
+            let (h_nw, h_sw, h_se, h_ne) = if above_same { (1.0, 1.0, 1.0, 1.0) } else {
+                (fluid_corner(a, s, x, y, z, k, -1, -1), fluid_corner(a, s, x, y, z, k, -1, 1), fluid_corner(a, s, x, y, z, k, 1, 1), fluid_corner(a, s, x, y, z, k, 1, -1))
             };
-            let (h_nw, h_sw, h_se, h_ne) = (corner(-1, -1), corner(-1, 1), corner(1, 1), corner(1, -1));
-            let l = { let up = s.light[sidx(x, y + 1, z)]; if up == 0 { own_light } else { up.max(own_light & 0xF0) } };
-            let light = [if k == 2 { 255 } else { (l >> 4) * 17 }, if k == 2 { 255 } else { (l & 15) * 17 }, 0, 0];
-            let mut quad = |p: [[f32; 3]; 4], sh: f32, uv: [[f32; 2]; 4], dir: u8| {
+            // drawn heights sit 0.001 below the logical height unless the corner is full
+            let inset = |h: f32| if h < 1.0 { h - 0.001 } else { h };
+            let (h_nw, h_sw, h_se, h_ne) = (inset(h_nw), inset(h_sw), inset(h_se), inset(h_ne));
+            // light: own cell combined (per channel max) with the cell above (top, sides) / below (bottom); lava is full block light
+            let mxl = |p: u8, q: u8| (((p >> 4).max(q >> 4)) << 4) | ((p & 15).max(q & 15));
+            let lit = |l: u8| [(l >> 4) * 17, if k == 2 { 255 } else { (l & 15) * 17 }, 0, 0];
+            // the block's own light emission counts as block light of its cell
+            let own_l = if info.full_bright { 0xFF } else { (own_light & 0xF0) | (own_light & 15).max(info.emission) };
+            let light_side = lit(mxl(own_l, s.light[sidx(x, y + 1, z)]));
+            let light_bottom = lit(mxl(own_l, s.light[sidx(x, y - 1, z)]));
+            let mut quad = |p: [[f32; 3]; 4], sh: f32, uv: [[f32; 2]; 4], r: [f32; 4], light: [u8; 4], dir: u8| {
                 let m = &mut out.layers[layer as usize]; let b = m.verts.len() as u32;
                 let mut vs = [Vertex::default(); 4];
                 for i in 0..4 {
-                    vs[i] = Vertex { pos: [base[0] + p[i][0], base[1] + p[i][1], base[2] + p[i][2]], uv: [uvr[0] + (uvr[2] - uvr[0]) * uv[i][0], uvr[1] + (uvr[3] - uvr[1]) * uv[i][1]],
+                    vs[i] = Vertex { pos: [base[0] + p[i][0], base[1] + p[i][1], base[2] + p[i][2]], uv: [r[0] + (r[2] - r[0]) * uv[i][0], r[1] + (r[3] - r[1]) * uv[i][1]],
                         color: [(col[0] * sh * 255.0) as u8, (col[1] * sh * 255.0) as u8, (col[2] * sh * 255.0) as u8, if k == 1 { 200 } else { 255 }], light };
                 }
                 m.verts.extend_from_slice(&vs);
                 if let Some(t) = trace.as_deref_mut() { t.push(QuadTrace { src: 1, layer, dir, cull: NO_CULL, tinted: k == 1, tint: col, shade: true, verts: vs }); }
                 m.idx.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3]);
             };
+            let rev = |p: [[f32; 3]; 4]| [p[0], p[3], p[2], p[1]];
+            let rev_uv = |u: [[f32; 2]; 4]| [u[0], u[3], u[2], u[1]];
             let full_uv = [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]];
-            if !above_same { quad([[0.0, h_nw, 0.0], [0.0, h_sw, 1.0], [1.0, h_se, 1.0], [1.0, h_ne, 0.0]], 1.0, full_uv, UP); }
-            let nb = |dx: i32, dy: i32, dz: i32| { let ni = a.info(s.blocks[sidx(x + dx, y + dy, z + dz)]); ni.fluid == k || ni.occludes };
-            if !nb(0, -1, 0) { quad([[0.0, 0.0, 1.0], [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 1.0]], 0.5, full_uv, DOWN); }
-            let side_uv = |h1: f32, h2: f32| [[0.0, 1.0 - h1], [0.0, 1.0], [1.0, 1.0], [1.0, 1.0 - h2]];
-            if !nb(0, 0, -1) { quad([[1.0, h_ne, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, h_nw, 0.0]], 0.8, side_uv(h_ne, h_nw), NORTH); }
-            if !nb(0, 0, 1) { quad([[0.0, h_sw, 1.0], [0.0, 0.0, 1.0], [1.0, 0.0, 1.0], [1.0, h_se, 1.0]], 0.8, side_uv(h_sw, h_se), SOUTH); }
-            if !nb(-1, 0, 0) { quad([[0.0, h_nw, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, h_sw, 1.0]], 0.6, side_uv(h_nw, h_sw), WEST); }
-            if !nb(1, 0, 0) { quad([[1.0, h_se, 1.0], [1.0, 0.0, 1.0], [1.0, 0.0, 0.0], [1.0, h_ne, 0.0]], 0.6, side_uv(h_se, h_ne), EAST); }
+            // top: drawn double-sided unless the cell above holds the same fluid
+            if !above_same {
+                let p = [[0.0, h_nw, 0.0], [0.0, h_sw, 1.0], [1.0, h_se, 1.0], [1.0, h_ne, 0.0]];
+                let flow_v = fluid_flow(a, s, x, y, z, k, info.fluid_level);
+                if flow_v[0].abs() < 1e-6 && flow_v[1].abs() < 1e-6 {
+                    quad(p, 1.0, full_uv, still, light_side, UP);
+                    quad(rev(p), 1.0, rev_uv(full_uv), still, light_side, UP);
+                } else {
+                    // flowing: the flow sprite's central half is rotated so it runs along the flow direction
+                    // (flow +z = unrotated, measured against the vanilla client)
+                    let phi = flow_v[1].atan2(flow_v[0]) - std::f32::consts::FRAC_PI_2;
+                    let (sn, cs) = phi.sin_cos();
+                    let uvf = |cx: f32, cz: f32| { let (ax, bz) = ((cx - 0.5) * 0.5, (cz - 0.5) * 0.5); [0.5 + ax * cs + bz * sn, 0.5 - ax * sn + bz * cs] };
+                    let uv = [uvf(0.0, 0.0), uvf(0.0, 1.0), uvf(1.0, 1.0), uvf(1.0, 0.0)];
+                    quad(p, 1.0, uv, flow, light_side, UP);
+                    quad(rev(p), 1.0, rev_uv(uv), flow, light_side, UP);
+                }
+            }
+            // bottom: sits 0.001 above the cell floor; the side faces start there too when it is drawn
+            let below = a.info(s.blocks[sidx(x, y - 1, z)]);
+            let full = |o: &Option<Box<[[u16; 16]; 6]>>, d: u8| o.as_ref().map(|o| o[d as usize].iter().all(|r| *r == 0xFFFF)).unwrap_or(false);
+            let own_model = &a.models[if info.hides_fluid { info.model } else { 0 } as usize];
+            let bottom_hidden = below.fluid == k || below.occludes || full(&a.models[below.model as usize].occl, UP) || full(&own_model.shape, DOWN);
+            let yo = if bottom_hidden { 0.0 } else { 0.001 };
+            if !bottom_hidden {
+                quad([[0.0, yo, 0.0], [1.0, yo, 0.0], [1.0, yo, 1.0], [0.0, yo, 1.0]], 0.5, [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], still, light_bottom, DOWN);
+            }
+            // sides: culled by the same fluid or a neighbour face covering 0..h; full non-opaque cubes
+            // (glass, leaves) get one overlay quad instead; otherwise the flow sprite at half scale, double-sided
+            let vt = |h: f32| (1.0 - h) * 0.5;
+            let sides: [(u8, [i32; 3], f32, [[f32; 3]; 4], [[f32; 2]; 4], f32); 4] = [
+                (NORTH, [0, 0, -1], 0.8, [[0.0, h_nw, 0.001], [1.0, h_ne, 0.001], [1.0, yo, 0.001], [0.0, yo, 0.001]], [[0.0, vt(h_nw)], [0.5, vt(h_ne)], [0.5, 0.5], [0.0, 0.5]], h_nw.max(h_ne)),
+                (SOUTH, [0, 0, 1], 0.8, [[1.0, h_se, 0.999], [0.0, h_sw, 0.999], [0.0, yo, 0.999], [1.0, yo, 0.999]], [[0.0, vt(h_se)], [0.5, vt(h_sw)], [0.5, 0.5], [0.0, 0.5]], h_se.max(h_sw)),
+                (WEST, [-1, 0, 0], 0.6, [[0.001, h_sw, 1.0], [0.001, h_nw, 0.0], [0.001, yo, 0.0], [0.001, yo, 1.0]], [[0.0, vt(h_sw)], [0.5, vt(h_nw)], [0.5, 0.5], [0.0, 0.5]], h_sw.max(h_nw)),
+                (EAST, [1, 0, 0], 0.6, [[0.999, h_ne, 0.0], [0.999, h_se, 1.0], [0.999, yo, 1.0], [0.999, yo, 0.0]], [[0.0, vt(h_ne)], [0.5, vt(h_se)], [0.5, 0.5], [0.0, 0.5]], h_ne.max(h_se)),
+            ];
+            for (dir, d, sh, p, uv, hmax) in sides {
+                let ni = a.info(s.blocks[sidx(x + d[0], y + d[1], z + d[2])]);
+                if ni.fluid == k || ni.occludes { continue; }
+                if let Some(o) = &a.models[ni.model as usize].occl { if mask_covers_side(&o[(dir ^ 1) as usize], dir, hmax) { continue; } }
+                if let Some(o) = &own_model.shape { if mask_covers_side(&o[dir as usize], dir, hmax) { continue; } }
+                if ni.fluid_overlay && k == 1 { quad(p, sh, uv, overlay, light_side, dir); } else {
+                    quad(p, sh, uv, flow, light_side, dir);
+                    quad(rev(p), sh, rev_uv(uv), flow, light_side, dir);
+                }
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use CornerCell::*;
+
+    /// Drawn corner heights (logical height - 0.001) measured from the vanilla client by `basalt-check client-mesh`.
+    #[test]
+    fn fluid_corner_heights_match_vanilla_measurements() {
+        let drawn = |cells: [CornerCell; 4]| fluid_corner_height(cells, false) - 0.001;
+        let close = |a: f32, b: f32| (a - b).abs() < 0.0006;
+        // [own cell, side A, side B, diagonal]
+        assert!(close(drawn([Fluid(0), Open, Open, Open]), 0.7397), "isolated source");
+        assert!(close(drawn([Fluid(0), Open, Open, Solid]), 0.7397), "diagonal ignored without a fluid side");
+        assert!(close(drawn([Fluid(0), Open, Solid, Open]), 0.8071));
+        assert!(close(drawn([Fluid(0), Fluid(0), Open, Open]), 0.8071));
+        assert!(close(drawn([Fluid(0), Fluid(0), Open, Solid]), 0.8456));
+        assert!(close(drawn([Fluid(0), Fluid(0), Solid, Open]), 0.8456), "open diagonal counts next to a fluid side");
+        assert!(close(drawn([Fluid(0), Fluid(0), Fluid(0), Open]), 0.8592));
+        assert!(close(drawn([Fluid(0), Fluid(0), Fluid(0), Solid]), 0.8879));
+        assert!(close(drawn([Fluid(0), Solid, Solid, Open]), 0.8879));
+        assert!(close(drawn([Fluid(1), Open, Open, Open]), 0.2583), "isolated level 1");
+        assert!(close(drawn([Fluid(3), Open, Open, Open]), 0.1842));
+        assert!(close(drawn([Fluid(7), Open, Open, Open]), 0.0360));
+        assert!(close(drawn([Fluid(8), Open, Open, Open]), 0.7397), "falling fluid weighs like a source");
+        assert_eq!(fluid_corner_height([Fluid(0), Open, Open, Open], true), 1.0);
+    }
+
+    #[test]
+    fn fluid_level_heights() {
+        assert!((fluid_level_height(0) - 8.0 / 9.0).abs() < 1e-6);
+        assert!((fluid_level_height(7) - 1.0 / 9.0).abs() < 1e-6);
+        assert!((fluid_level_height(12) - 8.0 / 9.0).abs() < 1e-6);
     }
 }
