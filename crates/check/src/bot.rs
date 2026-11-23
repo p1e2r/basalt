@@ -90,6 +90,8 @@ pub struct State {
     pub cursor: Stack,
     pub held: u8,
     pub state_id: i32,
+    /// Fuzz harness: every container update received (`slot w0 12 dirt*3`, `content w0`, `cursor ...`).
+    pub cont_log: Vec<String>,
     /// Open screen: (window id, menu type name) and its slots.
     pub screen: Option<(i32, String)>,
     pub container: Vec<Stack>,
@@ -203,7 +205,7 @@ impl Bot {
             weather_events: Vec::new(), rain: 0.0, thunder: 0.0,
             name: name.to_string(), eid: -1, gamemode: 0, may_fly: false, body: Body::default(), input: Input::default(), goal: None, frozen: false,
             spawned: false, loaded_sent: false, dead: false, death_msg: None, health: 20.0, food: 20, saturation: 5.0, air: 300, ticks_frozen: 0, flags: 0,
-            effects: HashMap::new(), inv: vec![Stack::default(); 46], cursor: Stack::default(), held: 0, state_id: 0, screen: None, container: Vec::new(),
+            effects: HashMap::new(), inv: vec![Stack::default(); 46], cursor: Stack::default(), held: 0, state_id: 0, cont_log: Vec::new(), screen: None, container: Vec::new(),
             chat: Vec::new(), entities: HashMap::new(), players: HashMap::new(), world: World::default(), teleports: Vec::new(), plog: Vec::new(),
             counts: HashMap::new(), ticks: 0, disconnected: None, damage: Vec::new(), health_log: Vec::new(), taken: Vec::new(), explosions: Vec::new(), op_level: 0, entity_events: Vec::new(), registries: HashMap::new(), block_updates: 0,
             out: otx, last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input: 0, seq: 0,
@@ -566,6 +568,7 @@ fn handle(s: &mut State, id: i32, data: &[u8]) -> Result<()> {
             let mut items = Vec::with_capacity(n as usize);
             for _ in 0..n { items.push(proto::read_slot(&mut r)?); }
             s.cursor = proto::read_slot(&mut r)?;
+            { let line = format!("content w{window} [{}] cursor {}", items.iter().map(crate::fuzz::stack_str).collect::<Vec<_>>().join("|"), crate::fuzz::stack_str(&s.cursor)); s.cont_log.push(line); }
             if window == 0 { for (i, it) in items.into_iter().enumerate().take(46) { s.inv[i] = it; } }
             else {
                 let base = items.len().saturating_sub(36);
@@ -575,6 +578,7 @@ fn handle(s: &mut State, id: i32, data: &[u8]) -> Result<()> {
         }
         cb::CONTAINER_SET_SLOT => {
             let window = r.varint()?; s.state_id = r.varint()?; let slot = r.i16()? as i32; let it = proto::read_slot(&mut r)?;
+            s.cont_log.push(format!("slot w{window} {slot} {}", crate::fuzz::stack_str(&it)));
             if window == 0 { if (0..46).contains(&slot) { s.inv[slot as usize] = it; } }
             else if window == -1 { s.cursor = it; }
             else if s.screen.as_ref().map(|x| x.0) == Some(window) {
@@ -586,7 +590,7 @@ fn handle(s: &mut State, id: i32, data: &[u8]) -> Result<()> {
                 }
             }
         }
-        cb::SET_CURSOR_ITEM => { s.cursor = proto::read_slot(&mut r)?; }
+        cb::SET_CURSOR_ITEM => { s.cursor = proto::read_slot(&mut r)?; let l = format!("cursor {}", crate::fuzz::stack_str(&s.cursor)); s.cont_log.push(l); }
         cb::SET_PLAYER_INVENTORY => { let slot = r.varint()?; let it = proto::read_slot(&mut r)?; if let Some(i) = inv_index_from_player_slot(slot) { s.inv[i] = it; } }
         cb::OPEN_SCREEN => {
             let w = r.varint()?; let menu = r.varint()?;

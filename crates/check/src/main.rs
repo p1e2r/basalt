@@ -16,6 +16,7 @@ use std::time::Instant;
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+    if let Some(code) = basalt_check::driver::try_main() { std::process::exit(code); }
     // subcommand: client-mesh (block-meshing parity vs the vanilla client oracle, see client/mesh_diff.rs)
     if std::env::args().nth(1).as_deref() == Some("client-mesh") {
         let a: Vec<String> = std::env::args().skip(2).collect();
