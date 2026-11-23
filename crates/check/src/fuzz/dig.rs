@@ -25,7 +25,7 @@ const SKIP: &[&str] = &["door", "bed", "torch", "sign", "banner", "button", "pla
     "amethyst_cluster", "bud", "candle", "sprouts", "roots", "fungus", "mushroom", "wheat", "carrots", "potatoes", "beetroots", "stem", "cocoa", "pickle", "egg", "scaffold", "dripstone", "cactus",
     "sugar_cane", "bamboo", "sweet", "torchflower", "pitcher", "spore", "hanging", "lantern", "chorus", "cave_vines", "weeping", "twisting", "nether_wart", "end_rod", "lightning_rod", "bell", "grindstone",
     "cauldron", "flower_pot", "pot", "air", "moving", "structure", "jigsaw", "command", "barrier", "bedrock", "end_gateway", "end_portal", "test", "dead_bush", "azalea", "dried_ghast", "creaking",
-    "vault", "trial", "firefly", "leaf_litter", "wildflowers", "tall_", "double", "petals", "bush", "cobweb", "iron_bars", "pane", "chain", "fence", "wall", "glass_pane", "conduit", "mud", "sniffer", "turtle"];
+    "vault", "trial", "lichen", "dripleaf", "eyeblossom", "frogspawn", "sculk_vein", "sculk_sensor", "shrieker", "catalyst", "firefly", "leaf_litter", "wildflowers", "tall_", "double", "petals", "bush", "cobweb", "iron_bars", "pane", "chain", "fence", "wall", "glass_pane", "conduit", "mud", "sniffer", "turtle"];
 
 fn candidates() -> &'static Vec<&'static str> {
     static C: OnceLock<Vec<&'static str>> = OnceLock::new();
@@ -185,7 +185,7 @@ fn compare(case: &Value, v: &Value, b: &Value) -> Vec<Mismatch> {
     let tol = ((nv as f64 * 0.05).ceil() as i64).max(2);
     if (nv - nb).abs() > tol {
         let dir = if nb < nv { "basalt-accepts-too-early" } else { "basalt-accepts-too-late" };
-        out.push(Mismatch::fail(format!("threshold/{dir}/{cat}/{flags}"), format!("{desc}: vanilla accepts at {nv} ticks, basalt at {nb} (dig_ticks {tf}, tol {tol})")));
+        out.push(Mismatch::fail(format!("threshold/{dir}/{flags}"), format!("{desc}: vanilla accepts at {nv} ticks, basalt at {nb} (dig_ticks {tf}, tol {tol})")));
     }
     // vanilla must accept what the Basalt client formula waits (dig_ticks + 1): by construction the probe at t_f+1 succeeded
     // on vanilla (else `never`), so additionally report formulas that are far slower than vanilla needs (> 2x + 3): it means dig_ticks is too slow

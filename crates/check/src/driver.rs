@@ -1,7 +1,7 @@
 //! Extended command line: fuzz harnesses, harness groups, `--affected` selection, result cache.
 //!
 //! basalt-check --fuzz [ID[,ID..]|all] [--cases N] [--seed S] [--long] [--replay FILE] [--jobs N]
-//! basalt-check --affected [--base REF] [--group G] [--no-vanilla] [--no-cache] [--long]
+//! basalt-check --all | --affected [--base REF] [--group G] [--no-vanilla] [--no-cache] [--long]
 //! basalt-check --list-affected [--base REF]     list harnesses whose declared paths changed
 //! basalt-check --list-harnesses                 every registered harness with its declared paths
 //! common: --vanilla HOST:PORT (default $VANILLA_ADDR or 127.0.0.1:25566) --vanilla-dir DIR --out DIR
@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Instant;
 
-const EXT_FLAGS: &[&str] = &["--fuzz", "--affected", "--list-affected", "--list-harnesses", "--group", "--replay"];
+const EXT_FLAGS: &[&str] = &["--fuzz", "--all", "--affected", "--list-affected", "--list-harnesses", "--group", "--replay"];
 
 #[derive(Default)]
 struct Args {
@@ -46,6 +46,7 @@ fn parse(argv: &[String]) -> Result<Args, String> {
                 a.fuzz = Some(ids);
             }
             "--affected" => a.affected = true,
+            "--all" => {}
             "--list-affected" => a.list_affected = true,
             "--list-harnesses" => a.list_harnesses = true,
             "--group" => a.group = Some(val(&mut i)?),
@@ -79,7 +80,7 @@ fn reachable(addr: &str) -> bool {
 pub fn worldgen_seeds(n: usize, seed: u64) -> Vec<i64> {
     let mut v: Vec<i64> = vec![12345, 42, 1, 7, 2026, 99999, 31337, 5, 777, 123456789, 8675309, 4242, 1000003, 55, 600613, 20260, 314159, 271828, 161803, 9001, 424242, 808, 65535, 2468];
     let mut r = Rng::new(seed ^ 0x5eed);
-    while v.len() < n { v.push((r.next() % 2_000_000_000) as i64); }
+    while v.len() < n { v.push((r.next_u64() % 2_000_000_000) as i64); }
     v.truncate(n);
     v
 }

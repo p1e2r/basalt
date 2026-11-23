@@ -193,3 +193,33 @@ real server/client over the wire.
   a darkened sky with a black horizon band. Basalt always sent isFlat=false, so a `--flat` world (players at y=-59) looked
   dusky/black in the real client. Now `--flat` sends isFlat=true. Generated worlds were never affected (noon sky matched
   vanilla). Ruled out along the way: registry order, update_tags, set_time layout, weather events, login fields.
+
+## Randomized differential harnesses (crates/check/src/fuzz, tools/pr_ready.sh)
+- Run: `basalt-check --fuzz clicks|commands|dig|place|worldgen [--cases N] [--seed S] [--long] [--replay FILE] [--jobs N]`.
+  Cases are generated from (seed, n) with a per-case splitmix64 stream, recorded as JSONL in
+  `target/check/cases/<harness>/<seed>-<n>.jsonl` (per-server results next to them as `.vanilla/.basalt.results.jsonl`,
+  failing cases only as `.fail.jsonl`), and replay exactly with `--replay`. Output: mismatch classes with the 3 smallest
+  inputs each, and `RESULT fuzz=<id> cases= mismatches= new= info= errors= skipped=`. `new` counts mismatch classes not listed
+  in `crates/check/known-divergences.txt` (`<harness> <class>`); `info` classes (packet-level diffs, key-name diffs) never fail.
+- Result cache + selective runs: `basalt-check --affected [--base REF]` / `--list-affected` / `--no-cache`; every harness declares
+  the paths it can be affected by in `crates/check/src/harness.rs` (globs). Cache key = harness + seed + n + content hash of the
+  declared paths + data version + vanilla on/off; only passes are cached (`target/check/cache.json`).
+- Vanilla behaviours learned while building these (all observed, not read from code):
+  - Chat commands run on an async chain: a command sent right after a container packet can overtake it or lag behind it. Use
+    a `list` barrier (`fuzz::barrier`) between "set up with commands" and "act with packets".
+  - Container clicks: vanilla answers with *incremental* container_set_slot/set_cursor_item for exactly the changed slots (a click
+    that changes nothing sends nothing); Basalt resends set_content for the whole window on every click (info class
+    `packets/full-content-vs-incremental`). A client that lost track resyncs by sending a click with a stale state id: vanilla then
+    answers with set_content. The harness uses that to start every case from a known view.
+  - Vanilla's /clear also clears the carried item and the 2x2 grid; /give fills hotbar 36..44 first, then 9..35.
+  - Shift-click in a crafting table moves inventory stacks into the 3x3 grid first (slots 1-9), then between hotbar and main.
+  - Dig acceptance: after `start_destroy`, vanilla accepts `stop_destroy` after about `ceil(0.7*T)-1` server ticks, where T is the
+    break time computed from the *server's* view of the player: the client's on_ground flag is ignored (a frozen bot claiming
+    on_ground=false breaks at the on-ground speed; Basalt takes the flag and applies the /5 penalty). Basalt's rule is
+    `0.7*T - 6` ticks. In water (eye in water) the /5 penalty applies in both.
+  - Command errors arrive as two system chat lines: the error (translation key) and a `command.context.here` line echoing the input.
+    Incomplete commands (`/gamemode`) answer `command.unknown.command`; wrong trailing/bad-typed args `command.unknown.argument`
+    or the specific `argument.*`/`parsing.*` key. `/setblock` that changes nothing fails (`commands.setblock.failed`); `/kill` with
+    no match fails (`argument.entity.notfound.entity`); `/time set` takes time units (`368t`, `1d`) and marker names.
+  - Placement: a click on a replaceable block (grass, snow layers < full, water) places into it; waterlogging is applied for
+    slabs/stairs/fences into water; neighbours re-derive connection state (fence/wall/pane/bars) on placement.

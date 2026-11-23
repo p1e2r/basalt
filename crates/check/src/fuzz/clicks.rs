@@ -34,8 +34,14 @@ fn layout(inv: &[(String, i32)]) -> Vec<(usize, String, i32)> {
     for (item, n) in inv {
         let max = max_stack(item);
         let mut left = *n;
-        for &i in &order { if left == 0 { break; } if let Some((it, c)) = &mut slots[i] { if it == item && *c < max { let k = (max - *c).min(left); *c += k; left -= k; } } }
-        for &i in &order { if left == 0 { break; } if slots[i].is_none() { let k = max.min(left); slots[i] = Some((item.clone(), k)); left -= k; } }
+        for &i in &order {
+            if left == 0 { break; }
+            if let Some((it, c)) = &mut slots[i] { if it == item && *c < max { let k = (max - *c).min(left); *c += k; left -= k; } }
+        }
+        for &i in &order {
+            if left == 0 { break; }
+            if slots[i].is_none() { let k = max.min(left); slots[i] = Some((item.clone(), k)); left -= k; }
+        }
     }
     slots.into_iter().enumerate().filter_map(|(i, s)| s.map(|(it, c)| (i, it, c))).collect()
 }

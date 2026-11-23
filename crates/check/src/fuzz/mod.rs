@@ -33,18 +33,18 @@ pub struct Rng(pub u64);
 impl Rng {
     pub fn new(seed: u64) -> Rng { Rng(seed ^ 0x9E37_79B9_7F4A_7C15) }
     /// Independent stream for case `i` of a run with `seed` (cases do not depend on each other).
-    pub fn for_case(seed: u64, i: usize) -> Rng { let mut r = Rng::new(seed.wrapping_mul(0xD134_2543_DE82_EF95).wrapping_add(i as u64)); r.next(); r }
-    pub fn next(&mut self) -> u64 {
+    pub fn for_case(seed: u64, i: usize) -> Rng { let mut r = Rng::new(seed.wrapping_mul(0xD134_2543_DE82_EF95).wrapping_add(i as u64)); r.next_u64(); r }
+    pub fn next_u64(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.0;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
         z ^ (z >> 31)
     }
-    pub fn below(&mut self, n: usize) -> usize { if n == 0 { 0 } else { (self.next() % n as u64) as usize } }
+    pub fn below(&mut self, n: usize) -> usize { if n == 0 { 0 } else { (self.next_u64() % n as u64) as usize } }
     /// Inclusive range.
     pub fn range(&mut self, lo: i64, hi: i64) -> i64 { lo + self.below((hi - lo + 1) as usize) as i64 }
-    pub fn f64(&mut self) -> f64 { (self.next() >> 11) as f64 / (1u64 << 53) as f64 }
+    pub fn f64(&mut self) -> f64 { (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64 }
     pub fn chance(&mut self, p: f64) -> bool { self.f64() < p }
     pub fn pick<'a, T>(&mut self, v: &'a [T]) -> &'a T { &v[self.below(v.len())] }
     /// Index chosen with the given weights.
@@ -200,6 +200,9 @@ pub fn known_divergences() -> std::collections::HashSet<String> {
 
 // ------------------------------------------------------------------ driver
 
+/// (case index, detail, failing?) for one mismatch class
+type ClassItems = Vec<(usize, String, bool)>;
+
 pub struct FuzzReport {
     pub id: String,
     pub cases: usize,
@@ -261,7 +264,7 @@ pub fn run_harnesses(ids: &[&'static Harness], o: Opts, vanilla: Option<(PathBuf
         };
         write_cases(&path.with_extension("vanilla.results.jsonl"), &vr);
         write_cases(&path.with_extension("basalt.results.jsonl"), &br);
-        let mut classes: BTreeMap<String, Vec<(usize, String, bool)>> = BTreeMap::new();
+        let mut classes: BTreeMap<String, ClassItems> = BTreeMap::new();
         let mut errors = 0usize; let mut failing_cases: Vec<usize> = Vec::new();
         let mut notes = String::new();
         for (i, c) in cases.iter().enumerate() {
@@ -279,7 +282,7 @@ pub fn run_harnesses(ids: &[&'static Harness], o: Opts, vanilla: Option<(PathBuf
         let (mut mism, mut new, mut info) = (0, 0, 0);
         let mut new_classes = Vec::new();
         let mut text = format!("== fuzz_{}: {} cases (seed {}), vanilla {:.0}s, basalt {:.0}s, cases file {}\n", h.id, cases.len(), o.seed, vs, bs, path.display());
-        let mut rows: Vec<(&String, &Vec<(usize, String, bool)>)> = classes.iter().collect();
+        let mut rows: Vec<(&String, &ClassItems)> = classes.iter().collect();
         rows.sort_by_key(|(c, v)| (!v.iter().any(|x| x.2), std::cmp::Reverse(v.len()), (*c).clone()));
         for (class, items) in rows {
             let fail = items.iter().any(|x| x.2);
@@ -351,4 +354,44 @@ pub fn barrier(bot: &Bot) -> Result<()> {
     bot.cmd("list");
     if !bot.wait_until(std::time::Duration::from_secs(5), |s| s.chat[mark..].iter().any(|l| is_sentinel(&l.text))) { anyhow::bail!("barrier: no reply to `list`"); }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rng_is_deterministic_and_independent_per_case() {
+        let a: Vec<u64> = (0..5).map(|_| Rng::for_case(9, 3).next_u64()).collect();
+        assert!(a.windows(2).all(|w| w[0] == w[1]));
+        assert_ne!(Rng::for_case(9, 3).next_u64(), Rng::for_case(9, 4).next_u64());
+        assert_ne!(Rng::for_case(9, 3).next_u64(), Rng::for_case(10, 3).next_u64());
+        let mut r = Rng::new(1);
+        for _ in 0..1000 { let v = r.range(-3, 3); assert!((-3..=3).contains(&v)); assert!(r.below(7) < 7); }
+    }
+
+    #[test]
+    fn cases_roundtrip_through_files() {
+        let dir = std::env::temp_dir().join(format!("basalt-fuzz-test-{}", std::process::id()));
+        let o = Opts { seed: 5, cases: 12, out: dir.clone(), jobs: 1, ..Default::default() };
+        let h = &commands::HARNESS;
+        let (cases, path) = make_cases(h, &o).unwrap();
+        assert_eq!(cases.len(), 12);
+        assert!(path.ends_with("commands/5-12.jsonl"));
+        assert_eq!(read_cases(&path).unwrap(), cases);
+        // replaying gives exactly the recorded cases
+        let o2 = Opts { replay: Some(path.clone()), ..o.clone() };
+        assert_eq!(make_cases(h, &o2).unwrap().0, cases);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn every_harness_generates_deterministic_cases() {
+        // dig's generator needs ./data (GameData); the other three are data-free
+        for h in [&clicks::HARNESS, &commands::HARNESS, &place::HARNESS] {
+            let a: Vec<Value> = (0..30).map(|i| (h.gen)(&mut Rng::for_case(2, i), i)).collect();
+            let b: Vec<Value> = (0..30).map(|i| (h.gen)(&mut Rng::for_case(2, i), i)).collect();
+            assert_eq!(a, b, "{}", h.id);
+        }
+    }
 }

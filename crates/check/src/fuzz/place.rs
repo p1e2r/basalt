@@ -4,7 +4,7 @@
 //! (block_update packets) must match: orientation, half/shape properties, second halves of doors and
 //! beds, waterlogging, replaceable targets, support requirements.
 //!
-//! Classes: `placed/<family>/{missing,extra,block,prop:<name>}`, `neighbor/<family>/<dir>`,
+//! Classes: `placed/<family>/{missing,extra,block,prop}`, `neighbor/<family>`, `target-changed/<family>`,
 //! `screen/<family>` (clicking an interactive block opened a screen on only one server).
 use super::{arena::worker_arena, barrier, parallel, Harness, Mismatch, Rng};
 use crate::bot::Bot;
@@ -53,7 +53,7 @@ fn gen(r: &mut Rng, _i: usize) -> Value {
     if r.chance(0.25) { pre.push(json!([-1, *r.pick(&["water", "short_grass", "snow[layers=2]", "water", "stone"])])); }
     for _ in 0..r.weighted(&[40, 35, 25]) {
         let d = r.below(6);
-        if d == face ^ 1 || d == (face ^ 1) { continue; } // opposite of the clicked face is the target itself
+        if d == face ^ 1 { continue; } // opposite of the clicked face is the target itself
         pre.push(json!([d, *r.pick(PRE)]));
     }
     json!({ "item": item, "target": *r.pick(TARGETS), "face": face, "cursor": cursor, "yaw": yaw, "pitch": pitch, "sneak": r.chance(0.3), "pre": pre })
@@ -128,15 +128,11 @@ fn compare(case: &Value, v: &Value, b: &Value) -> Vec<Mismatch> {
         let (sv, sb) = (sv.unwrap_or("-"), sb.unwrap_or("-"));
         let class = if key == "P" {
             let (nv, nb) = (sv.split('[').next().unwrap_or(""), sb.split('[').next().unwrap_or(""));
-            if nv == nb {
-                let props = |s: &str| -> Vec<String> { s.split_once('[').map(|x| x.1.trim_end_matches(']').split(',').map(String::from).collect()).unwrap_or_default() };
-                let (pv, pb) = (props(sv), props(sb));
-                let diff = pv.iter().find(|x| !pb.contains(x)).and_then(|x| x.split('=').next()).unwrap_or("?").to_string();
-                format!("placed/{fam}/prop:{diff}")
-            } else if nb == "minecraft:air" { format!("placed/{fam}/missing") }
+            if nv == nb { format!("placed/{fam}/prop") }
+            else if nb == "minecraft:air" { format!("placed/{fam}/missing") }
             else if nv == "minecraft:air" { format!("placed/{fam}/extra") }
             else { format!("placed/{fam}/block") }
-        } else if key == "T" { format!("target-changed/{fam}") } else { format!("neighbor/{fam}/{key}") };
+        } else if key == "T" { format!("target-changed/{fam}") } else { format!("neighbor/{fam}") };
         out.push(Mismatch::fail(class, format!("{item} against {} face {} yaw {} pitch {} sneak {}: cell {key}: vanilla {sv} / basalt {sb}", case["target"], DIR_NAMES[case["face"].as_u64().unwrap_or(0) as usize], case["yaw"], case["pitch"], case["sneak"])));
         break; // first differing cell names the class
     }

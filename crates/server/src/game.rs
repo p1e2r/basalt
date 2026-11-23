@@ -750,7 +750,8 @@ impl Game {
             "tp" | "teleport" => {
                 let target_pos = if args.len() >= 4 {
                     let cur = self.players[&eid].pos;
-                    let parse = |s: &str, c: f64| -> Option<f64> { if let Some(r) = s.strip_prefix('~') { Some(c + if r.is_empty() { 0.0 } else { r.parse().ok()? }) } else { s.parse().ok() } };
+                    // finite and inside the world border (vanilla: argument.pos.outofworld); NaN/inf would kick the player
+                    let parse = |s: &str, c: f64| -> Option<f64> { (if let Some(r) = s.strip_prefix('~') { Some(c + if r.is_empty() { 0.0 } else { r.parse().ok()? }) } else { s.parse().ok() }).filter(|v: &f64| v.is_finite() && v.abs() <= 30_000_000.0) };
                     match (parse(args[1], cur[0]), parse(args[2], cur[1]), parse(args[3], cur[2])) { (Some(x), Some(y), Some(z)) => Some([x, y, z]), _ => None }
                 } else if args.len() == 2 { self.players.values().find(|p| p.name.eq_ignore_ascii_case(args[1])).map(|p| p.pos) } else { None };
                 match target_pos {
