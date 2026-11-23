@@ -245,6 +245,49 @@ fn main() -> Result<()> {
                         if detail { println!("biome mismatch at quart {} {} {}: ours {ours} vanilla {theirs}", cx * 4 + (j & 3) as i32, (si * 4 + (j >> 4)) as i32 - 16, cz * 4 + ((j >> 2) & 3) as i32); } *bio_conf.entry((ours, theirs.clone())).or_default() += 1; }
                 }
             }
+            // STEMS=1: print the base and height of every vanilla (and our) stem column ("V x y z h" / "O x y z h").
+            if std::env::var("STEMS").is_ok() {
+                let is_stem = |id: u16| matches!(BlockState(id as u32).name(), "crimson_stem" | "warped_stem");
+                for (label, get) in [("O", &(|i: usize| c.blocks[i >> 12][i & 4095]) as &dyn Fn(usize) -> u16), ("V", &|i: usize| v.blocks[i])] {
+                    for z in 0..16usize {
+                        for x in 0..16usize {
+                            for y in 1..nsec() * 16 {
+                                let i = (y << 8) | (z << 4) | x;
+                                if is_stem(get(i)) && !is_stem(get(i - 256)) {
+                                    let mut h = 0;
+                                    while y + h < nsec() * 16 && is_stem(get(((y + h) << 8) | (z << 4) | x)) { h += 1; }
+                                    println!("{label} {} {} {} {h}", cx * 16 + x as i32, y as i32 + MIN_Y(), cz * 16 + z as i32);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // DUMP=cx,cz,y0,y1: side-by-side (ours | vanilla) letter maps of whole layers of one chunk.
+            if let Ok(d) = std::env::var("DUMP") {
+                let p: Vec<i32> = d.split(',').filter_map(|s| s.parse().ok()).collect();
+                if p.len() == 4 && cx == p[0] && cz == p[1] {
+                    let ch = |id: u16| match BlockState(id as u32).name() {
+                        "air" | "cave_air" => '.', "nether_wart_block" => 'W', "warped_wart_block" => 'w', "crimson_stem" | "warped_stem" => 'S',
+                        "shroomlight" => 'L', "netherrack" => 'n', "crimson_nylium" | "warped_nylium" => 'c', "crimson_roots" | "warped_roots" => 'r',
+                        "weeping_vines" | "weeping_vines_plant" | "twisting_vines" | "twisting_vines_plant" => 'v', "lava" => '~',
+                        "crimson_fungus" | "warped_fungus" => 'f', "glowstone" => 'G', "basalt" => 'B', "magma_block" => 'm', "blackstone" => 'k',
+                        "soul_sand" | "soul_soil" => 's', "nether_sprouts" => 'p', _ => '#',
+                    };
+                    for y in p[2]..=p[3] {
+                        println!("y={y} (ours | vanilla)");
+                        for z in 0..16usize {
+                            let (mut a, mut b) = (String::new(), String::new());
+                            for x in 0..16usize {
+                                let yy = (y - MIN_Y()) as usize;
+                                a.push(ch(c.blocks[yy >> 4][((yy & 15) << 8) | (z << 4) | x]));
+                                b.push(ch(v.blocks[(yy << 8) | (z << 4) | x]));
+                            }
+                            println!("  {a} | {b}");
+                        }
+                    }
+                }
+            }
             if std::env::var("BASES").is_ok() && cx == cx0 && cz == cz0 {
                 let is_log = |id: u16| { let n = BlockState(id as u32).name(); n.ends_with("_log") || n.ends_with("mushroom_stem") };
                 for (label, get) in [("ours", &(|i: usize| c.blocks[i >> 12][i & 4095]) as &dyn Fn(usize) -> u16), ("vanilla", &|i: usize| v.blocks[i])] {
