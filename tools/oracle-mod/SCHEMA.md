@@ -108,6 +108,35 @@ round trip costs about a tick.
 | `release_all` | | release every held key |
 | `query` | | state, below |
 | `quit` | | close the client |
+| `bones` | `file`, `type` (entity type id, or `self`) or `entity` (id), `partials` [..] (default [1.0]); no `file` = stop | per-tick model part dump, below |
+| `fp` | `file`; no `file` = stop | per-frame first-person transform dump, below |
+| `frames` | `dir`, `fps` (20); no `dir` = stop | write rendered frames (main render target) as `f<frame>_t<tick>.png` |
+| `camera` | `type` FIRST_PERSON / THIRD_PERSON_BACK / THIRD_PERSON_FRONT | camera mode |
+| `bob` | `on` | the view-bobbing option |
+| `hud` | `on` | show/hide the HUD (F1) |
+
+## Animation dumps (`bones`, `fp`; JSONL, Anim.java)
+
+`bones`: one line per client tick (taken at the start of the tick) for the target entity (nearest of
+`type` to the player): `{"tick", "id", "type", "pos", "raw": {hurtTime, deathTime, swingTime,
+attackAnim, yBodyRot, yHeadRot, yRot, xRot, walkSpeed, walkPos}, "frames": [{"pt", "state": {every
+public primitive/enum field of the entity's render state, from the renderer's own
+createRenderState(entity, pt)}, "parts": {"head": [x, y, z, xRot, yRot, zRot, xScale, yScale, zScale,
+visible], "head/hat": [...], ...} (after the model's own setupAnim(state); child parts by path),
+"rot_matrix": [16, column-major] (the renderer's setupRotations on an identity stack: body yaw +
+death roll), "body_matrix" (+ the renderer's scale), "overlay" (packed hurt/white overlay coords)}]}`
+(`{"tick", "missing": true}` when no such entity is in view).
+
+`fp`: per rendered frame `{"tick", "frame", "pt", "kind", "m": [16, column-major PoseStack pose],
+"attack" (getAttackAnim(pt)), "attackAnim", "swingTime", "walkDist" / "walkDistB" (forward / backwards
+interpolated walk distance), "bob", "mainH" / "mainHO" (equip height now / previous tick), "xRot",
+"yRot", "xBob", "yBob", "xBobO", "yBobO"}`; `kind` = `bob` (after GameRenderer.bobView, once for the
+world camera and once for the hand), `arm` (AvatarRenderer.renderRightHand, empty hand), `item`
+(ItemInHandRenderer.renderItem in a first-person context, `ctx` = the display context), plus
+`{"kind": "arm_part", "part": [x, y, z, xRot, yRot, zRot]}` (the right-arm model part as drawn).
+Hand-space poses start from a 180° turn of view space (+X left, +Y up, +Z forward).
+`basalt-client --anim-eval DUMP --out OUT` writes Basalt's poses for the same inputs in the same
+layout; `basalt-check client-anim` diffs them.
 
 `query` response fields: `in_world`, `screen` (class simple name or `none`), `overlay`, `packets`,
 and in a world `pos` [x,y,z], `yaw`, `pitch`, `on_ground`, `sneaking`, `sprinting`, `selected`,

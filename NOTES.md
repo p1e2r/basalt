@@ -439,3 +439,17 @@ Placement went from 178/300 differing cases (seed 1) to 25 (all but 2 are flowin
 - Crafting table window, shift-click from the player inventory (slots 10..45): the 3x3 grid is tried first (merge, then empty
   cells); if anything fits there the rest stays in the source slot (no fallback to the other inventory section). Shield (offhand
   equippable) shift-clicks into the offhand slot first.
+
+## Entity + first-person animation vs the real 26.2 client (oracle `bones`/`fp`, `basalt-check client-anim`, 2026-11-23)
+Measured from the vanilla client's own model parts / PoseStacks (exact fits; formulas live in crates/client/src/entity.rs):
+- Limb swing `cos(pos*0.6662 + phase)`; the phase (pi) is added after the scale. Walk anim: speed += (min(dist*4,1)-speed)*0.4, pos += speed.
+- Humanoid idle sway: arms zRot ±(0.05cos(0.09age)+0.05), xRot ±0.05sin(0.067age); legs yRot/zRot ±0.005; standing leg z 0, sneak (y 12, z 4).
+- Attack swing (6 ticks): body yaw sin(sqrt(t)2pi)*0.2 carries the shoulders; right arm xRot -= sin((1-(1-t)^4)pi)*1.2 + sin(t pi)*-(headPitch-0.7)*0.75, yRot += 3*bodyYaw, zRot -= 0.4 sin(t pi).
+- Holding an item: right arm xRot = swing*0.5 - pi/10. Zombie arms -80° (-120° aggressive), yRot ∓(0.1 - 0.6 sin(t pi)), xRot += 1.2 sin(t pi) - 0.4 sin((1-(1-t)^2)pi). Aggressive skeleton without bow: -90°, yRot ∓0.1.
+- Creeper: right hind/left front legs use the +pi phase. Spider leg phases hind 0, middle-hind pi, middle-front pi/2, front 3pi/2. Cow front legs at z -5.
+- Death roll: sqrt((deathTime-1)/20*1.6) (clamped 1) x 90° (spider 180°), toward the model's right side. Red overlay while hurtTime>0 or dying.
+- Chicken wings zRot ±(sin(flap)+1)*flapSpeed; in the air flap +1.8/tick at speed 1; on the ground speed -0.3/tick, flap rate x0.9/tick.
+- Mob head yaw from rotate_head: linear over 3 ticks.
+- First person: arm/item hand matrices (fp_arm_matrix / fp_item_matrix) match to < 1e-4; equip height eases ±0.4/tick to (attack strength)^3 (cooldown 20/attack speed ticks), to 0 while another item is drawn, which swaps once < 0.1; attacking air swings and resets the strength.
+- View bob (view space): T(sin(w pi)b/2, -|cos(w pi)b|, 0) Rz(3° sin(w pi)b) Rx(5° |cos(w pi - 0.2)|b), w = -(walkDist + step*pt), walkDist += 0.6*horizontal distance, b eases x0.4 to min(0.1, horizontal speed) on ground. Hurt roll -14° sin(((hurtTime-pt)/10)^4 pi).
+- Not done: swimming pose, hand sway (xBob/yBob lag), bow/crossbow/eat arm poses, baby head scaling, burning-entity fire overlay, red-overlay colour (vanilla white fur -> ~(202..225, 106..125, 106..125)).

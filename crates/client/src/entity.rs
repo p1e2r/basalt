@@ -46,7 +46,7 @@ pub struct Entity {
     target: [f64; 3],
     steps: u32,
     pub yaw: f32, pub pitch: f32, target_yaw: f32, target_pitch: f32,
-    pub head_yaw: f32, prev_head_yaw: f32, target_head_yaw: f32,
+    pub head_yaw: f32, prev_head_yaw: f32, target_head_yaw: f32, head_steps: u32,
     pub body_yaw: f32, prev_body_yaw: f32,
     pub prev_pitch: f32,
     pub vel: [f64; 3],
@@ -66,15 +66,17 @@ pub struct Entity {
     /// add_entity's data field (falling_block: its block state)
     pub data: i32,
     bob: f32,
+    /// chicken wing flapping: phase, amplitude and phase rate (with previous-tick values)
+    flap: f32, prev_flap: f32, flap_speed: f32, prev_flap_speed: f32, flap_rate: f32,
 }
 
 impl Entity {
     pub fn new(id: i32, uuid: Uuid, kind: i32, pos: [f64; 3], vel: [f64; 3], yaw: f32, pitch: f32, head_yaw: f32) -> Entity {
         Entity {
             id, uuid, kind, server_pos: pos, pos, prev: pos, target: pos, steps: 0,
-            yaw, pitch, target_yaw: yaw, target_pitch: pitch, head_yaw, prev_head_yaw: head_yaw, target_head_yaw: head_yaw, body_yaw: yaw, prev_body_yaw: yaw, prev_pitch: pitch,
+            yaw, pitch, target_yaw: yaw, target_pitch: pitch, head_yaw, prev_head_yaw: head_yaw, target_head_yaw: head_yaw, head_steps: 0, body_yaw: yaw, prev_body_yaw: yaw, prev_pitch: pitch,
             vel, on_ground: false, flags: 0, pose: 0, item: None, health: None, baby: false, wool: 0, mob_flags: 0, hurt: 0, death: 0, swing: -1,
-            limb_pos: 0.0, limb_amt: 0.0, prev_limb_amt: 0.0, prev_limb_pos: 0.0, age: 0, data: 0, bob: (id as u32).wrapping_mul(2654435761) as f32 / u32::MAX as f32 * PI * 2.0,
+            limb_pos: 0.0, limb_amt: 0.0, prev_limb_amt: 0.0, prev_limb_pos: 0.0, age: 0, data: 0, flap: 0.0, prev_flap: 0.0, flap_speed: 0.0, prev_flap_speed: 0.0, flap_rate: 1.0, bob: (id as u32).wrapping_mul(2654435761) as f32 / u32::MAX as f32 * PI * 2.0,
         }
     }
     fn lerp_steps(&self) -> u32 { match type_name(self.kind) { "item" | "experience_orb" => 1, "arrow" | "spectral_arrow" => 1, _ => 3 } }
@@ -87,7 +89,8 @@ impl Entity {
         if d2 > 64.0 * 64.0 { self.pos = p; self.prev = p; self.steps = 0; } else { self.target = p; self.steps = self.lerp_steps(); }
         if let Some((y, pi)) = rot { self.target_yaw = y; self.target_pitch = pi; if !is_living(self.kind) || type_name(self.kind) != "player" { if self.steps == 0 { self.yaw = y; self.pitch = pi; } } }
     }
-    pub fn set_head(&mut self, y: f32) { self.target_head_yaw = y; }
+    /// Head yaw from the server: reached linearly over 3 ticks, as the vanilla client does (oracle bone dumps 2026-11-23).
+    pub fn set_head(&mut self, y: f32) { self.target_head_yaw = y; self.head_steps = 3; }
 
     pub fn apply_meta(&mut self, entries: &[(u8, Meta)]) {
         let name = type_name(self.kind);
@@ -123,7 +126,7 @@ impl Entity {
             self.pitch += (self.target_pitch - self.pitch) / n as f32;
             self.steps -= 1;
         } else { self.yaw = self.target_yaw; self.pitch = self.target_pitch; }
-        self.head_yaw += wrap(self.target_head_yaw - self.head_yaw) * 0.5;
+        if self.head_steps > 0 { self.head_yaw += wrap(self.target_head_yaw - self.head_yaw) / self.head_steps as f32; self.head_steps -= 1; } else { self.head_yaw = self.target_head_yaw; }
         // limb swing from horizontal movement
         let (dx, dz) = (self.pos[0] - self.prev[0], self.pos[2] - self.prev[2]);
         let moved = ((dx * dx + dz * dz).sqrt() as f32 * 4.0).min(1.0);
@@ -145,6 +148,14 @@ impl Entity {
         let d = wrap(head - body);
         if d > 50.0 { body = head - 50.0; } else if d < -50.0 { body = head + 50.0; }
         self.body_yaw = body;
+        }
+        if type_name(self.kind) == "chicken" {
+            // measured on the vanilla client (oracle bone dumps of a falling chicken, 2026-11-23): in
+            // the air the wings beat at full amplitude, phase +1.8/tick; after landing the amplitude
+            // drops 0.3/tick and the beat slows by x0.9/tick
+            self.prev_flap = self.flap; self.prev_flap_speed = self.flap_speed;
+            if self.on_ground { self.flap_speed = (self.flap_speed - 0.3).max(0.0); self.flap_rate *= 0.9; } else { self.flap_speed = (self.flap_speed + 1.2).min(1.0); self.flap_rate = 1.0; }
+            self.flap += self.flap_rate * 1.8;
         }
         if self.hurt > 0 { self.hurt -= 1; }
         if self.death > 0 && self.death < 20 { self.death += 1; }
@@ -202,11 +213,21 @@ fn cube(from: [f32; 3], size: [f32; 3], uv: [f32; 2]) -> Cube { Cube { from, siz
 fn cube_i(from: [f32; 3], size: [f32; 3], uv: [f32; 2], inflate: f32) -> Cube { Cube { from, size, uv, inflate, mirror: false } }
 fn cube_m(from: [f32; 3], size: [f32; 3], uv: [f32; 2]) -> Cube { Cube { from, size, uv, inflate: 0.0, mirror: true } }
 
+/// (vanilla part name, pivot px, rotation rad)
+pub type PartPose = (&'static str, [f32; 3], [f32; 3]);
+
+thread_local! {
+    /// When set, every model part emitted is recorded as (vanilla part name, pivot, rotation) — the
+    /// animation comparer (`--anim-eval`, anim.rs) diffs these against the oracle's bone dumps.
+    pub static REC: std::cell::RefCell<Option<Vec<PartPose>>> = const { std::cell::RefCell::new(None) };
+}
+
 struct Emitter<'a> { out: &'a mut MeshData, base: Mat4, tex: [u32; 4], aw: f32, ah: f32, color: [u8; 4], light: [u8; 2] }
 
 impl Emitter<'_> {
     /// Emit cubes of a part with pivot + rotation (radians, applied Z·Y·X like Java models).
-    fn part(&mut self, pivot: [f32; 3], rot: [f32; 3], cubes: &[Cube]) {
+    fn part(&mut self, name: &'static str, pivot: [f32; 3], rot: [f32; 3], cubes: &[Cube]) {
+        REC.with(|r| if let Some(v) = r.borrow_mut().as_mut() { v.push((name, pivot, rot)); });
         let m = self.base * Mat4::from_translation(Vec3::from(pivot)) * Mat4::from_rotation_z(rot[2]) * Mat4::from_rotation_y(rot[1]) * Mat4::from_rotation_x(rot[0]);
         for c in cubes { self.cube(&m, c); }
     }
@@ -268,33 +289,74 @@ pub fn default_skin(u: &Uuid) -> (String, bool) {
 
 const WOOL: [u32; 16] = [0xF9FFFE, 0xF9801D, 0xC74EBD, 0x3AB3DA, 0xFED83D, 0x80C71F, 0xF38BAA, 0x474F52, 0x9D9D97, 0x169C9C, 0x8932B8, 0x3C44AA, 0x835432, 0x5E7C16, 0xB02E26, 0x1D1D21];
 
-pub struct Pose { pub limb: f32, pub amt: f32, pub head_yaw: f32, pub pitch: f32, pub age: f32, pub swing: f32, pub sneak: bool }
+/// Everything the model animation depends on (one rendered frame of one entity).
+pub struct Pose {
+    pub pos: [f64; 3], pub body: f32,
+    pub limb: f32, pub amt: f32, pub head_yaw: f32, pub pitch: f32, pub age: f32, pub swing: f32, pub sneak: bool,
+    /// ticks since death (with partial tick), 0 = alive
+    pub death: f32, pub hurt: bool,
+    /// how far the body rolls over when dying (degrees)
+    pub flip: f32,
+    /// chicken wing angle (rad)
+    pub wing: f32,
+    /// holding an item in the main (right) hand
+    pub holding: bool,
+}
+
+/// Chicken wing roll from the flap phase and amplitude (oracle bone dumps 2026-11-23).
+pub fn wing_angle(flap: f32, speed: f32) -> f32 { (flap.sin() + 1.0) * speed }
+
+/// Death roll in degrees: spiders end on their back, everything else on its side (oracle bone dumps 2026-11-23).
+pub fn flip_degrees(kind: i32) -> f32 { if matches!(type_name(kind), "spider" | "cave_spider") { 180.0 } else { 90.0 } }
+
+pub fn pose_of(e: &Entity, alpha: f32) -> Pose {
+    let name = type_name(e.kind);
+    let body = lerp_angle(e.prev_body_yaw, e.body_yaw, alpha);
+    let head = if name == "player" { lerp_angle(e.prev_body_yaw, e.yaw, 1.0) } else { lerp_angle(e.prev_head_yaw, e.head_yaw, alpha) };
+    let pitch = e.prev_pitch + (e.pitch - e.prev_pitch) * alpha;
+    Pose {
+        pos: e.render_pos(alpha), body,
+        limb: e.prev_limb_pos + (e.limb_pos - e.prev_limb_pos) * alpha, amt: (e.prev_limb_amt + (e.limb_amt - e.prev_limb_amt) * alpha).min(1.0),
+        head_yaw: wrap(head - body).clamp(-75.0, 75.0).to_radians(), pitch: pitch.to_radians(), age: e.age as f32 + alpha,
+        swing: if e.swing >= 0 { (e.swing as f32 + alpha) / 6.0 } else { 0.0 }, sneak: e.sneaking(),
+        death: if e.death > 0 { e.death as f32 - 1.0 + alpha } else { 0.0 }, hurt: e.hurt > 0, flip: flip_degrees(e.kind),
+        holding: false,
+        wing: wing_angle(e.prev_flap + (e.flap - e.prev_flap) * alpha, e.prev_flap_speed + (e.flap_speed - e.prev_flap_speed) * alpha),
+    }
+}
 
 /// Append the model of `e` to `out` (entity atlas UVs). `light` = (sky, block) 0..255.
 /// Returns false if there is no model for this type (caller draws a box).
 pub fn build_model(atlas: &EntityAtlas, e: &Entity, alpha: f32, light: [u8; 2], out: &mut MeshData) -> bool {
-    let name = type_name(e.kind);
-    let p = e.render_pos(alpha);
-    let body = lerp_angle(e.prev_body_yaw, e.body_yaw, alpha);
-    let head = if name == "player" { lerp_angle(e.prev_body_yaw, e.yaw, 1.0) } else { lerp_angle(e.prev_head_yaw, e.head_yaw, alpha) };
-    let pitch = e.prev_pitch + (e.pitch - e.prev_pitch) * alpha;
-    let pose = Pose {
-        limb: e.prev_limb_pos + (e.limb_pos - e.prev_limb_pos) * alpha, amt: (e.prev_limb_amt + (e.limb_amt - e.prev_limb_amt) * alpha).min(1.0),
-        head_yaw: wrap(head - body).clamp(-75.0, 75.0).to_radians(), pitch: pitch.to_radians(), age: e.age as f32 + alpha,
-        swing: if e.swing >= 0 { (e.swing as f32 + alpha) / 6.0 } else { 0.0 }, sneak: e.sneaking(),
-    };
-    let tint = if e.hurt > 0 || e.death > 0 { [255, 110, 110, 255] } else { [255; 4] };
-    let scale = if e.baby { 0.5 } else { 1.0 };
-    // world ← model: translate, body yaw, death roll, scale to blocks, model space (y down, -Z front, origin 24px up)
-    let mut base = Mat4::from_translation(Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32)) * Mat4::from_rotation_y(-body.to_radians());
-    if e.death > 0 {
-        let f = (((e.death as f32 + alpha - 1.0) / 20.0 * 1.6).sqrt()).min(1.0);
-        base *= Mat4::from_rotation_z(f * PI / 2.0);
+    emit_model(atlas, e, &pose_of(e, alpha), light, out)
+}
+
+/// The body transform (world <- model, before the 1/16 scale): translation, body yaw, death roll.
+pub fn body_matrix(pose: &Pose) -> Mat4 {
+    let p = pose.pos;
+    let mut base = Mat4::from_translation(Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32)) * Mat4::from_rotation_y(-pose.body.to_radians());
+    if pose.death > 1.0 {
+        // falls over onto its right side (negative roll in our model space), fully over after
+        // 12.5 ticks: angle = sqrt((deathTime - 1) / 20 * 1.6) * flip (oracle bone dumps 2026-11-23)
+        let f = (((pose.death - 1.0) / 20.0 * 1.6).sqrt()).min(1.0);
+        base *= Mat4::from_rotation_z(-(f * pose.flip).to_radians());
     }
+    base
+}
+
+/// Emit the model of `e`'s type in `pose` (type-specific flags such as wool colour still come from `e`).
+pub fn emit_model(atlas: &EntityAtlas, e: &Entity, pose: &Pose, light: [u8; 2], out: &mut MeshData) -> bool {
+    let name = type_name(e.kind);
+    let p = pose.pos;
+    let tint = if pose.hurt || pose.death > 0.0 { [255, 110, 110, 255] } else { [255; 4] };
+    let scale = if e.baby { 0.5 } else { 1.0 };
+    // world <- model: translate, body yaw, death roll, scale to blocks, model space (y down, -Z front, origin 24px up)
+    let mut base = body_matrix(pose);
     base *= Mat4::from_scale(Vec3::splat(scale / 16.0)) * Mat4::from_translation(Vec3::new(0.0, 24.0, 0.0)) * Mat4::from_scale(Vec3::new(1.0, -1.0, -1.0));
     let tex_for = |n: &str| atlas.rects.get(n).copied();
     macro_rules! em { ($tex:expr, $color:expr, $out:expr) => { Emitter { out: $out, base, tex: $tex, aw: atlas.w as f32, ah: atlas.h as f32, color: $color, light } } }
-    let swing_l = |a: f32| (a * 0.6662).cos();
+    // limb swing: cos(pos * 0.6662 + phase); the phase is added after the scale (oracle bone dumps 2026-11-23)
+    let swing_l = |a: f32, ph: f32| (a * 0.6662 + ph).cos();
     let (limb, amt) = (pose.limb, pose.amt);
     match name {
         "player" | "zombie" | "husk" | "drowned" | "skeleton" | "stray" => {
@@ -308,20 +370,48 @@ pub fn build_model(atlas: &EntityAtlas, e: &Entity, alpha: f32, light: [u8; 2], 
             let thin = name == "skeleton" || name == "stray";
             let old = atlas.legacy.contains(&texn);
             let sn = pose.sneak;
-            let (hy, by, ay, ly, lz) = if sn { (4.2, 3.2, 5.2, 12.2, 4.0) } else { (0.0, 0.0, 2.0, 12.0, 0.1) };
-            m.part([0.0, hy, 0.0], [pose.pitch, pose.head_yaw, 0.0], &[cube([-4.0, -8.0, -4.0], [8.0, 8.0, 8.0], [0.0, 0.0]), cube_i([-4.0, -8.0, -4.0], [8.0, 8.0, 8.0], [32.0, 0.0], 0.5)]);
+            // Pivots and angles below were fitted against the vanilla client's own model parts
+            // (oracle "bones" dumps of player/zombie/skeleton idle, walk, sneak and attack, 2026-11-23).
+            let (hy, by, ay, lz) = if sn { (4.2, 3.2, 5.2, 4.0) } else { (0.0, 0.0, 2.0, 0.0) };
+            m.part("head", [0.0, hy, 0.0], [pose.pitch, pose.head_yaw, 0.0], &[cube([-4.0, -8.0, -4.0], [8.0, 8.0, 8.0], [0.0, 0.0]), cube_i([-4.0, -8.0, -4.0], [8.0, 8.0, 8.0], [32.0, 0.0], 0.5)]);
+            // attack swing: the body twists (yaw sin(sqrt(t)*2pi)*0.2) and carries the shoulders round
+            let a = pose.swing;
+            let body_ry = if a > 0.0 { (a.sqrt() * 2.0 * PI).sin() * 0.2 } else { 0.0 };
             let body_rot = if sn { 0.5 } else { 0.0 };
             let mut body_c = vec![cube([-4.0, 0.0, -2.0], [8.0, 12.0, 4.0], [16.0, 16.0])];
             if !old && !thin { body_c.push(cube_i([-4.0, 0.0, -2.0], [8.0, 12.0, 4.0], [16.0, 32.0], 0.25)); }
-            m.part([0.0, by, 0.0], [body_rot, 0.0, 0.0], &body_c);
-            // arms
+            m.part("body", [0.0, by, 0.0], [body_rot, body_ry, 0.0], &body_c);
+            // arms: [xRot, yRot, zRot] and shoulder pivots
             let zombie_arms = matches!(name, "zombie" | "husk" | "drowned");
             let aiming = thin && e.mob_flags & 4 != 0;
-            let mut ra = swing_l(limb + PI) * 2.0 * amt * 0.5;
-            let mut la = swing_l(limb) * 2.0 * amt * 0.5;
-            if zombie_arms || aiming { ra = -PI / 2.0 + (pose.age * 0.067).sin() * 0.05; la = ra; }
-            if sn { ra += 0.4; la += 0.4; }
-            if pose.swing > 0.0 { ra -= (pose.swing * PI).sin() * 1.2; }
+            let mut ra = [swing_l(limb, PI) * amt, 0.0, 0.0];
+            let mut la = [swing_l(limb, 0.0) * amt, 0.0, 0.0];
+            let (mut rap, mut lap) = ([-5.0, ay, 0.0], [5.0, ay, 0.0]);
+            if aiming { ra = [-PI / 2.0, -0.1, 0.0]; la = [-PI / 2.0, 0.1, 0.0]; }
+            // holding an item: the arm swings half as far and is raised by pi/10
+            else if pose.holding && !zombie_arms { ra[0] = ra[0] * 0.5 - PI / 10.0; }
+            if a > 0.0 {
+                rap = [-body_ry.cos() * 5.0, ay, body_ry.sin() * 5.0];
+                lap = [body_ry.cos() * 5.0, ay, -body_ry.sin() * 5.0];
+                ra[1] += body_ry; la[1] += body_ry; la[0] += body_ry;
+                if !zombie_arms {
+                    let f = 1.0 - (1.0 - a).powi(4);
+                    ra[0] -= (f * PI).sin() * 1.2 + (a * PI).sin() * -(pose.pitch - 0.7) * 0.75;
+                    ra[1] += body_ry * 2.0;
+                    ra[2] += (a * PI).sin() * -0.4;
+                }
+            }
+            if zombie_arms {
+                // zombies hold both arms out at 80° and lift/spread them while attacking
+                let (f, g) = ((a * PI).sin(), ((1.0 - (1.0 - a) * (1.0 - a)) * PI).sin());
+                // (80° normally, 120° while aggressive)
+                let rx = if e.mob_flags & 4 != 0 { -120f32 } else { -80f32 }.to_radians() + f * 1.2 - g * 0.4;
+                ra = [rx, -(0.1 - f * 0.6), 0.0]; la = [rx, 0.1 - f * 0.6, 0.0];
+            }
+            if sn { ra[0] += 0.4; la[0] += 0.4; }
+            // idle sway (breathing)
+            let (sz, sx) = ((pose.age * 0.09).cos() * 0.05 + 0.05, (pose.age * 0.067).sin() * 0.05);
+            ra[2] += sz; la[2] -= sz; ra[0] += sx; la[0] -= sx;
             let aw = if slim { 3.0 } else if thin { 2.0 } else { 4.0 };
             let (rx, lx) = if thin { (-1.0, -1.0) } else { (-aw + 1.0, -1.0) };
             let arm_d = if thin { 2.0 } else { 4.0 };
@@ -330,72 +420,74 @@ pub fn build_model(atlas: &EntityAtlas, e: &Entity, alpha: f32, light: [u8; 2], 
             let la_c = if thin || old { vec![cube_m([lx, -2.0, if thin { -1.0 } else { -2.0 }], [aw, 12.0, arm_d], [40.0, 16.0])] } else {
                 vec![cube([lx, -2.0, -2.0], [aw, 12.0, arm_d], [32.0, 48.0]), cube_i([lx, -2.0, -2.0], [aw, 12.0, arm_d], [48.0, 48.0], 0.25)] };
             let ra_c: Vec<Cube> = if old { ra_c.into_iter().take(1).collect() } else { ra_c };
-            m.part([-5.0, ay, 0.0], [ra, 0.0, 0.0], &ra_c);
-            m.part([5.0, ay, 0.0], [la, 0.0, 0.0], &la_c);
+            m.part("right_arm", rap, ra, &ra_c);
+            m.part("left_arm", lap, la, &la_c);
             // legs
-            let (rl, ll) = (swing_l(limb) * 1.4 * amt, swing_l(limb + PI) * 1.4 * amt);
+            let (rl, ll) = (swing_l(limb, 0.0) * 1.4 * amt, swing_l(limb, PI) * 1.4 * amt);
             let lw = if thin { 2.0 } else { 4.0 };
             let lo = -lw / 2.0;
             let rl_c = if thin || old { vec![cube([lo, 0.0, lo], [lw, 12.0, lw], [0.0, 16.0])] } else { vec![cube([-2.0, 0.0, -2.0], [4.0, 12.0, 4.0], [0.0, 16.0]), cube_i([-2.0, 0.0, -2.0], [4.0, 12.0, 4.0], [0.0, 32.0], 0.25)] };
             let ll_c = if thin || old { vec![cube_m([lo, 0.0, lo], [lw, 12.0, lw], [0.0, 16.0])] } else { vec![cube([-2.0, 0.0, -2.0], [4.0, 12.0, 4.0], [16.0, 48.0]), cube_i([-2.0, 0.0, -2.0], [4.0, 12.0, 4.0], [0.0, 48.0], 0.25)] };
-            m.part([-1.9, ly, lz], [rl, 0.0, 0.0], &rl_c);
-            m.part([1.9, ly, lz], [ll, 0.0, 0.0], &ll_c);
+            let lx = if thin { 2.0 } else { 1.9 };
+            m.part("right_leg", [-lx, 12.0, lz], [rl, 0.005, 0.005], &rl_c);
+            m.part("left_leg", [lx, 12.0, lz], [ll, -0.005, -0.005], &ll_c);
         }
         "creeper" => {
             let Some(t) = tex_for("creeper/creeper") else { return false };
             let mut m = em!(t, tint, out);
-            m.part([0.0, 6.0, 0.0], [pose.pitch, pose.head_yaw, 0.0], &[cube([-4.0, -8.0, -4.0], [8.0, 8.0, 8.0], [0.0, 0.0])]);
-            m.part([0.0, 6.0, 0.0], [0.0; 3], &[cube([-4.0, 0.0, -2.0], [8.0, 12.0, 4.0], [16.0, 16.0])]);
-            let (a, b) = (swing_l(limb) * 1.4 * amt, swing_l(limb + PI) * 1.4 * amt);
-            for (x, z, r) in [(-2.0, 4.0, a), (2.0, 4.0, b), (-2.0, -4.0, b), (2.0, -4.0, a)] { m.part([x, 18.0, z], [r, 0.0, 0.0], &[cube([-2.0, 0.0, -2.0], [4.0, 6.0, 4.0], [0.0, 16.0])]); }
+            m.part("head", [0.0, 6.0, 0.0], [pose.pitch, pose.head_yaw, 0.0], &[cube([-4.0, -8.0, -4.0], [8.0, 8.0, 8.0], [0.0, 0.0])]);
+            m.part("body", [0.0, 6.0, 0.0], [0.0; 3], &[cube([-4.0, 0.0, -2.0], [8.0, 12.0, 4.0], [16.0, 16.0])]);
+            let (a, b) = (swing_l(limb, 0.0) * 1.4 * amt, swing_l(limb, PI) * 1.4 * amt);
+            for (n, x, z, r) in [("right_hind_leg", -2.0, 4.0, b), ("left_hind_leg", 2.0, 4.0, a), ("right_front_leg", -2.0, -4.0, a), ("left_front_leg", 2.0, -4.0, b)] { m.part(n, [x, 18.0, z], [r, 0.0, 0.0], &[cube([-2.0, 0.0, -2.0], [4.0, 6.0, 4.0], [0.0, 16.0])]); }
         }
         "spider" | "cave_spider" => {
             let Some(t) = tex_for(if name == "spider" { "spider/spider" } else { "spider/cave_spider" }) else { return false };
             if name == "cave_spider" { base *= Mat4::from_scale(Vec3::splat(0.7)); }
             let mut m = Emitter { out, base, tex: t, aw: atlas.w as f32, ah: atlas.h as f32, color: tint, light };
-            m.part([0.0, 15.0, -3.0], [pose.pitch, pose.head_yaw, 0.0], &[cube([-4.0, -4.0, -8.0], [8.0, 8.0, 8.0], [32.0, 4.0])]);
-            m.part([0.0, 15.0, 0.0], [0.0; 3], &[cube([-3.0, -3.0, -3.0], [6.0, 6.0, 6.0], [0.0, 0.0])]);
-            m.part([0.0, 15.0, 9.0], [0.0; 3], &[cube([-5.0, -4.0, -6.0], [10.0, 8.0, 12.0], [0.0, 12.0])]);
+            m.part("head", [0.0, 15.0, -3.0], [pose.pitch, pose.head_yaw, 0.0], &[cube([-4.0, -4.0, -8.0], [8.0, 8.0, 8.0], [32.0, 4.0])]);
+            m.part("body0", [0.0, 15.0, 0.0], [0.0; 3], &[cube([-3.0, -3.0, -3.0], [6.0, 6.0, 6.0], [0.0, 0.0])]);
+            m.part("body1", [0.0, 15.0, 9.0], [0.0; 3], &[cube([-5.0, -4.0, -6.0], [10.0, 8.0, 12.0], [0.0, 12.0])]);
             let q = PI / 4.0;
             for (i, (z, ya)) in [(2.0, q), (1.0, q / 2.0), (0.0, -q / 2.0), (-1.0, -q)].iter().enumerate() {
-                let ph = i as f32 * PI / 2.0;
+                // leg phases hind 0, middle-hind pi, middle-front pi/2, front 3pi/2 (oracle bone dumps 2026-11-23)
+                let ph = [0.0, PI, PI / 2.0, 1.5 * PI][i];
                 let sy = -((limb * 0.6662 * 2.0 + ph).cos() * 0.4) * amt;
                 let sz = ((limb * 0.6662 + ph).sin() * 0.4).abs() * amt;
                 let zr = if i == 0 || i == 3 { q } else { q * 0.74 };
-                m.part([-4.0, 15.0, *z], [0.0, *ya + sy, -zr + sz], &[cube([-15.0, -1.0, -1.0], [16.0, 2.0, 2.0], [18.0, 0.0])]);
-                m.part([4.0, 15.0, *z], [0.0, -*ya - sy, zr - sz], &[cube([-1.0, -1.0, -1.0], [16.0, 2.0, 2.0], [18.0, 0.0])]);
+                m.part(["right_hind_leg", "right_middle_hind_leg", "right_middle_front_leg", "right_front_leg"][i], [-4.0, 15.0, *z], [0.0, *ya + sy, -zr + sz], &[cube([-15.0, -1.0, -1.0], [16.0, 2.0, 2.0], [18.0, 0.0])]);
+                m.part(["left_hind_leg", "left_middle_hind_leg", "left_middle_front_leg", "left_front_leg"][i], [4.0, 15.0, *z], [0.0, -*ya - sy, zr - sz], &[cube([-1.0, -1.0, -1.0], [16.0, 2.0, 2.0], [18.0, 0.0])]);
             }
         }
         "cow" | "mooshroom" => {
             let Some(t) = tex_for(if name == "cow" { "cow/cow_temperate" } else { "cow/mooshroom_red" }) else { return false };
             let mut m = em!(t, tint, out);
-            m.part([0.0, 4.0, -8.0], [pose.pitch, pose.head_yaw, 0.0], &[cube([-4.0, -4.0, -6.0], [8.0, 8.0, 6.0], [0.0, 0.0]), cube([-5.0, -5.0, -4.0], [1.0, 3.0, 1.0], [22.0, 0.0]), cube_m([4.0, -5.0, -4.0], [1.0, 3.0, 1.0], [22.0, 0.0])]);
-            m.part([0.0, 5.0, 2.0], [PI / 2.0, 0.0, 0.0], &[cube([-6.0, -10.0, -7.0], [12.0, 18.0, 10.0], [18.0, 4.0]), cube([-2.0, 2.0, -8.0], [4.0, 6.0, 1.0], [52.0, 0.0])]);
-            quad_legs(&mut m, limb, amt, 12.0, [(-4.0, 7.0), (4.0, 7.0), (-4.0, -6.0), (4.0, -6.0)], [4.0, 12.0, 4.0]);
+            m.part("head", [0.0, 4.0, -8.0], [pose.pitch, pose.head_yaw, 0.0], &[cube([-4.0, -4.0, -6.0], [8.0, 8.0, 6.0], [0.0, 0.0]), cube([-5.0, -5.0, -4.0], [1.0, 3.0, 1.0], [22.0, 0.0]), cube_m([4.0, -5.0, -4.0], [1.0, 3.0, 1.0], [22.0, 0.0])]);
+            m.part("body", [0.0, 5.0, 2.0], [PI / 2.0, 0.0, 0.0], &[cube([-6.0, -10.0, -7.0], [12.0, 18.0, 10.0], [18.0, 4.0]), cube([-2.0, 2.0, -8.0], [4.0, 6.0, 1.0], [52.0, 0.0])]);
+            quad_legs(&mut m, limb, amt, 12.0, [(-4.0, 7.0), (4.0, 7.0), (-4.0, -5.0), (4.0, -5.0)], [4.0, 12.0, 4.0]);
         }
         "pig" => {
             let Some(t) = tex_for("pig/pig_temperate") else { return false };
             let mut m = em!(t, tint, out);
-            m.part([0.0, 12.0, -6.0], [pose.pitch, pose.head_yaw, 0.0], &[cube([-4.0, -4.0, -8.0], [8.0, 8.0, 8.0], [0.0, 0.0]), cube([-2.0, 0.0, -9.0], [4.0, 3.0, 1.0], [16.0, 16.0])]);
-            m.part([0.0, 11.0, 2.0], [PI / 2.0, 0.0, 0.0], &[cube([-5.0, -10.0, -7.0], [10.0, 16.0, 8.0], [28.0, 8.0])]);
+            m.part("head", [0.0, 12.0, -6.0], [pose.pitch, pose.head_yaw, 0.0], &[cube([-4.0, -4.0, -8.0], [8.0, 8.0, 8.0], [0.0, 0.0]), cube([-2.0, 0.0, -9.0], [4.0, 3.0, 1.0], [16.0, 16.0])]);
+            m.part("body", [0.0, 11.0, 2.0], [PI / 2.0, 0.0, 0.0], &[cube([-5.0, -10.0, -7.0], [10.0, 16.0, 8.0], [28.0, 8.0])]);
             quad_legs(&mut m, limb, amt, 18.0, [(-3.0, 7.0), (3.0, 7.0), (-3.0, -5.0), (3.0, -5.0)], [4.0, 6.0, 4.0]);
         }
         "sheep" => {
             let Some(t) = tex_for("sheep/sheep") else { return false };
             let mut m = em!(t, tint, out);
-            let head = |m: &mut Emitter, c: &[Cube]| m.part([0.0, 6.0, -8.0], [pose.pitch, pose.head_yaw, 0.0], c);
+            let head = |m: &mut Emitter, c: &[Cube]| m.part("head", [0.0, 6.0, -8.0], [pose.pitch, pose.head_yaw, 0.0], c);
             head(&mut m, &[cube([-3.0, -4.0, -6.0], [6.0, 6.0, 8.0], [0.0, 0.0])]);
-            m.part([0.0, 5.0, 2.0], [PI / 2.0, 0.0, 0.0], &[cube([-4.0, -10.0, -7.0], [8.0, 16.0, 6.0], [28.0, 8.0])]);
+            m.part("body", [0.0, 5.0, 2.0], [PI / 2.0, 0.0, 0.0], &[cube([-4.0, -10.0, -7.0], [8.0, 16.0, 6.0], [28.0, 8.0])]);
             quad_legs(&mut m, limb, amt, 12.0, [(-3.0, 7.0), (3.0, 7.0), (-3.0, -5.0), (3.0, -5.0)], [4.0, 12.0, 4.0]);
             if e.wool & 0x10 == 0 {
                 if let Some(wt) = tex_for("sheep/sheep_wool") {
                     let c = WOOL[(e.wool & 15) as usize];
                     let col = [((c >> 16 & 255) * tint[0] as u32 / 255) as u8, ((c >> 8 & 255) * tint[1] as u32 / 255) as u8, ((c & 255) * tint[2] as u32 / 255) as u8, 255];
                     let mut w = em!(wt, col, out);
-                    w.part([0.0, 6.0, -8.0], [pose.pitch, pose.head_yaw, 0.0], &[cube_i([-3.0, -4.0, -4.0], [6.0, 6.0, 6.0], [0.0, 0.0], 0.6)]);
-                    w.part([0.0, 5.0, 2.0], [PI / 2.0, 0.0, 0.0], &[cube_i([-4.0, -10.0, -7.0], [8.0, 16.0, 6.0], [28.0, 8.0], 1.75)]);
-                    let (a, b) = (swing_l(limb) * 1.4 * amt, swing_l(limb + PI) * 1.4 * amt);
-                    for (x, z, r) in [(-3.0, 7.0, a), (3.0, 7.0, b), (-3.0, -5.0, b), (3.0, -5.0, a)] { w.part([x, 12.0, z], [r, 0.0, 0.0], &[cube_i([-2.0, 0.0, -2.0], [4.0, 6.0, 4.0], [0.0, 16.0], 0.5)]); }
+                    w.part("wool/head", [0.0, 6.0, -8.0], [pose.pitch, pose.head_yaw, 0.0], &[cube_i([-3.0, -4.0, -4.0], [6.0, 6.0, 6.0], [0.0, 0.0], 0.6)]);
+                    w.part("wool/body", [0.0, 5.0, 2.0], [PI / 2.0, 0.0, 0.0], &[cube_i([-4.0, -10.0, -7.0], [8.0, 16.0, 6.0], [28.0, 8.0], 1.75)]);
+                    let (a, b) = (swing_l(limb, 0.0) * 1.4 * amt, swing_l(limb, PI) * 1.4 * amt);
+                    for (n, x, z, r) in [("wool/right_hind_leg", -3.0, 7.0, a), ("wool/left_hind_leg", 3.0, 7.0, b), ("wool/right_front_leg", -3.0, -5.0, b), ("wool/left_front_leg", 3.0, -5.0, a)] { w.part(n, [x, 12.0, z], [r, 0.0, 0.0], &[cube_i([-2.0, 0.0, -2.0], [4.0, 6.0, 4.0], [0.0, 16.0], 0.5)]); }
                 }
             }
         }
@@ -403,14 +495,14 @@ pub fn build_model(atlas: &EntityAtlas, e: &Entity, alpha: f32, light: [u8; 2], 
             let Some(t) = tex_for("chicken/chicken_temperate") else { return false };
             let mut m = em!(t, tint, out);
             let hr = [pose.pitch, pose.head_yaw, 0.0];
-            m.part([0.0, 15.0, -4.0], hr, &[cube([-2.0, -6.0, -2.0], [4.0, 6.0, 3.0], [0.0, 0.0]), cube([-2.0, -4.0, -4.0], [4.0, 2.0, 2.0], [14.0, 0.0]), cube([-1.0, -2.0, -3.0], [2.0, 2.0, 2.0], [14.0, 4.0])]);
-            m.part([0.0, 16.0, 0.0], [PI / 2.0, 0.0, 0.0], &[cube([-3.0, -4.0, -3.0], [6.0, 8.0, 6.0], [0.0, 9.0])]);
-            let (a, b) = (swing_l(limb) * 1.4 * amt, swing_l(limb + PI) * 1.4 * amt);
-            m.part([-2.0, 19.0, 1.0], [a, 0.0, 0.0], &[cube([-1.0, 0.0, -3.0], [3.0, 5.0, 3.0], [26.0, 0.0])]);
-            m.part([1.0, 19.0, 1.0], [b, 0.0, 0.0], &[cube([-1.0, 0.0, -3.0], [3.0, 5.0, 3.0], [26.0, 0.0])]);
-            let flap = if e.on_ground || (e.pos[1] - e.prev[1]).abs() < 0.01 { 0.0 } else { (pose.age * 1.5).sin().abs() * 1.2 };
-            m.part([-4.0, 13.0, 0.0], [0.0, 0.0, flap], &[cube([0.0, 0.0, -3.0], [1.0, 4.0, 6.0], [24.0, 13.0])]);
-            m.part([4.0, 13.0, 0.0], [0.0, 0.0, -flap], &[cube([-1.0, 0.0, -3.0], [1.0, 4.0, 6.0], [24.0, 13.0])]);
+            m.part("head", [0.0, 15.0, -4.0], hr, &[cube([-2.0, -6.0, -2.0], [4.0, 6.0, 3.0], [0.0, 0.0]), cube([-2.0, -4.0, -4.0], [4.0, 2.0, 2.0], [14.0, 0.0]), cube([-1.0, -2.0, -3.0], [2.0, 2.0, 2.0], [14.0, 4.0])]);
+            m.part("body", [0.0, 16.0, 0.0], [PI / 2.0, 0.0, 0.0], &[cube([-3.0, -4.0, -3.0], [6.0, 8.0, 6.0], [0.0, 9.0])]);
+            let (a, b) = (swing_l(limb, 0.0) * 1.4 * amt, swing_l(limb, PI) * 1.4 * amt);
+            m.part("right_leg", [-2.0, 19.0, 1.0], [a, 0.0, 0.0], &[cube([-1.0, 0.0, -3.0], [3.0, 5.0, 3.0], [26.0, 0.0])]);
+            m.part("left_leg", [1.0, 19.0, 1.0], [b, 0.0, 0.0], &[cube([-1.0, 0.0, -3.0], [3.0, 5.0, 3.0], [26.0, 0.0])]);
+            let flap = pose.wing;
+            m.part("right_wing", [-4.0, 13.0, 0.0], [0.0, 0.0, flap], &[cube([0.0, 0.0, -3.0], [1.0, 4.0, 6.0], [24.0, 13.0])]);
+            m.part("left_wing", [4.0, 13.0, 0.0], [0.0, 0.0, -flap], &[cube([-1.0, 0.0, -3.0], [1.0, 4.0, 6.0], [24.0, 13.0])]);
         }
         "arrow" | "spectral_arrow" => {
             let Some(t) = tex_for("projectiles/arrow") else { return false };
@@ -434,7 +526,7 @@ fn quad_legs(m: &mut Emitter, limb: f32, amt: f32, y: f32, at: [(f32, f32); 4], 
     for (i, (x, z)) in at.iter().enumerate() {
         let r = if i == 0 || i == 3 { a } else { b };
         let c = if i % 2 == 1 { cube_m([-2.0, 0.0, -2.0], size, [0.0, 16.0]) } else { cube([-2.0, 0.0, -2.0], size, [0.0, 16.0]) };
-        m.part([*x, y, *z], [r, 0.0, 0.0], &[c]);
+        m.part(["right_hind_leg", "left_hind_leg", "right_front_leg", "left_front_leg"][i], [*x, y, *z], [r, 0.0, 0.0], &[c]);
     }
 }
 
@@ -498,28 +590,48 @@ pub fn build_item(a: &Assets, e: &Entity, alpha: f32, light: [u8; 2], out: &mut 
     }
 }
 
-/// First-person right arm (skin texture) at the camera, with the swing animation.
-/// First-person arm placement: translation x y z (camera-local, world-aligned), rotations y x z (rad), scale.
-/// `BASALT_ARM="tx,ty,tz,ry,rx,rz,scale"` overrides it (used to fit the pose against the real client).
-pub const ARM_DEFAULT: [f32; 7] = [-0.45, -0.8, 0.4, -0.3, -2.3, 0.0, 1.0];
-fn arm_params() -> [f32; 7] {
-    std::env::var("BASALT_ARM").ok().and_then(|v| { let p: Vec<f32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect(); <[f32; 7]>::try_from(p).ok() }).unwrap_or(ARM_DEFAULT)
+// ---------------------------------------------------------------- first person
+//
+// Hand space: attached to the camera (eye, yaw, pitch), +X to the left, +Y up, +Z forward. The
+// transforms below were measured on the vanilla 26.2 client with the oracle mod's "fp" recorder
+// (PoseStack at the first-person arm / held-item draw calls, ~600 frames over attack swings and
+// re-equips, 2026-11-23) and fitted exactly (residual < 1e-4): `a` = attack swing progress 0..1,
+// `h` = equip height 0..1 (1 = fully raised).
+
+fn deg(d: f32) -> f32 { d.to_radians() }
+
+/// Pose of the empty right hand (before the arm model part).
+pub fn fp_arm_matrix(a: f32, h: f32) -> Mat4 {
+    let (s1, s2, s3, s4) = ((a.sqrt() * PI).sin(), (a.sqrt() * 2.0 * PI).sin(), (a * PI).sin(), (a * a * PI).sin());
+    let swing = Mat4::from_rotation_y(deg(45.0)) * Mat4::from_rotation_y(deg(70.0 * s1)) * Mat4::from_rotation_z(deg(20.0 * s4)) * Mat4::from_rotation_y(deg(-45.0));
+    let rest = Mat4::from_rotation_y(deg(45.0)) * Mat4::from_rotation_z(deg(60.0)) * Mat4::from_rotation_x(deg(20.0)) * Mat4::from_rotation_y(deg(-135.0));
+    Mat4::from_translation(Vec3::new(-0.6403 + 0.3 * s1, -1.1992 + 0.6 * h + 0.4 * s2, 0.7204 + 0.4 * s3)) * swing
+        * Mat4::from_translation(Vec3::new(0.293, -0.5072, 0.0194)) * rest
 }
 
-pub fn first_person_arm(atlas: &EntityAtlas, uuid: &Uuid, eye: Vec3, yaw: f32, pitch: f32, swing: f32, bob: f32, light: [u8; 2], out: &mut MeshData) {
+/// Pose of the right-hand held item (before the item model's firstperson_righthand display transform).
+pub fn fp_item_matrix(a: f32, h: f32) -> Mat4 {
+    let (s1, s2, s3, s4) = ((a.sqrt() * PI).sin(), (a.sqrt() * 2.0 * PI).sin(), (a * PI).sin(), (a * a * PI).sin());
+    Mat4::from_translation(Vec3::new(-0.56 + 0.4 * s1, -1.12 + 0.6 * h + 0.2 * s2, 0.72 + 0.2 * s3))
+        * Mat4::from_rotation_y(deg(45.0 - 20.0 * s4)) * Mat4::from_rotation_z(deg(20.0 * s1)) * Mat4::from_rotation_x(deg(80.0 * s1)) * Mat4::from_rotation_y(deg(-45.0))
+        * Mat4::from_rotation_y(PI)
+}
+
+/// World <- hand space for the camera at `eye` looking along (yaw, pitch).
+pub fn hand_space(eye: Vec3, yaw: f32, pitch: f32) -> Mat4 {
+    Mat4::from_translation(eye) * Mat4::from_rotation_y(-yaw.to_radians()) * Mat4::from_rotation_x(pitch.to_radians())
+}
+
+/// First-person right arm (skin texture): the player model's right arm part (pivot (-5, 2, 0),
+/// roll 0.1 as drawn by the vanilla client) at `fp_arm_matrix`.
+#[allow(clippy::too_many_arguments)]
+pub fn first_person_arm(atlas: &EntityAtlas, uuid: &Uuid, hand: Mat4, swing: f32, equip: f32, light: [u8; 2], out: &mut MeshData) {
     let (texn, slim) = default_skin(uuid);
     let Some(t) = atlas.rects.get(&texn).copied() else { return };
-    let s = (swing * PI).sin();
-    let s2 = (swing.sqrt() * PI).sin();
-    let a = arm_params();
-    let base = Mat4::from_translation(eye) * Mat4::from_rotation_y(-yaw.to_radians()) * Mat4::from_rotation_x(pitch.to_radians())
-        // view space (x right = -X world-local since we face +Z): place the arm low on the right
-        * Mat4::from_translation(Vec3::new(a[0] - s2 * 0.1, a[1] + bob + s * 0.12, a[2] - s * 0.15))
-        * Mat4::from_rotation_y(a[3] + s2 * 0.5) * Mat4::from_rotation_x(a[4] - s * 0.9) * Mat4::from_rotation_z(a[5])
-        * Mat4::from_scale(Vec3::splat(a[6] / 16.0)) * Mat4::from_scale(Vec3::new(1.0, -1.0, -1.0));
+    let base = hand * fp_arm_matrix(swing, equip) * Mat4::from_scale(Vec3::splat(1.0 / 16.0));
     let mut m = Emitter { out, base, tex: t, aw: atlas.w as f32, ah: atlas.h as f32, color: [255; 4], light };
-    let w = if slim { 3.0 } else { 4.0 };
-    m.part([0.0; 3], [0.0; 3], &[cube([-w / 2.0, -2.0, -2.0], [w, 12.0, 4.0], [40.0, 16.0]), cube_i([-w / 2.0, -2.0, -2.0], [w, 12.0, 4.0], [40.0, 32.0], 0.25)]);
+    let (x0, w) = if slim { (-2.0, 3.0) } else { (-3.0, 4.0) };
+    m.part("fp_arm", [-5.0, 2.0, 0.0], [0.0, 0.0, 0.1], &[cube([x0, -2.0, -2.0], [w, 12.0, 4.0], [40.0, 16.0]), cube_i([x0, -2.0, -2.0], [w, 12.0, 4.0], [40.0, 32.0], 0.25)]);
 }
 
 /// Flat (GUI) rendering of an entity model facing the viewer: block-space model → screen pixels
@@ -543,21 +655,14 @@ pub fn build_model_gui(atlas: &EntityAtlas, e: &Entity, cx: f32, cy: f32, scale:
     }
 }
 
-/// Held item in first person (right hand): the item model's `display.firstperson_righthand`
-/// transform around the model centre, anchored low on the right of the view. `swing` 0..1 is the
-/// use/attack swing, `equip` 0..1 raises the item after a slot change. Flat items are extruded
-/// one texel thick like vanilla's generated item models. Position and swing tuned by eye against a
-/// vanilla 26.2 client recording (2026-11-23).
+/// Held item in first person (right hand): `fp_item_matrix`, then the item model's
+/// `display.firstperson_righthand` transform around the model centre. Flat items are extruded one
+/// texel thick like vanilla's generated item models.
 #[allow(clippy::too_many_arguments)]
-pub fn first_person_item(a: &Assets, item: i32, eye: Vec3, yaw: f32, pitch: f32, swing: f32, equip: f32, light: [u8; 2], out: &mut MeshData) {
+pub fn first_person_item(a: &Assets, item: i32, hand: Mat4, swing: f32, equip: f32, light: [u8; 2], out: &mut MeshData) {
     let d = a.item_fp.get(item as usize).copied().flatten().unwrap_or(if a.item_model(item).is_some() { [0.0, 45.0, 0.0, 0.0, 0.0, 0.0, 0.4, 0.4, 0.4] } else { [0.0, -90.0, 25.0, 1.13, 3.2, 1.13, 0.68, 0.68, 0.68] });
-    let s = (swing * PI).sin();
-    let sq = (swing.sqrt() * PI).sin();
     let r = |deg: f32| deg.to_radians();
-    // our view space faces +Z with +X to the left; vanilla-style hand space faces -Z with +X right
-    let hand = Mat4::from_translation(eye) * Mat4::from_rotation_y(-yaw.to_radians()) * Mat4::from_rotation_x(pitch.to_radians()) * Mat4::from_rotation_y(PI)
-        * Mat4::from_translation(Vec3::new(0.56 - sq * 0.35, -0.52 - (1.0 - equip) * 0.6 + (swing.sqrt() * 2.0 * PI).sin() * 0.12, -0.72 - s * 0.2))
-        * Mat4::from_rotation_x(r(-70.0 * sq)) * Mat4::from_rotation_z(r(-15.0 * sq))
+    let hand = hand * fp_item_matrix(swing, equip)
         * Mat4::from_translation(Vec3::new(d[3], d[4], d[5]) / 16.0)
         * Mat4::from_rotation_x(r(d[0])) * Mat4::from_rotation_y(r(d[1])) * Mat4::from_rotation_z(r(d[2]))
         * Mat4::from_scale(Vec3::new(d[6], d[7], d[8])) * Mat4::from_translation(Vec3::splat(-0.5));
