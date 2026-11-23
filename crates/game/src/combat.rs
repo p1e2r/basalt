@@ -21,6 +21,16 @@ pub fn difficulty_scaled(normal: f32, difficulty: u8) -> f32 {
     }
 }
 
+/// Explosion damage to an entity before difficulty scaling: `impact = (1 - dist / (2r)) * exposure`,
+/// `damage = (impact² + impact) / 2 * 7 * 2r + 1` (not floored — matches vanilla), where `dist`
+/// is measured to the entity's feet. Returns (damage, impact); impact is also the knockback.
+pub fn explosion_damage(dist: f64, radius: f64, exposure: f64) -> (f32, f64) {
+    let range = radius * 2.0;
+    if dist > range { return (0.0, 0.0); }
+    let impact = (1.0 - dist / range) * exposure;
+    (((impact * impact + impact) / 2.0 * 7.0 * range + 1.0) as f32, impact)
+}
+
 /// Blast resistance by block name. An approximation of the Minecraft Wiki per-block values,
 /// keyed by name patterns; unknown blocks fall back to their hardness.
 pub fn blast_resistance(block_name: &str) -> f32 {
@@ -99,6 +109,15 @@ mod tests {
         assert!((armor_reduced(100.0, 20.0, 0.0) - 84.0).abs() < 1e-3);
         // cap at 80% reduction
         assert!((armor_reduced(1.0, 30.0, 20.0) - 0.2).abs() < 1e-4);
+    }
+
+    #[test]
+    fn explosion_matches_vanilla_capture() {
+        // vanilla 26.2, Easy: creeper (r 3) 4.36 blocks from an unarmored player's feet, full
+        // exposure → health 20 → 14.843 and knockback magnitude 0.274
+        let (raw, impact) = explosion_damage(4.36, 3.0, 1.0);
+        assert!((impact - 0.2733).abs() < 2e-3);
+        assert!((difficulty_scaled(raw, 1) - 5.157).abs() < 0.02, "{raw}");
     }
 
     #[test]

@@ -59,13 +59,17 @@ impl Game {
         let victims: Vec<(i32, bool, [f64; 3], [f64; 6])> = self.players.values().filter(|p| !p.dead && p.gamemode != 3).map(|p| (p.eid, true, p.pos, [p.pos[0] - 0.3, p.pos[1], p.pos[2] - 0.3, p.pos[0] + 0.3, p.pos[1] + 1.8, p.pos[2] + 0.3]))
             .chain(self.mobs.values().filter(|m| m.alive()).map(|m| (m.eid, false, m.pos, m.aabb()))).collect();
         for (eid, is_player, pos, bb) in victims {
+            // measured on vanilla: impact uses the distance to the entity's feet position, the
+            // push direction points at its eyes
             let eye = if is_player { pos[1] + 1.62 } else { pos[1] + (bb[4] - bb[1]) * 0.85 };
+            let feet = [pos[0] - c[0], pos[1] - c[1], pos[2] - c[2]];
+            let dist = (feet[0] * feet[0] + feet[1] * feet[1] + feet[2] * feet[2]).sqrt();
+            if dist / range > 1.0 { continue; }
             let d = [pos[0] - c[0], eye - c[1], pos[2] - c[2]];
-            let dist = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-            if dist / range > 1.0 || dist < 1e-6 { continue; }
-            let impact = (1.0 - dist / range) * self.exposure(c, bb);
-            let dmg = ((impact * impact + impact) / 2.0 * 7.0 * range + 1.0).floor() as f32;
-            let kb = [d[0] / dist * impact, d[1] / dist * impact, d[2] / dist * impact];
+            let dl = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            if dl < 1e-6 { continue; }
+            let (dmg, impact) = basalt_game::explosion_damage(dist, r, self.exposure(c, bb));
+            let kb = [d[0] / dl * impact, d[1] / dl * impact, d[2] / dl * impact];
             if is_player {
                 let creative = self.players.get(&eid).map(|p| matches!(p.gamemode, 1 | 3)).unwrap_or(true);
                 let dmg = basalt_game::difficulty_scaled(dmg, super::combat::DIFFICULTY);

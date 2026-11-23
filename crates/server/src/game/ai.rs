@@ -247,7 +247,7 @@ impl Game {
                                     let dist = hd2.sqrt();
                                     let dir = [tp[0] - from[0], tp[1] + 1.8 / 3.0 - from[1] + dist * 0.2, tp[2] - from[2]];
                                     let inacc = (14 - super::combat::DIFFICULTY as i32 * 4) as f64;
-                                    self.shoot_arrow(m.eid, from, dir, 1.6, inacc, 2.0 + super::combat::DIFFICULTY as f64 * 0.11);
+                                    self.shoot_arrow(m.eid, from, dir, 1.6, inacc, 2.0);
                                     let pitch = 1.0 / (self.rng.gen_range(0.0..0.4) + 0.8);
                                     self.play_sound("entity.skeleton.shoot", 5, m.pos, 1.0, pitch);
                                 }

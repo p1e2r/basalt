@@ -13,7 +13,7 @@ mod tags;
 
 pub use hardness::{hardness, requires_correct_tool};
 pub use loot::{EntityProps, LootContext};
-pub use combat::{armor_reduced, blast_resistance, difficulty_scaled};
+pub use combat::{armor_reduced, blast_resistance, difficulty_scaled, explosion_damage};
 pub use recipe::{CookKind, CraftResult, Ingredient, Recipe, Recipes};
 pub use tags::Tags;
 

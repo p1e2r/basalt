@@ -58,9 +58,24 @@ Read NOTES.md for verified packet formats.
       drowning (Respiration, Water Breathing, conduit power w/ frame detection, turtle helmet),
       powder-snow freezing (ticks_frozen 140, thaw 2/tick, leather immunity, entity-data synced),
       suffocation, lava, fire/burning, campfire, magma, cactus, berry bush, void. Status effects
-      (/effect), enchantments on stacks (/enchant), /setblock /fill /kill. Missing: armor damage reduction (needs M5 combat), non-food use_item (buckets etc.), death
+      (/effect), enchantments on stacks (/enchant), /setblock /fill /kill. Armor reduction done in M5. Missing: non-food use_item (buckets etc.), death
       screen in basalt-client (auto-respawns), human-driven real-client inventory test.
-- [ ] M5 mobs   - [ ] M6 world logic   - [ ] M7 client parity
+- [~] M5 mobs — implemented & bot/real-client tested (server game/{mob,ai,path,combat,arrow,explosion,spawn,track}.rs):
+      zombie/skeleton/creeper/spider/cow/pig/sheep/chicken with vanilla-measured spawn packets +
+      metadata (baby, sheep colour/sheared, creeper fuse, aggressive, burning, death pose); generic
+      visibility tracking for mobs+arrows; AABB block collision, step-up, gravity, water buoyancy;
+      A* pathfinding (unit-tested); goals: wander, look, panic, tempt, target (spiders only in the
+      dark), melee, skeleton archery (arrows stick/hit), creeper swell + explosion (ray-march blocks,
+      exposure damage, explosion-decay loot, measured explode packet); undead burn in daylight;
+      natural spawning (dark monsters 24..128 blocks away, per-player cap 40; animals on chunk
+      generation and rarely afterwards), despawn >128 / random >32; attack/interact packets
+      (crit, cooldown, knockback, sword/tool wear), armor reduction + wear for all armor-affected
+      damage (health.rs hurt_by), loot via entity tables (on-fire smelting, sheep colour), shearing,
+      milking, flint-and-steel creepers; /summon <type> [x y z] [baby NoAI Color:N sheared ignited],
+      /kill @e[type=..], /mobs [r] (debug). Mobs persist in <world>/entities.json. --no-spawning.
+      Missing: XP orbs, breeding, sheep eating grass, zombie reinforcements/drowned conversion,
+      mob-vs-mob pushing, swimming AI beyond buoyancy, difficulty fixed at Easy.
+- [ ] M6 world logic   - [ ] M7 client parity
 - [ ] M8 Nether/End, portals, structures
 - [ ] M9 redstone  - [ ] M10 enchant/anvil/brewing/smithing/XP  - [ ] M11 villagers/raids/AI
 - [ ] M12 bosses/endgame  - [ ] M13 commands/datapacks/advancements/scoreboards

@@ -227,22 +227,8 @@ impl Mob {
     }
 }
 
-/// LpVec3 ("low precision" velocity) as measured: a 0 byte for ~zero, else 6 bytes holding a 48-bit
-/// little-endian-ish value: bits 0-1 scale low bits, bit 2 "scale continues" (then a varint of
-/// scale >> 2 follows), bits 3-17 / 18-32 / 33-47 the x/y/z components as 15-bit values
-/// `round((v / scale * 0.5 + 0.5) * 32766)`. Bytes: b0, b1, then the upper 32 bits big-endian.
-pub fn write_lpvec3(w: &mut Writer, v: [f64; 3]) {
-    let clamp = |x: f64| if x.is_finite() { x.clamp(-1.7e10, 1.7e10) } else { 0.0 };
-    let v = [clamp(v[0]), clamp(v[1]), clamp(v[2])];
-    let m = v[0].abs().max(v[1].abs()).max(v[2].abs());
-    if m < 3.0517578125e-5 { w.u8(0); return; }
-    let scale = m.ceil() as i64;
-    let q = |x: f64| -> u64 { (((x / scale as f64) * 0.5 + 0.5) * 32766.0).round().clamp(0.0, 32766.0) as u64 };
-    let more = scale > 3;
-    let packed: u64 = (scale as u64 & 3) | if more { 4 } else { 0 } | q(v[0]) << 3 | q(v[1]) << 18 | q(v[2]) << 33;
-    w.u8((packed & 0xff) as u8).u8((packed >> 8 & 0xff) as u8).i32((packed >> 16) as u32 as i32);
-    if more { w.varint((scale >> 2) as i32); }
-}
+/// LpVec3 velocity (Writer::lpvec3; format in NOTES.md).
+pub fn write_lpvec3(w: &mut Writer, v: [f64; 3]) { w.lpvec3(v); }
 
 // ------------------------------------------------------------------ block collision
 
