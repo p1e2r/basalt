@@ -22,8 +22,8 @@ pub(super) struct DimInfo {
     pub sea_level: i32,
     /// Coordinate scale of the dimension type (nether 8).
     pub scale: f64,
-    /// Region folder relative to the world directory (vanilla 26.2 layout for the nether; the
-    /// overworld keeps Basalt's historical `region/`).
+    /// Region folder relative to the world directory (vanilla 26.2 layout; see `region_dir` for the
+    /// overworld's older Basalt `region/`).
     pub region: &'static str,
     /// Mob persistence file relative to the world directory.
     pub entities: &'static str,
@@ -38,7 +38,7 @@ pub(super) const DIMS: [DimInfo; 2] = [
         layout: Layout::OVERWORLD,
         sea_level: 63,
         scale: 1.0,
-        region: "region",
+        region: "dimensions/minecraft/overworld/region",
         entities: "entities.json",
         portals: "basalt-portals.json",
     },
@@ -53,6 +53,28 @@ pub(super) const DIMS: [DimInfo; 2] = [
         portals: "dimensions/minecraft/the_nether/basalt-portals.json",
     },
 ];
+
+/// Region folder of dimension `d` in world `w`: vanilla 26.2's layout, except an overworld that
+/// Basalt saved before the layout change (`region/` with chunks, nothing in the vanilla folder)
+/// keeps using `region/`.
+pub(super) fn region_dir(w: &std::path::Path, d: usize) -> std::path::PathBuf {
+    let vanilla = w.join(DIMS[d].region);
+    if d == OVERWORLD {
+        let old = w.join("region");
+        let has = |p: &std::path::Path| {
+            std::fs::read_dir(p)
+                .map(|r| {
+                    r.flatten()
+                        .any(|e| e.path().extension().map(|x| x == "mca").unwrap_or(false))
+                })
+                .unwrap_or(false)
+        };
+        if has(&old) && !has(&vanilla) {
+            return old;
+        }
+    }
+    vanilla
+}
 
 /// Dimension index for a level id (`minecraft:the_nether`, `the_nether`, `nether`, ...).
 pub(super) fn dim_index(name: &str) -> Option<usize> {
@@ -82,7 +104,7 @@ impl DimState {
     pub fn new(d: usize, dir: Option<&std::path::Path>, gen: Arc<dyn Generator>) -> DimState {
         let info = &DIMS[d];
         DimState {
-            world: World::new_in(dir.map(|d| d.join(info.region)), info.layout),
+            world: World::new_in(dir.map(|w| region_dir(w, d)), info.layout),
             gen: GenPool::new(gen),
             players: HashMap::new(),
             items: HashMap::new(),

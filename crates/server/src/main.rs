@@ -8,6 +8,7 @@ mod commands;
 mod conn;
 mod game;
 mod gen;
+mod level;
 mod registry;
 mod snbt;
 
@@ -89,6 +90,8 @@ fn parse_args() -> Config {
             c.op_level = num("op-permission-level").unwrap_or(4).clamp(1, 4) as u8;
             if props.bool("online-mode") { log::warn!("online-mode=true in server.properties is ignored: Basalt is offline-mode only"); }
             c.admin_root = Some(root);
+            // an existing world's seed wins over server.properties (vanilla behaviour)
+            if !given.contains("--seed") { if let Some(seed) = level::load(w).seed { c.seed = seed; } }
         }
     }
     c

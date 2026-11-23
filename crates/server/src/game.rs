@@ -217,7 +217,11 @@ impl Game {
         if g.commands_body.is_none() { log::warn!("no reports/commands.json: using the built-in command tree"); }
         g.load_level();
         for d in (0..g.parked.len()).rev() { g.enter(d); g.load_mobs(); g.load_portals(); }
-        g.spawn = g.find_spawn();
+        // the world's own spawn (level.dat) when it has one, else search a spot
+        match g.dir.as_deref().and_then(|d| crate::level::load(d).spawn) {
+            Some(sp) => g.spawn = [sp[0] as f64 + 0.5, sp[1] as f64, sp[2] as f64 + 0.5],
+            None => g.spawn = g.find_spawn(),
+        }
         log::info!("spawn at {:.1} {:.1} {:.1}", g.spawn[0], g.spawn[1], g.spawn[2]);
         g
     }
@@ -227,6 +231,12 @@ impl Game {
         if let Ok(s) = std::fs::read_to_string(d.join("basalt.json")) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) { self.day_time = v["day_time"].as_i64().unwrap_or(1000); self.difficulty = v["difficulty"].as_u64().unwrap_or(self.sh.cfg.difficulty as u64).min(3) as u8; }
         }
+        // vanilla level files (level.dat + data/minecraft/*.dat) win when present
+        let l = crate::level::load(d);
+        if let Some(t) = l.day_time { self.day_time = t; }
+        if let Some(t) = l.game_time { self.tick = t.max(0) as u64; }
+        if let Some(df) = l.difficulty { self.difficulty = df; }
+        if let Some(r) = l.random_tick_speed { self.random_tick_speed = r; }
     }
     fn save_level(&mut self) {
         let back = self.cur;
@@ -240,6 +250,10 @@ impl Game {
         let Some(d) = &self.dir else { return };
         let _ = std::fs::create_dir_all(d.join("players"));
         let _ = std::fs::write(d.join("basalt.json"), serde_json::json!({ "day_time": self.day_time, "seed": self.sh.cfg.seed, "difficulty": self.difficulty }).to_string());
+        // and vanilla's level files, so a vanilla 26.2 server can open the world (unknown tags kept)
+        let sp = self.spawn;
+        crate::level::save(d, &crate::level::Level { seed: Some(self.sh.cfg.seed), spawn: Some([sp[0].floor() as i32, sp[1].floor() as i32, sp[2].floor() as i32]), difficulty: Some(self.difficulty),
+            day_time: Some(self.day_time), game_time: Some(self.tick as i64), random_tick_speed: Some(self.random_tick_speed), raining: None }, self.sh.cfg.flat);
         for p in self.all_players() { self.save_player(p); }
     }
     fn save_player(&self, p: &Player) {
