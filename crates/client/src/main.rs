@@ -203,7 +203,7 @@ pub struct Game {
     /// server command tree (clientbound `commands`) and the chat box's suggestion popup
     cmd_tree: Option<suggest::Tree>,
     sug: Sug,
-    hp: f32, food: i32,
+    hp: f32, pub food: i32,
     hotbar: [ItemStack; 9], held: u8,
     inventory: Vec<ItemStack>,
     inv_state: i32,
@@ -229,7 +229,10 @@ pub struct Game {
     destroy: HashMap<i32, ([i32; 3], i8)>,
     fp_swing: i32,
     /// sprint state last reported with player_command
-    sprinting: bool,
+    sprint_sent: bool,
+    /// vanilla-style sprint: current state, double-tap window (ticks), forward/sprint keys last tick,
+    /// toggle-mode latch, and the tick of the last jump press (double-tap fly)
+    pub sprinting: bool, sprint_trigger: u32, fwd_was: bool, sprint_key_was: bool, sprint_latch: bool, jump_tick: Option<u64>,
     pub particles: particles::Particles,
     /// first-person equip progress (now, previous tick) and the (slot, item) it was raised for
     pub equip: (f32, f32), equip_for: i32,
@@ -248,7 +251,6 @@ pub struct Game {
     pub sp_world: Option<worlds::WorldEntry>,
     step_dist: f64,
     last_place: Instant,
-    last_space: Option<Instant>,
     debug: bool,
     disconnected: Option<String>,
     death_msg: Option<String>,
@@ -271,7 +273,7 @@ pub struct Game {
     last_chunk_at: Instant,
     stats: Stats,
     clicks_sent: u32,
-    ticks: u64,
+    pub ticks: u64,
     frames: (u32, Instant, f32),
 }
 
@@ -294,8 +296,8 @@ impl Game {
             dirty: HashMap::new(), in_flight: HashSet::new(), events: rx, out: otx, entities: HashMap::new(), player_names: HashMap::new(), my_eid: 0, name: o.name,
             chat: Vec::new(), chat_input: None, cmd_tree: None, sug: Sug::default(), hp: 20.0, food: 20, hotbar: Default::default(), held: 0, inventory: vec![ItemStack::default(); 46], inv_state: 0, carried: ItemStack::default(), day_time: 6000,
             spawned: false, loaded_sent: false, connected: false, keys: HashSet::new(), mouse: [false; 2], mouse_pos: (0.0, 0.0), slider_drag: None, last_tick: Instant::now(),
-            last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, sprinting: false, particles: Default::default(), equip: (1.0, 1.0), equip_for: -1, held_name: (String::new(), 0), splash: String::new(), menu_t0: Instant::now(), pings: HashMap::new(), ping_chan: mpsc::channel(), icon_slots: HashMap::new(), ping_rounds: 0, worlds: Vec::new(), integrated: None, sp_world: None, step_dist: 0.0,
-            last_place: Instant::now(), last_space: None, debug: false, disconnected: None, death_msg: None, respawn_at: None, auto_respawn: o.auto_respawn,
+            last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, sprint_sent: false, sprinting: false, sprint_trigger: 0, fwd_was: false, sprint_key_was: false, sprint_latch: false, jump_tick: None, particles: Default::default(), equip: (1.0, 1.0), equip_for: -1, held_name: (String::new(), 0), splash: String::new(), menu_t0: Instant::now(), pings: HashMap::new(), ping_chan: mpsc::channel(), icon_slots: HashMap::new(), ping_rounds: 0, worlds: Vec::new(), integrated: None, sp_world: None, step_dist: 0.0,
+            last_place: Instant::now(), debug: false, disconnected: None, death_msg: None, respawn_at: None, auto_respawn: o.auto_respawn,
             screen: Some(Screen::Title), cfg: o.cfg, sounds, last_addr: String::new(), quit: false, fullscreen_changed: false, hide_entities: false, hide_cracks: false, hide_gui: false, hide_hand: false, fixed_time: None, last_chunk_at: Instant::now(), stats: Stats::default(), clicks_sent: 0, ticks: 0,
             frames: (0, Instant::now(), 0.0),
         };
@@ -591,8 +593,47 @@ impl Game {
         Input {
             forward: k(KeyCode::KeyW) as i32 as f32 - k(KeyCode::KeyS) as i32 as f32,
             strafe: k(KeyCode::KeyA) as i32 as f32 - k(KeyCode::KeyD) as i32 as f32,
-            jump: k(KeyCode::Space), sneak: k(KeyCode::ShiftLeft), sprint: k(KeyCode::ControlLeft) || k(KeyCode::KeyR),
+            jump: k(KeyCode::Space), sneak: k(KeyCode::ShiftLeft), sprint: self.sprinting,
         }
+    }
+
+    /// Item use that stops / prevents sprinting (eating, drinking, drawing a bow, blocking, ...).
+    fn using_item(&self) -> bool {
+        if !self.mouse[1] { return false; }
+        let h = &self.hotbar[self.held as usize];
+        if h.count <= 0 { return false; }
+        let name = basalt_data::registries::ITEM.get(h.item as usize).copied().unwrap_or("");
+        self.rules.as_ref().and_then(|r| r.item(h.item)).map(|i| i.food.is_some()).unwrap_or(false)
+            || matches!(name, "bow" | "crossbow" | "shield" | "trident" | "spyglass" | "potion" | "milk_bucket" | "honey_bottle" | "goat_horn" | "brush")
+    }
+
+    /// Vanilla sprint rules, once per tick (behaviour measured against the real client with the
+    /// oracle input channel, 2026-11-23): double-tap forward within 7 ticks, or the sprint key
+    /// (hold or toggle per options) starts it; once started it lasts until forward is released,
+    /// food drops to 6 or less (survival), the player runs into a wall, uses an item or is
+    /// in water. Sneaking prevents starting one but does not end it.
+    fn update_sprint(&mut self) {
+        let in_ui = self.chat_input.is_some() || self.screen.is_some();
+        let k = |c: KeyCode| !in_ui && self.keys.contains(&c);
+        let fwd = k(KeyCode::KeyW) && !k(KeyCode::KeyS);
+        let sneak = k(KeyCode::ShiftLeft);
+        let key = k(KeyCode::ControlLeft) || k(KeyCode::KeyR);
+        let toggle = self.cfg.extra.get("toggle_sprint").map(|v| *v < 0.5).unwrap_or(false);
+        if toggle && key && !self.sprint_key_was { self.sprint_latch = !self.sprint_latch; }
+        let wants_key = if toggle { self.sprint_latch } else { key };
+        let creative = self.player.gamemode == 1 || self.player.gamemode == 3 || self.player.flying;
+        let can = fwd && !sneak && (self.food > 6 || creative) && !self.using_item() && !self.player.h_collide && !self.player.in_water;
+        if self.sprint_trigger > 0 { self.sprint_trigger -= 1; }
+        if !self.sprinting {
+            let pressed = fwd && !self.fwd_was;
+            if pressed && self.sprint_trigger > 0 && can { self.sprinting = true; }
+            else if pressed { self.sprint_trigger = 7; }
+            if wants_key && can { self.sprinting = true; }
+        } else if !fwd || (self.food <= 6 && !creative) || self.using_item() || self.player.h_collide || self.player.in_water {
+            // (sneaking does not end a sprint in 26.2: the real client keeps sending sprint until forward is released)
+            self.sprinting = false;
+        }
+        self.fwd_was = fwd; self.sprint_key_was = key;
     }
 
     fn eye(&self, alpha: f64) -> [f64; 3] {
@@ -625,14 +666,15 @@ impl Game {
         if !self.loaded_sent && !self.world.chunks.is_empty() {
             send(&self.out, Writer::with_id(sb::PLAYER_LOADED)); self.loaded_sent = true;
         }
+        self.update_sprint();
         let inp = self.input();
         let flags = (inp.forward > 0.0) as u8 | ((inp.forward < 0.0) as u8) << 1 | ((inp.strafe > 0.0) as u8) << 2 | ((inp.strafe < 0.0) as u8) << 3
-            | (inp.jump as u8) << 4 | (inp.sneak as u8) << 5 | (inp.sprint as u8) << 6;
+            | (inp.jump as u8) << 4 | (inp.sneak as u8) << 5 | (self.sprint_key_was as u8) << 6;   // the sprint bit is the key, not the state (oracle client-input)
         if flags != self.last_input_flags { let mut w = Writer::with_id(sb::PLAYER_INPUT); w.u8(flags); send(&self.out, w); self.last_input_flags = flags; }
         // sprinting also sends player_command 1 (start) / 2 (stop), like the vanilla client (oracle client-input, 2026-11-23)
-        let sprinting = inp.sprint && inp.forward > 0.0 && !inp.sneak && !self.player.flying;
-        if sprinting != self.sprinting {
-            self.sprinting = sprinting;
+        let sprinting = self.sprinting;
+        if sprinting != self.sprint_sent {
+            self.sprint_sent = sprinting;
             let mut w = Writer::with_id(sb::PLAYER_COMMAND); w.varint(self.my_eid).varint(if sprinting { 1 } else { 2 }).varint(0); send(&self.out, w);
         }
         let before = self.player.pos;
@@ -898,10 +940,11 @@ impl Game {
             }
             KeyCode::KeyF => self.player_action(6, [0, 0, 0], 0),
             KeyCode::Space if self.player.gamemode == 1 => {
-                if self.last_space.map(|t| t.elapsed() < Duration::from_millis(300)).unwrap_or(false) {
-                    self.player.flying = !self.player.flying; self.last_space = None;
+                // double-tap jump within 7 ticks toggles flight (vanilla's window)
+                if self.jump_tick.map(|t| self.ticks.saturating_sub(t) < 7).unwrap_or(false) {
+                    self.player.flying = !self.player.flying; self.jump_tick = None;
                     let mut w = Writer::with_id(sb::PLAYER_ABILITIES); w.u8(if self.player.flying { 2 } else { 0 }); send(&self.out, w);
-                } else { self.last_space = Some(Instant::now()); }
+                } else { self.jump_tick = Some(self.ticks); }
             }
             KeyCode::Escape => { if self.connected { self.screen = Some(Screen::Pause); self.mouse = [false; 2]; } }
             _ => {

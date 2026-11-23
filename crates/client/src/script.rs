@@ -85,12 +85,12 @@ impl Run {
         Ok(f(&self.g))
     }
 
+    /// Through the window's own key path, so press handlers (double-tap fly, ...) run too.
     fn key_hold(&mut self, k: KeyCode, down: bool) {
-        if down {
-            self.g.keys.insert(k);
-        } else {
-            self.g.keys.remove(&k);
+        if down == self.g.keys.contains(&k) {
+            return;
         }
+        self.g.key(k, down, None);
     }
 
     /// press / hold / release / tap(ticks) for a held-input key.

@@ -14,7 +14,7 @@ use winit::keyboard::KeyCode;
 const W: u32 = 854;
 const H: u32 = 480;
 
-pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer", "falling_block"];
+pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer", "falling_block", "sprint"];
 
 enum Outcome { Pass(String), Skip(String) }
 
@@ -40,7 +40,7 @@ pub fn run(args: &Args, assets: Arc<Assets>, name: &str) -> Result<bool> {
         let t = Instant::now();
         let r = match s {
             "edge_chunks" => edge_chunks(&ctx), "inventory" => inventory(&ctx), "crafting_table" => crafting_table(&ctx), "death" => death(&ctx),
-            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "falling_block" => falling_block(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx),
+            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "falling_block" => falling_block(&ctx), "sprint" => sprint(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx),
             other => Err(anyhow!("unknown scenario {other} (known: {})", ALL.join(", "))),
         };
         let secs = t.elapsed().as_secs_f32();
@@ -1064,4 +1064,71 @@ fn falling_block(c: &Ctx) -> Result<Outcome> {
     if px < 100 { bail!("falling block barely drawn ({px} px)"); }
     if !wait_until(&mut g, 4.0, |g| basalt_data::BlockState(g.world.get(b[0], -60, b[2]) as u32).name() == "sand")? { bail!("sand did not land"); }
     Ok(Outcome::Pass(format!("falling sand drawn ({px} px), landed as a block")))
+}
+
+fn hold_key(g: &mut Game, k: KeyCode, down: bool) { g.key(k, down, None); }
+fn ticks(g: &mut Game, n: u64) -> Result<()> { let t = g.ticks; while g.ticks < t + n { step(g)?; } Ok(()) }
+
+/// Sprint triggers and stops like the vanilla client (packet order checked against the real
+/// client by `basalt-check client-input`): double-tap forward, the sprint key in hold and toggle
+/// mode, a sprint outliving the key, stops on releasing forward / hunger <= 6 / a wall / item use;
+/// sneaking does not stop it; double-tap jump toggles flying in creative.
+fn sprint(c: &Ctx) -> Result<Outcome> {
+    let mut g = c.game("sprint")?;
+    join(&mut g)?;
+    cmd(&mut g, "gamemode survival");
+    cmd(&mut g, "clear @s");
+    tp(&mut g, [980.5, -60.0, 980.5], 0.0, 0.0)?;
+    wait(&mut g, 1.0)?;
+    let w = KeyCode::KeyW;
+    // double tap within 7 ticks
+    hold_key(&mut g, w, true); ticks(&mut g, 2)?; hold_key(&mut g, w, false); ticks(&mut g, 2)?; hold_key(&mut g, w, true); ticks(&mut g, 2)?;
+    if !g.sprinting { bail!("double-tap forward did not start sprinting"); }
+    hold_key(&mut g, KeyCode::ShiftLeft, true); ticks(&mut g, 3)?;
+    if !g.sprinting { bail!("sneaking ended the sprint (vanilla 26.2 keeps it)"); }
+    hold_key(&mut g, KeyCode::ShiftLeft, false);
+    hold_key(&mut g, w, false); ticks(&mut g, 2)?;
+    if g.sprinting { bail!("releasing forward did not stop sprinting"); }
+    // a slow double tap (more than 7 ticks apart) does not sprint
+    hold_key(&mut g, w, true); ticks(&mut g, 1)?; hold_key(&mut g, w, false); ticks(&mut g, 9)?; hold_key(&mut g, w, true); ticks(&mut g, 2)?;
+    if g.sprinting { bail!("double tap 9 ticks apart started sprinting"); }
+    // sprint key (hold mode): the sprint outlives the key
+    hold_key(&mut g, KeyCode::ControlLeft, true); ticks(&mut g, 2)?;
+    if !g.sprinting { bail!("sprint key did not start sprinting"); }
+    hold_key(&mut g, KeyCode::ControlLeft, false); ticks(&mut g, 3)?;
+    if !g.sprinting { bail!("releasing the sprint key stopped the sprint"); }
+    // hunger
+    g.food = 6; ticks(&mut g, 2)?;
+    if g.sprinting { bail!("food 6 did not stop sprinting"); }
+    hold_key(&mut g, KeyCode::ControlLeft, true); ticks(&mut g, 2)?;
+    if g.sprinting { bail!("sprinted with food 6"); }
+    hold_key(&mut g, KeyCode::ControlLeft, false);
+    g.food = 20; ticks(&mut g, 2)?;
+    // a wall ahead stops it
+    hold_key(&mut g, KeyCode::KeyW, false);
+    tp(&mut g, [980.5, -60.0, 980.5], 0.0, 0.0)?;
+    hold_key(&mut g, KeyCode::KeyW, true);
+    cmd(&mut g, "fill 979 -60 983 982 -58 983 stone");
+    wait_until(&mut g, 3.0, |g| g.world.get(980, -60, 983) != 0)?;
+    hold_key(&mut g, KeyCode::ControlLeft, true); ticks(&mut g, 1)?; hold_key(&mut g, KeyCode::ControlLeft, false);
+    let hit = wait_until(&mut g, 3.0, |g| g.player.h_collide)?;
+    ticks(&mut g, 2)?;
+    if !hit || g.sprinting { bail!("running into a wall did not stop sprinting (collided {hit})"); }
+    hold_key(&mut g, w, false); ticks(&mut g, 2)?;
+    // toggle mode: a tap of the key latches sprinting on
+    g.cfg.extra.insert("toggle_sprint".into(), 0.0);
+    tp(&mut g, [990.5, -60.0, 980.5], 0.0, 0.0)?;
+    hold_key(&mut g, KeyCode::ControlLeft, true); ticks(&mut g, 1)?; hold_key(&mut g, KeyCode::ControlLeft, false); ticks(&mut g, 1)?;
+    hold_key(&mut g, w, true); ticks(&mut g, 2)?;
+    if !g.sprinting { bail!("toggle mode: tapping the sprint key did not latch sprinting"); }
+    hold_key(&mut g, w, false); ticks(&mut g, 2)?;
+    g.cfg.extra.remove("toggle_sprint");
+    // creative: double-tap jump toggles flying
+    cmd(&mut g, "gamemode creative");
+    wait_until(&mut g, 3.0, |g| g.player.gamemode == 1)?;
+    let before = g.player.flying;
+    hold_key(&mut g, KeyCode::Space, true); ticks(&mut g, 1)?; hold_key(&mut g, KeyCode::Space, false); ticks(&mut g, 2)?;
+    hold_key(&mut g, KeyCode::Space, true); ticks(&mut g, 1)?; hold_key(&mut g, KeyCode::Space, false); ticks(&mut g, 1)?;
+    if g.player.flying == before { bail!("double-tap jump did not toggle flying"); }
+    Ok(Outcome::Pass("double-tap, slow double-tap, key hold/outlive/toggle, food 6, wall, sneak keeps sprint, double-tap fly".into()))
 }
