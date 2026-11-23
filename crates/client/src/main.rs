@@ -455,7 +455,7 @@ impl Game {
             }
             Event::ContainerData { window, id, value } => { if let Some(Screen::Container(c)) = &mut self.screen { if c.window == window && (0..4).contains(&id) { c.props[id as usize] = value; } } }
             Event::CloseScreen(w) => { if self.open_container().map(|c| c.window == w).unwrap_or(false) { self.screen = None; self.carried = ItemStack::default(); } }
-            Event::AddEntity { id, uuid, kind, pos, vel, yaw, pitch, head_yaw } => { self.entities.insert(id, entity::Entity::new(id, uuid, kind, pos, vel, yaw, pitch, head_yaw)); }
+            Event::AddEntity { id, uuid, kind, pos, vel, yaw, pitch, head_yaw, data } => { let mut e = entity::Entity::new(id, uuid, kind, pos, vel, yaw, pitch, head_yaw); e.data = data; self.entities.insert(id, e); }
             Event::MoveEntity { id, delta, rot, on_ground } => { if let Some(e) = self.entities.get_mut(&id) { let p = [e.server_pos[0] + delta[0], e.server_pos[1] + delta[1], e.server_pos[2] + delta[2]]; e.move_to(p, rot); e.on_ground = on_ground; } }
             Event::TeleportEntity { id, pos, yaw, pitch, on_ground } => { if let Some(e) = self.entities.get_mut(&id) { e.move_to(pos, Some((yaw, pitch))); e.on_ground = on_ground; } }
             Event::EntityMotion { id, vel } => { if id == self.my_eid { self.player.vel = vel; } else if let Some(e) = self.entities.get_mut(&id) { e.vel = vel; } }
@@ -1178,6 +1178,7 @@ impl Game {
                     let light = [sl * 17, bl * 17];
                     let name = entity::type_name(e.kind);
                     if name == "item" { entity::build_item(&self.assets, e, a, light, &mut fd.items3d); continue; }
+                    if name == "falling_block" { entity::build_falling_block(&self.assets, e, a, light, &mut fd.items3d); continue; }
                     if !entity::build_model(&self.entity_atlas, e, a, light, &mut fd.skinned) {
                         let (bw, bh, color) = entity::dims(e.kind);
                         let hw = bw / 2.0;

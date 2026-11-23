@@ -63,6 +63,8 @@ pub struct Entity {
     pub swing: i32,
     limb_pos: f32, limb_amt: f32, prev_limb_amt: f32, prev_limb_pos: f32,
     pub age: u32,
+    /// add_entity's data field (falling_block: its block state)
+    pub data: i32,
     bob: f32,
 }
 
@@ -72,7 +74,7 @@ impl Entity {
             id, uuid, kind, server_pos: pos, pos, prev: pos, target: pos, steps: 0,
             yaw, pitch, target_yaw: yaw, target_pitch: pitch, head_yaw, prev_head_yaw: head_yaw, target_head_yaw: head_yaw, body_yaw: yaw, prev_body_yaw: yaw, prev_pitch: pitch,
             vel, on_ground: false, flags: 0, pose: 0, item: None, health: None, baby: false, wool: 0, mob_flags: 0, hurt: 0, death: 0, swing: -1,
-            limb_pos: 0.0, limb_amt: 0.0, prev_limb_amt: 0.0, prev_limb_pos: 0.0, age: 0, bob: (id as u32).wrapping_mul(2654435761) as f32 / u32::MAX as f32 * PI * 2.0,
+            limb_pos: 0.0, limb_amt: 0.0, prev_limb_amt: 0.0, prev_limb_pos: 0.0, age: 0, data: 0, bob: (id as u32).wrapping_mul(2654435761) as f32 / u32::MAX as f32 * PI * 2.0,
         }
     }
     fn lerp_steps(&self) -> u32 { match type_name(self.kind) { "item" | "experience_orb" => 1, "arrow" | "spectral_arrow" => 1, _ => 3 } }
@@ -107,6 +109,12 @@ impl Entity {
     pub fn tick(&mut self) {
         self.prev = self.pos; self.prev_head_yaw = self.head_yaw; self.prev_body_yaw = self.body_yaw; self.prev_pitch = self.pitch;
         self.prev_limb_amt = self.limb_amt; self.prev_limb_pos = self.limb_pos;
+        if self.steps == 0 && type_name(self.kind) == "falling_block" {
+            // falls on its own between the server's position syncs (gravity 0.04, drag 0.98, like the server)
+            self.vel[1] -= 0.04;
+            for i in 0..3 { self.pos[i] += self.vel[i]; }
+            self.vel[1] *= 0.98;
+        }
         if self.steps > 0 {
             let n = self.steps as f64;
             for i in 0..3 { self.pos[i] += (self.target[i] - self.pos[i]) / n; }
@@ -426,6 +434,22 @@ fn quad_legs(m: &mut Emitter, limb: f32, amt: f32, y: f32, at: [(f32, f32); 4], 
         let r = if i == 0 || i == 3 { a } else { b };
         let c = if i % 2 == 1 { cube_m([-2.0, 0.0, -2.0], size, [0.0, 16.0]) } else { cube([-2.0, 0.0, -2.0], size, [0.0, 16.0]) };
         m.part([*x, y, *z], [r, 0.0, 0.0], &[c]);
+    }
+}
+
+/// Falling block: the block's own model, centred on the entity (position = bottom centre).
+pub fn build_falling_block(a: &Assets, e: &Entity, alpha: f32, light: [u8; 2], out: &mut MeshData) {
+    if e.data <= 0 { return; }
+    let p = e.render_pos(alpha);
+    let m = a.model(e.data as u16);
+    let base = [p[0] as f32 - 0.5, p[1] as f32, p[2] as f32 - 0.5];
+    for q in &m.quads {
+        let b = out.verts.len() as u32;
+        let sh = [0.5, 1.0, 0.8, 0.8, 0.6, 0.6][q.dir as usize % 6];
+        for i in 0..4 {
+            out.verts.push(Vertex { pos: [base[0] + q.pos[i][0], base[1] + q.pos[i][1], base[2] + q.pos[i][2]], uv: q.uv[i], color: [(sh * 255.0) as u8, (sh * 255.0) as u8, (sh * 255.0) as u8, 255], light: [light[0], light[1], 0, 0] });
+        }
+        out.idx.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3]);
     }
 }
 

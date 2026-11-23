@@ -29,6 +29,7 @@ pub static ALL: &[Spec] = &[
     spec!("M6", "m6_furnace_fuel", m6::furnace_fuel, Flat, Both, true, "fuel runs out: lit off, progress decays 2/tick"),
     spec!("M6", "m6_blast_smoker", m6::blast_smoker, Flat, Both, true, "blast furnace 100 ticks + xp, smoker food only"),
     spec!("M6", "m6_weather", m6::weather, Flat, Both, true, "/weather rain|thunder|clear: begin/end events and 0.01/tick level changes"),
+    spec!("M6", "m6_falling_blocks", m6::falling_blocks, Flat, Both, true, "sand/gravel fall as entities: spawn delay, fall time, chains, torch break, concrete powder in water"),
     spec!("M1", "m1_join_spawn", m1::join_spawn, Flat, Both, false, "login/configuration/play, spawn position, health"),
     spec!("M1", "m1_status_ping", m1::status_ping, Flat, Both, false, "server list ping: version 26.2/776 + pong"),
     spec!("M1", "m1_chunk_streaming", m1::chunk_streaming, Flat, Both, true, "chunks around the player arrive; more stream in after moving"),

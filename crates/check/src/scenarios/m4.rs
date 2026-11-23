@@ -221,6 +221,9 @@ pub fn armor_slots(ctx: &mut Ctx) -> Result<()> {
 pub fn fall_damage(ctx: &mut Ctx) -> Result<()> {
     let (bot, o) = survival_arena(ctx, 6, 6)?;
     let p = [o[0] as f64 + 2.5, Y as f64, o[2] as f64 + 2.5];
+    // the arena only clears 5 blocks up: on the long-running vanilla world other runs can leave
+    // blocks higher in the drop columns, which shortens the fall
+    fill(&bot, [o[0], Y, o[2]], [o[0] + 5, Y + 22, o[2] + 5], "air")?;
     // 3 blocks: no damage
     let t0 = Instant::now();
     bot.tp([p[0], p[1] + 3.0, p[2]])?;

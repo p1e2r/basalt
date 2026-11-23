@@ -34,6 +34,60 @@ pub fn weather(ctx: &mut Ctx) -> Result<()> {
     Ok(())
 }
 
+/// Gravity blocks: a block of sand set in the air turns into a falling_block entity, lands and
+/// becomes a block again; removing the support of a column drops the whole column; sand landing on
+/// a torch breaks into an item; concrete powder landing in water hardens. Ticks are server ticks
+/// seen by the bot (ticks counted from the setblock reply).
+pub fn falling_blocks(ctx: &mut Ctx) -> Result<()> {
+    use crate::runner::ARENA_Y;
+    let bot = ctx.bot()?;
+    let o = ctx.arena(&bot, 8, 8, 16)?;
+    ctx.stand(&bot, o[0] + 1, o[2] + 1, "creative")?;
+    let y = ARENA_Y + 1;
+    let fallers = |bot: &Bot| bot.st().entities.values().filter(|e| e.kind == "falling_block").count();
+    // 1) single drop from 10 blocks up
+    let p = [o[0] + 4, y + 10, o[2] + 4];
+    let t0 = bot.st().ticks;
+    bot.cmd_reply(&format!("setblock {} {} {} sand", p[0], p[1], p[2]))?;
+    let spawned = bot.wait_until(Duration::from_secs(3), |s| s.entities.values().any(|e| e.kind == "falling_block"));
+    let t1 = bot.st().ticks;
+    ctx.check(spawned, "no falling_block entity for sand in the air");
+    let landed = bot.wait_until(Duration::from_secs(5), |s| s.world.name(p[0], y, p[2]) == "sand");
+    let t2 = bot.st().ticks;
+    ctx.check(landed, format!("sand did not land (block below: {})", bot.st().world.name(p[0], y, p[2])));
+    ctx.check(bot.wait_until(Duration::from_secs(2), |s| !s.entities.values().any(|e| e.kind == "falling_block")), "falling_block entity not removed after landing");
+    ctx.metric("spawn_delay_le_3", ((t1 - t0) <= 3) as u8 as f64, 0.0);
+    ctx.metric("fall_10_ticks", (t2 - t0) as f64, 2.0);
+    ctx.metric("landed_on_floor", landed as u8 as f64, 0.0);
+    // 2) a column of three falls when its support goes
+    let c = [o[0] + 2, o[2] + 6];
+    setblock(&bot, [c[0], y + 2, c[1]], "dirt")?;
+    for k in 3..6 { setblock(&bot, [c[0], y + k, c[1]], "gravel")?; }
+    bot.wait_ticks(5);
+    bot.cmd_reply(&format!("setblock {} {} {} air", c[0], y + 2, c[1]))?;
+    let chain = bot.wait_until(Duration::from_secs(5), |s| (0..3).all(|k| s.world.name(c[0], y + k, c[1]) == "gravel"));
+    let n = (0..6).filter(|k| bot.st().world.name(c[0], y + k, c[1]) == "gravel").count();
+    ctx.check(chain, format!("gravel column did not settle on the floor ({n} gravel in the column)"));
+    ctx.metric("column_landed", n as f64, 0.0);
+    // 3) sand onto a torch breaks into an item
+    let tq = [o[0] + 6, o[2] + 2];
+    setblock(&bot, [tq[0], y, tq[1]], "torch")?;
+    bot.cmd_reply(&format!("setblock {} {} {} sand", tq[0], y + 4, tq[1]))?;
+    let item = bot.wait_until(Duration::from_secs(5), |s| s.entities.values().any(|e| e.kind == "item" && e.item.as_ref().map(|i| i.name() == "sand").unwrap_or(false)));
+    let (torch_kept, sand_block) = { let s = bot.st(); (s.world.name(tq[0], y, tq[1]) == "torch", (y..y + 5).any(|k| s.world.name(tq[0], k, tq[1]) == "sand")) };
+    ctx.metric("sand_item_on_torch", item as u8 as f64, 0.0);
+    ctx.metric("torch_kept", torch_kept as u8 as f64, 0.0);
+    ctx.metric("sand_block_on_torch", sand_block as u8 as f64, 0.0);
+    // 4) concrete powder into water hardens
+    let w = [o[0] + 6, o[2] + 6];
+    setblock(&bot, [w[0], y, w[1]], "water")?;
+    bot.cmd_reply(&format!("setblock {} {} {} white_concrete_powder", w[0], y + 4, w[1]))?;
+    let hard = bot.wait_until(Duration::from_secs(5), |s| (y..y + 2).any(|k| s.world.name(w[0], k, w[1]) == "white_concrete"));
+    ctx.metric("powder_hardens_in_water", hard as u8 as f64, 0.0);
+    ctx.check(fallers(&bot) == 0, "falling blocks left over");
+    Ok(())
+}
+
 // ------------------------------------------------------------------ containers (chests, barrels, furnaces)
 
 mod cont {

@@ -47,7 +47,7 @@ pub enum Event {
     OpenScreen { window: i32, menu: i32, title: String },
     CloseScreen(i32),
     ContainerData { window: i32, id: i16, value: i16 },
-    AddEntity { id: i32, uuid: Uuid, kind: i32, pos: [f64; 3], vel: [f64; 3], yaw: f32, pitch: f32, head_yaw: f32 },
+    AddEntity { id: i32, uuid: Uuid, kind: i32, pos: [f64; 3], vel: [f64; 3], yaw: f32, pitch: f32, head_yaw: f32, data: i32 },
     MoveEntity { id: i32, delta: [f64; 3], rot: Option<(f32, f32)>, on_ground: bool },
     TeleportEntity { id: i32, pos: [f64; 3], yaw: f32, pitch: f32, on_ground: bool },
     EntityMotion { id: i32, vel: [f64; 3] },
@@ -338,7 +338,8 @@ fn handle_play(id: i32, data: &[u8], tx: &Sender<Event>, players: &mut HashMap<U
             let id = r.varint()?; let uuid = r.uuid()?; let kind = r.varint()?;
             let pos = [r.f64()?, r.f64()?, r.f64()?];
             let vel = read_lpvec3(&mut r)?; let pitch = pitch_angle(r.u8()?); let yaw = angle(r.u8()?); let head_yaw = angle(r.u8().unwrap_or(0));
-            Event::AddEntity { id, uuid, kind, pos, vel, yaw, pitch, head_yaw }
+            let data = r.varint().unwrap_or(0);
+            Event::AddEntity { id, uuid, kind, pos, vel, yaw, pitch, head_yaw, data }
         }
         cb::MOVE_ENTITY_POS => {
             let id = r.varint()?; let d = [r.i16()? as f64 / 4096.0, r.i16()? as f64 / 4096.0, r.i16()? as f64 / 4096.0];

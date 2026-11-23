@@ -14,7 +14,7 @@ use winit::keyboard::KeyCode;
 const W: u32 = 854;
 const H: u32 = 480;
 
-pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer"];
+pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer", "falling_block"];
 
 enum Outcome { Pass(String), Skip(String) }
 
@@ -40,7 +40,7 @@ pub fn run(args: &Args, assets: Arc<Assets>, name: &str) -> Result<bool> {
         let t = Instant::now();
         let r = match s {
             "edge_chunks" => edge_chunks(&ctx), "inventory" => inventory(&ctx), "crafting_table" => crafting_table(&ctx), "death" => death(&ctx),
-            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx),
+            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "falling_block" => falling_block(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx),
             other => Err(anyhow!("unknown scenario {other} (known: {})", ALL.join(", "))),
         };
         let secs = t.elapsed().as_secs_f32();
@@ -1040,4 +1040,28 @@ fn singleplayer(c: &Ctx) -> Result<Outcome> {
     press_widget(&mut g, "confirm")?;
     if !crate::worlds::list().is_empty() { bail!("world not deleted"); }
     Ok(Outcome::Pass(format!("created + joined in {join:.1}s, block kept across save/quit/rejoin, icon written, rename/backup/delete ok")))
+}
+
+/// A falling sand block is drawn with the sand model while it falls, then becomes the block.
+fn falling_block(c: &Ctx) -> Result<Outcome> {
+    let mut g = c.game("fall")?;
+    join(&mut g)?;
+    cmd(&mut g, "gamemode creative");
+    cmd(&mut g, "time set noon");
+    tp(&mut g, [940.5, -60.0, 940.5], 0.0, -20.0)?;
+    wait(&mut g, 1.0)?;
+    let b = [940, -48, 945];
+    cmd(&mut g, &format!("setblock {} {} {} sand", b[0], b[1], b[2]));
+    let sand = basalt_data::BlockState::from_name("sand").map(|s| s.0 as i32).unwrap_or(-1);
+    if !wait_until(&mut g, 3.0, |g| g.entities.values().any(|e| crate::entity::type_name(e.kind) == "falling_block" && e.data == sand))? { bail!("no falling_block entity with the sand state"); }
+    let p = g.entities.values().find(|e| crate::entity::type_name(e.kind) == "falling_block").map(|e| e.pos).unwrap_or([0.0; 3]);
+    look_at(&mut g, [p[0], p[1] - 1.0, p[2]]);
+    step(&mut g)?;
+    let with = capture(&mut g)?;
+    g.hide_entities = true; let without = capture(&mut g)?; g.hide_entities = false;
+    let px = diff_count(&with, &without, 0, 0, W as i32, H as i32);
+    save(&g, &with, "falling_block");
+    if px < 100 { bail!("falling block barely drawn ({px} px)"); }
+    if !wait_until(&mut g, 4.0, |g| basalt_data::BlockState(g.world.get(b[0], -60, b[2]) as u32).name() == "sand")? { bail!("sand did not land"); }
+    Ok(Outcome::Pass(format!("falling sand drawn ({px} px), landed as a block")))
 }

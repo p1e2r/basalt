@@ -12,12 +12,13 @@ const RANGE: f64 = 80.0;
 impl Game {
     /// (eid, position) of every tracked entity.
     fn tracked(&self) -> impl Iterator<Item = (i32, [f64; 3])> + '_ {
-        self.mobs.values().map(|m| (m.eid, m.pos)).chain(self.arrows.values().map(|a| (a.eid, a.pos)))
+        self.mobs.values().map(|m| (m.eid, m.pos)).chain(self.arrows.values().map(|a| (a.eid, a.pos))).chain(self.fallers.values().map(|f| (f.eid, f.pos)))
     }
 
     fn spawn_packets_for(&self, eid: i32) -> Vec<Writer> {
         if let Some(m) = self.mobs.get(&eid) { return m.spawn_packets(); }
         if let Some(a) = self.arrows.get(&eid) { return a.spawn_packets(); }
+        if let Some(f) = self.fallers.get(&eid) { return f.spawn_packets(); }
         Vec::new()
     }
 
