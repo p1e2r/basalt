@@ -7,6 +7,7 @@
 //! ```
 
 pub mod aquifer;
+pub mod biome;
 pub mod density;
 pub mod noise;
 pub mod random;
@@ -38,7 +39,6 @@ impl GeneratedChunk {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) struct Router {
     final_density: NodeId,
     vein_toggle: NodeId,
@@ -107,6 +107,8 @@ pub struct Generator {
     default_fluid: u16,
     blocks: Blocks,
     interp_args: Vec<NodeId>,
+    pub biome_names: Vec<String>,
+    biomes: biome::BiomeSource,
 }
 
 /// Default location of the data generator output.
@@ -151,8 +153,10 @@ impl Generator {
             copper_ore: state("copper_ore")?, raw_copper: state("raw_copper_block")?, granite: state("granite")?,
             iron_ore: state("deepslate_iron_ore")?, raw_iron: state("raw_iron_block")?, tuff: state("tuff")?,
         };
+        let biome_names = biome_names(data_dir)?;
+        let biomes = biome::BiomeSource::load(data_dir, &biome_names)?;
         Ok(Generator {
-            seed,
+            seed, biome_names, biomes,
             aquifer_rand: rand.from_hash("minecraft:aquifer").fork_positional(),
             ore_rand: rand.from_hash("minecraft:ore").fork_positional(),
             sea_level: settings["sea_level"].as_i64().unwrap_or(63) as i32,
@@ -168,7 +172,61 @@ impl Generator {
     pub fn generate_chunk(&self, cx: i32, cz: i32) -> GeneratedChunk {
         let mut e = Eval::new(&self.graph);
         let blocks = self.fill_noise(&mut e, cx, cz);
-        GeneratedChunk { blocks, biomes: vec![[0u8; 64]; SECTIONS] }
+        let biomes = self.fill_biomes(&mut e, cx, cz);
+        GeneratedChunk { blocks, biomes }
+    }
+
+    pub fn debug_biome(&self, qx: i32, qy: i32, qz: i32) {
+        let mut e = Eval::new(&self.graph);
+        let t = self.climate(&mut e, qx * 4, qy * 4, qz * 4);
+        println!("target {t:?}");
+        for (f, i) in self.biomes.ranked(&t, 6) {
+            let en = &self.biomes.entries[i];
+            println!("  {f} #{i} {} {:?} off {}", self.biome_names[en.biome as usize], en.p, en.offset);
+        }
+    }
+
+    fn climate(&self, e: &mut Eval, x: i32, y: i32, z: i32) -> biome::Target {
+        let r = &self.router;
+        let q = |e: &mut Eval, n: NodeId| biome::quantize(e.eval(n, x, y, z));
+        [q(e, r.temperature), q(e, r.vegetation), q(e, r.continents), q(e, r.erosion), q(e, r.depth), q(e, r.ridges)]
+    }
+
+    /// Biome at a quart position (block coordinates / 4).
+    pub fn noise_biome(&self, e: &mut Eval, qx: i32, qy: i32, qz: i32) -> u8 {
+        e.set_mode(Mode::Direct);
+        let t = self.climate(e, qx * 4, qy * 4, qz * 4);
+        self.biomes.search(&t, None).0
+    }
+
+    /// Biome stage: 4×4×4 cells for the whole chunk.
+    pub fn fill_biomes(&self, e: &mut Eval, cx: i32, cz: i32) -> Vec<[u8; 64]> {
+        e.set_mode(Mode::Direct);
+        let mut out = vec![[0u8; 64]; SECTIONS];
+        let mut cols = [[0i64; 6]; 16];
+        for qx in 0..4 {
+            for qz in 0..4 {
+                cols[(qx * 4 + qz) as usize] = self.climate(e, cx * 16 + qx * 4, 0, cz * 16 + qz * 4);
+            }
+        }
+        // Same visiting order as vanilla (section, x, y, z) so warm-started ties resolve alike.
+        let mut last = None;
+        for (si, sec) in out.iter_mut().enumerate() {
+            for qx in 0..4 {
+                for qyl in 0..4 {
+                    for qz in 0..4 {
+                        let qy = si as i32 * 4 + qyl;
+                        let (x, z) = (cx * 16 + qx * 4, cz * 16 + qz * 4);
+                        let mut t = cols[(qx * 4 + qz) as usize];
+                        t[4] = biome::quantize(e.eval(self.router.depth, x, MIN_Y + qy * 4, z));
+                        let (b, leaf) = self.biomes.search(&t, last);
+                        last = Some(leaf);
+                        sec[((qyl << 4) | (qz << 2) | qx) as usize] = b;
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// Noise stage: stone / water / lava / air (+ ore veins).

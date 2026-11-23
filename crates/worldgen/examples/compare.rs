@@ -156,7 +156,8 @@ fn main() -> Result<()> {
                     let theirs = &v.biomes[si * 64 + j];
                     if theirs.is_empty() { continue; }
                     bio_n += 1;
-                    if &ours == theirs { bio_ok += 1; } else { *bio_conf.entry((ours, theirs.clone())).or_default() += 1; }
+                    if &ours == theirs { bio_ok += 1; } else {
+                        if detail { println!("biome mismatch at quart {} {} {}: ours {ours} vanilla {theirs}", cx * 4 + (j & 3) as i32, (si * 4 + (j >> 4)) as i32 - 16, cz * 4 + ((j >> 2) & 3) as i32); } *bio_conf.entry((ours, theirs.clone())).or_default() += 1; }
                 }
             }
             if let Ok(sl) = std::env::var("SLICE") {
