@@ -44,7 +44,9 @@ Read NOTES.md for verified packet formats.
 - [x] M2 verify with real 26.2 client (tools/run-vanilla-client.py) + basalt-client
 - [x] M3a worldgen terrain/biomes/surface/carvers/ores vs vanilla seed 12345, wired into server
 - [ ] M3b features: trees + vegetation, lakes, springs, geodes, monster rooms; exact neighbour mode
-- [ ] M3c structures
+- [ ] M3c structures (overworld; may move into M8)
+- [ ] M4 survival gameplay   - [ ] M5 mobs   - [ ] M6 world logic   - [ ] M7 client parity
+- [ ] M8 Nether/End, portals, structures
 - Server gaps: survival drops go straight to inventory (no item entities), no container_click /
   crafting, no mobs, no fluids/redstone ticking, no online-mode auth. Real-client walking/
   breaking driven by a human not yet verified (only bot-driven).
@@ -67,3 +69,13 @@ Read NOTES.md for verified packet formats.
    features; compare to vanilla seed 12345 chunk-by-chunk. API:
    `Generator::new(seed).generate_chunk(cx, cz) -> GeneratedChunk { blocks: Vec<[u16;4096]>
    (24 sections, y<<8|z<<4|x), biomes: Vec<[u8;64]> (y<<4|z<<2|x) }`.
+4. Survival gameplay: block hardness + tool tiers/speeds, drops (loot tables), item entities +
+   pickup, inventory (container_click), crafting from vanilla recipe JSON (2x2 + table),
+   health/hunger/saturation/fall damage, death + respawn.
+5. Mobs: spawning rules, AI (pathfinding, goals), combat (melee/ranged, knockback, armor),
+   loot tables.
+6. World logic: fluids, falling blocks, day/night + weather, random ticks/growth,
+   furnaces/chests and other block entities.
+7. Client parity: inventory/crafting UI, sounds, entity models, menus (title, server list,
+   pause, settings).
+8. Nether/End: dimensions, portals, structures.
