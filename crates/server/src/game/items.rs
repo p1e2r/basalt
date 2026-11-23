@@ -125,6 +125,15 @@ impl Game {
             let mut v = vel; let mut p = pos;
             let in_water = props::props(self.world.get_block(p[0].floor() as i32, (p[1] + 0.1).floor() as i32, p[2].floor() as i32)).has_fluid();
             if in_water { if v[1] < 0.06 { v[1] += 5.0e-4; } v[0] *= 0.99; v[2] *= 0.99; } else { v[1] -= 0.04; }
+            // resting items only run the move step every 4th tick (vanilla), so gravity builds up between
+            let (was_ground, age) = { let e = &self.items[id]; (e.on_ground, e.age) };
+            if was_ground && v[0] * v[0] + v[2] * v[2] <= 1.0e-5 && (age as i32 + *id) % 4 != 0 {
+                let e = self.items.get_mut(id).unwrap();
+                e.vel = [v[0] * 0.588, v[1] * 0.98, v[2] * 0.588]; e.age += 1;
+                if e.pickup_delay > 0 { e.pickup_delay -= 1; }
+                if e.age >= DESPAWN_TICKS { dead.push(*id); }
+                continue;
+            }
             // stuck inside a block: push up
             if self.solid(p[0], p[1] + 0.1, p[2]) { p[1] = p[1].floor() + 1.0; v[1] = 0.0; }
             let ny = p[1] + v[1];
@@ -193,28 +202,35 @@ impl Game {
                 let e = self.items.get_mut(&item_id).unwrap(); e.stack.count = left;
             }
         }
-        // tracking: deltas + motion every 20 ticks or on landing/lift-off, like vanilla
+        // tracking, as measured on vanilla: first tick after spawn re-sends a zero delta + the stack;
+        // landing / lift-off sends an absolute entity_position_sync (the client snaps instead of
+        // interpolating against its own simulation); otherwise deltas + motion every 20 ticks.
         let mut out: Vec<(i32, Vec<Writer>)> = Vec::new();
         for e in self.items.values_mut() {
             let t = &mut e.track;
             t.ticks += 1;
             let ground_changed = e.on_ground != t.on_ground;
-            if t.ticks % ITEM_UPDATE_INTERVAL != 0 && !ground_changed { continue; }
+            let first = t.ticks == 1;
+            if t.ticks % ITEM_UPDATE_INTERVAL != 0 && !ground_changed && !first { continue; }
             let mut ws = Vec::new();
             let q = [quantize(e.pos[0]), quantize(e.pos[1]), quantize(e.pos[2])];
             let d = [q[0] - t.pos_q[0], q[1] - t.pos_q[1], q[2] - t.pos_q[2]];
-            if d.iter().any(|c| c.abs() > i16::MAX as i64) {
+            let dv: f64 = (0..3).map(|k| (e.vel[k] - t.vel[k]).powi(2)).sum();
+            let motion_changed = dv > 1.0e-7 || (t.vel == [0.0; 3] && e.vel != [0.0; 3]);
+            // vanilla sends the motion packet first, then the position
+            if motion_changed && !first {
+                let mut w = Writer::with_id(cb::SET_ENTITY_MOTION); w.varint(e.eid).lpvec3(e.vel); ws.push(w); t.vel = e.vel;
+            }
+            if ground_changed || d.iter().any(|c| c.abs() > i16::MAX as i64) {
                 let mut w = Writer::with_id(cb::ENTITY_POSITION_SYNC);
                 w.varint(e.eid).f64(e.pos[0]).f64(e.pos[1]).f64(e.pos[2]).f64(e.vel[0]).f64(e.vel[1]).f64(e.vel[2]).f32(0.0).f32(0.0).bool(e.on_ground);
                 ws.push(w); t.pos_q = q;
-            } else if d != [0; 3] || ground_changed {
+            } else if d != [0; 3] || first {
                 let mut w = Writer::with_id(cb::MOVE_ENTITY_POS); w.varint(e.eid).i16(d[0] as i16).i16(d[1] as i16).i16(d[2] as i16).bool(e.on_ground);
                 ws.push(w); t.pos_q = q;
             }
-            let dv: f64 = (0..3).map(|k| (e.vel[k] - t.vel[k]).powi(2)).sum();
-            let was_still = t.vel == [0.0; 3];
-            if dv > 1.0e-7 || (was_still && e.vel != [0.0; 3]) {
-                let mut w = Writer::with_id(cb::SET_ENTITY_MOTION); w.varint(e.eid).lpvec3(e.vel); ws.push(w); t.vel = e.vel;
+            if first {
+                let mut m = Writer::with_id(cb::SET_ENTITY_DATA); m.varint(e.eid).u8(8).varint(7); super::write_slot(&mut m, e.stack); m.u8(0xff); ws.push(m);
             }
             t.on_ground = e.on_ground;
             if !ws.is_empty() { out.push((e.eid, ws)); }
