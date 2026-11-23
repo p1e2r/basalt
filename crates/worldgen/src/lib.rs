@@ -1,6 +1,11 @@
 //! Overworld world generation for Basalt, driven entirely by the worldgen JSON that the
 //! official data generator emits (noise settings, density functions, noises, biomes, ...).
 //!
+//! Stages ([`Stage`]): noise terrain with aquifers and ore veins, multi-noise biomes,
+//! surface rules (+ iceberg / eroded-badlands extensions), cave and canyon carvers, and the
+//! features implemented so far (ores, disks, freeze_top_layer). Structures, trees and other
+//! vegetation are not generated. Measure against a vanilla world with the `compare` example.
+//!
 //! ```ignore
 //! let g = basalt_worldgen::Generator::new(12345);
 //! let chunk = g.generate_chunk(0, 0);
