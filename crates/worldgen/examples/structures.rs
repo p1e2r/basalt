@@ -383,7 +383,10 @@ fn main() -> Result<()> {
                     if fl {
                         format!("{:.4}", r.next_float())
                     } else {
-                        format!("{:.3}", r.next_int_bounded(1 << 30) as f64 / (1u64 << 30) as f64)
+                        format!(
+                            "{:.3}",
+                            r.next_int_bounded(1 << 30) as f64 / (1u64 << 30) as f64
+                        )
                     }
                 })
                 .collect();

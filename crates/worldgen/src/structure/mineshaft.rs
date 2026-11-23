@@ -53,6 +53,7 @@ struct Gen<'a> {
 }
 
 /// A box `len` long in direction `o` from (x, y, z), `w` wide starting `side` blocks to the side.
+#[allow(clippy::too_many_arguments)]
 fn dir_box(x: i32, y: i32, z: i32, o: u8, len: i32, h: i32, w: i32, side: i32) -> BBox {
     let (a, b) = match o {
         N => ([x + side, y, z - len + 1], [x + side + w - 1, y + h - 1, z]),
