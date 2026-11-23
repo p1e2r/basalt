@@ -60,6 +60,12 @@ pub enum Screen {
     Pause,
     Options { from_pause: bool },
     Page { page: Page, from_pause: bool, scroll: f32 },
+    Worlds { selected: Option<usize>, last_click: Option<(usize, Instant)>, search: String, scroll: f32 },
+    CreateWorld { meta: crate::worlds::WorldMeta, seed: String, focus: u8 },
+    EditWorld { index: usize, name: String },
+    DeleteWorld { index: usize },
+    /// a one-line status ("Reading world data...", "Saving world")
+    Message { text: String },
     /// info screens behind the pause menu (no server data yet)
     Info { title: String, text: String },
     Death { msg: String, at: Instant },
@@ -67,7 +73,7 @@ pub enum Screen {
 
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
-pub enum Kind { Button { label: String, enabled: bool }, Slider { label: String, value: f32 }, Field { text: String, focused: bool, hint: String }, Label { text: String, color: [u8; 4], scale: f32 }, Row { title: String, sub: String, selected: bool }, Icon { sprite: String, tooltip: String }, Server { index: usize, selected: bool } }
+pub enum Kind { Button { label: String, enabled: bool }, Slider { label: String, value: f32 }, Field { text: String, focused: bool, hint: String }, Label { text: String, color: [u8; 4], scale: f32 }, Row { title: String, sub: String, selected: bool }, Icon { sprite: String, tooltip: String }, Server { index: usize, selected: bool }, World { index: usize, selected: bool } }
 
 /// A widget in GUI units.
 #[derive(Clone, Debug)]
@@ -91,11 +97,68 @@ impl Game {
         let cx = (gw / 2.0).floor();
         let mut v = Vec::new();
         let white = [255; 4];
+        let gray = [160, 160, 160, 255];
         match &self.screen {
+            // singleplayer screens: layouts measured from a vanilla 26.2 recording (2026-11-23)
+            Some(Screen::Worlds { selected, search, scroll, .. }) => {
+                v.push(label(&t("selectWorld.title"), cx, 8.0, white, 1.0));
+                v.push(Widget { id: "search".into(), x: cx - 100.0, y: 22.0, w: 200.0, h: 20.0, kind: Kind::Field { text: search.clone(), focused: true, hint: t("gui.language.search") } });
+                for (i, w) in self.worlds.iter().enumerate().filter(|(_, w)| search.is_empty() || w.meta.name.to_lowercase().contains(&search.to_lowercase())) {
+                    let y = 52.0 + v.iter().filter(|w| w.id.starts_with("world")).count() as f32 * 36.0 - scroll;
+                    if y < 48.0 || y + 36.0 > gh - 60.0 { continue; }
+                    let _ = w;
+                    v.push(Widget { id: format!("world{i}"), x: cx - 135.0, y, w: 270.0, h: 36.0, kind: Kind::World { index: i, selected: *selected == Some(i) } });
+                }
+                let sel = selected.is_some();
+                let en = |b: Widget, on: bool| if on { b } else { disabled(b) };
+                v.push(en(button("play", &t("selectWorld.select"), cx - 154.0, gh - 52.0, 150.0), sel));
+                v.push(button("create", &t("selectWorld.create"), cx + 4.0, gh - 52.0, 150.0));
+                v.push(en(button("edit", &t("selectWorld.edit"), cx - 154.0, gh - 28.0, 72.0), sel));
+                v.push(en(button("delete", &t("selectWorld.delete"), cx - 76.0, gh - 28.0, 72.0), sel));
+                v.push(en(button("recreate", &t("selectWorld.recreate"), cx + 4.0, gh - 28.0, 72.0), sel));
+                v.push(button("back", &t("gui.back"), cx + 82.0, gh - 28.0, 72.0));
+            }
+            Some(Screen::CreateWorld { meta, seed, focus }) => {
+                v.push(label(&t("selectWorld.create"), cx, 15.0, white, 1.0));
+                v.push(label(&t("selectWorld.enterName"), cx - 100.0 + self.ui.text_width(&t("selectWorld.enterName"), 1.0) / 2.0, 33.0, gray, 1.0));
+                v.push(Widget { id: "name".into(), x: cx - 100.0, y: 43.0, w: 200.0, h: 20.0, kind: Kind::Field { text: meta.name.clone(), focused: *focus == 0, hint: String::new() } });
+                let gm = ["selectWorld.gameMode.survival", "selectWorld.gameMode.creative", "selectWorld.gameMode.hardcore"][(meta.gamemode as usize).min(2)];
+                v.push(button("gamemode", &format!("{}: {}", t("selectWorld.gameMode"), t(gm)), cx - 100.0, 70.0, 200.0));
+                let df = ["options.difficulty.peaceful", "options.difficulty.easy", "options.difficulty.normal", "options.difficulty.hard"][(meta.difficulty as usize).min(3)];
+                v.push(button("difficulty", &format!("{}: {}", t("options.difficulty"), t(df)), cx - 100.0, 95.0, 200.0));
+                v.push(button("commands", &format!("{}: {}", t("selectWorld.allowCommands"), t(if meta.commands { "options.on" } else { "options.off" })), cx - 100.0, 120.0, 200.0));
+                v.push(button("worldtype", &format!("{}: {}", t("selectWorld.mapType"), t(if meta.flat { "generator.minecraft.flat" } else { "generator.minecraft.normal" })), cx - 100.0, 145.0, 200.0));
+                v.push(label(&t("selectWorld.enterSeed"), cx - 100.0 + self.ui.text_width(&t("selectWorld.enterSeed"), 1.0) / 2.0, 170.0, gray, 1.0));
+                v.push(Widget { id: "seed".into(), x: cx - 100.0, y: 180.0, w: 200.0, h: 20.0, kind: Kind::Field { text: seed.clone(), focused: *focus == 1, hint: t("selectWorld.seedInfo") } });
+                v.push(button("create", &t("selectWorld.create"), cx - 155.0, gh - 28.0, 150.0));
+                v.push(button("cancel", &t("gui.cancel"), cx + 5.0, gh - 28.0, 150.0));
+            }
+            Some(Screen::EditWorld { name, .. }) => {
+                v.push(label(&t("selectWorld.edit.title"), cx, 15.0, white, 1.0));
+                v.push(label(&t("selectWorld.enterName"), cx - 100.0 + self.ui.text_width(&t("selectWorld.enterName"), 1.0) / 2.0, 33.0, gray, 1.0));
+                v.push(Widget { id: "name".into(), x: cx - 100.0, y: 43.0, w: 200.0, h: 20.0, kind: Kind::Field { text: name.clone(), focused: true, hint: String::new() } });
+                for (i, (id, k)) in [("reset_icon", "selectWorld.edit.resetIcon"), ("open_folder", "selectWorld.edit.openFolder"), ("backup", "selectWorld.edit.backup"),
+                    ("backup_folder", "selectWorld.edit.backupFolder"), ("optimize", "selectWorld.edit.optimize")].iter().enumerate() {
+                    let b = button(id, &t(k), cx - 100.0, 70.0 + i as f32 * 25.0, 200.0);
+                    v.push(if *id == "optimize" { disabled(b) } else { b });
+                }
+                v.push(button("save", &t("selectWorld.edit.save"), cx - 99.0, gh - 22.0, 98.0));
+                v.push(button("cancel", &t("gui.cancel"), cx + 2.0, gh - 22.0, 98.0));
+            }
+            Some(Screen::DeleteWorld { index }) => {
+                let name = self.worlds.get(*index).map(|w| w.meta.name.clone()).unwrap_or_default();
+                v.push(label(&t("selectWorld.deleteQuestion"), cx, gh / 2.0 - 31.0, white, 1.0));
+                v.push(label(&crate::lang::tr("selectWorld.deleteWarning", &[name]), cx, gh / 2.0 - 15.0, white, 1.0));
+                v.push(button("confirm", &t("selectWorld.deleteButton"), cx - 155.0, gh / 2.0 + 16.0, 150.0));
+                v.push(button("cancel", &t("gui.cancel"), cx + 5.0, gh / 2.0 + 16.0, 150.0));
+            }
+            Some(Screen::Message { text }) => {
+                v.push(label(text, cx, gh / 2.0 - 4.0, white, 1.0));
+            }
             Some(Screen::Title) => {
                 // layout measured from a vanilla 26.2 client recording (2026-11-23), GUI units
                 let y = (gh / 4.0 + 48.0).floor();
-                v.push(disabled(button("singleplayer", &t("menu.singleplayer"), cx - 100.0, y, 200.0)));
+                v.push(button("singleplayer", &t("menu.singleplayer"), cx - 100.0, y, 200.0));
                 v.push(button("multiplayer", &t("menu.multiplayer"), cx - 100.0, y + 24.0, 200.0));
                 v.push(disabled(button("realms", &t("menu.online"), cx - 100.0, y + 48.0, 200.0)));
                 v.push(icon("friends", "sprites/friends/friends", &t("gui.friends.open"), cx - 34.0, y + 72.0));
@@ -160,8 +223,14 @@ impl Game {
                     ("friends", "sprites/friends/friends", "gui.friends.open"), ("reporting", "sprites/pause_menu/player_reporting", "menu.playerReporting"), ("links", "list", "menu.server_links")].into_iter().enumerate() {
                     v.push(icon(id, spr, &t(tip), cx - 58.0 + i as f32 * 24.0, y + 48.0));
                 }
-                v.push(button("options", &t("menu.options"), cx - 102.0, y + 72.0, 204.0));
-                v.push(button("disconnect", &t("menu.disconnect"), cx - 102.0, y + 96.0, 204.0));
+                if self.integrated.is_some() {
+                    v.push(button("options", &t("menu.options"), cx - 102.0, y + 72.0, 98.0));
+                    v.push(disabled(button("lan", &t("menu.shareToLan"), cx + 4.0, y + 72.0, 98.0)));
+                    v.push(button("disconnect", &t("menu.returnToMenu"), cx - 102.0, y + 96.0, 204.0));
+                } else {
+                    v.push(button("options", &t("menu.options"), cx - 102.0, y + 72.0, 204.0));
+                    v.push(button("disconnect", &t("menu.disconnect"), cx - 102.0, y + 96.0, 204.0));
+                }
             }
             Some(Screen::Options { from_pause }) => {
                 // vanilla 26.2 options screen (recording 2026-11-23): FOV + World Options/Online, then five rows
@@ -266,6 +335,7 @@ impl Game {
             Kind::Slider { .. } => { self.slider_drag = Some(w.id.clone()); self.slider_set(&w, mx); }
             Kind::Field { .. } => {
                 if let Some(Screen::EditServer { focus, .. }) = &mut self.screen { *focus = if w.id == "name" { 0 } else { 1 }; }
+                if let Some(Screen::CreateWorld { focus, .. }) = &mut self.screen { *focus = if w.id == "name" { 0 } else { 1 }; }
             }
             Kind::Row { .. } | Kind::Server { .. } if w.id.starts_with("row") => {
                 let i: usize = w.id[3..].parse().unwrap_or(0);
@@ -277,6 +347,14 @@ impl Game {
             }
             Kind::Label { .. } => {}
             Kind::Icon { .. } => { self.sounds.play_ui("ui.button.click"); self.menu_action(&w.id); }
+            Kind::World { index, .. } => {
+                let i = *index;
+                if let Some(Screen::Worlds { selected, last_click, .. }) = &mut self.screen {
+                    let dbl = last_click.map(|(j, t)| j == i && t.elapsed().as_millis() < 300).unwrap_or(false);
+                    *selected = Some(i); *last_click = Some((i, Instant::now()));
+                    if dbl { self.menu_action("play"); }
+                }
+            }
             Kind::Row { .. } | Kind::Server { .. } => { if w.id.starts_with("lang:") { self.menu_action(&w.id); } }
         }
     }
@@ -308,6 +386,7 @@ impl Game {
         let was_list = matches!(self.screen, Some(Screen::Multiplayer { .. }));
         self.menu_action_inner(id);
         if (!was_list || id == "refresh") && matches!(self.screen, Some(Screen::Multiplayer { .. })) { self.refresh_pings(); }
+        if matches!(self.screen, Some(Screen::Worlds { .. })) { self.load_world_icons(); }
     }
 
     /// Ping every saved server again (results arrive in Game::pump).
@@ -322,6 +401,60 @@ impl Game {
     fn menu_action_inner(&mut self, id: &str) {
         let screen = self.screen.take();
         self.screen = match (screen, id) {
+            (Some(Screen::Title), "singleplayer") => {
+                self.worlds = crate::worlds::list();
+                if self.worlds.is_empty() { Some(Screen::CreateWorld { meta: Default::default(), seed: String::new(), focus: 0 }) }
+                else { Some(Screen::Worlds { selected: None, last_click: None, search: String::new(), scroll: 0.0 }) }
+            }
+            (Some(Screen::Worlds { .. }), "back") => Some(Screen::Title),
+            (Some(Screen::Worlds { .. }), "create") => Some(Screen::CreateWorld { meta: Default::default(), seed: String::new(), focus: 0 }),
+            (Some(Screen::Worlds { selected: Some(i), .. }), "edit") => self.worlds.get(i).map(|w| Screen::EditWorld { index: i, name: w.meta.name.clone() }),
+            (Some(Screen::Worlds { selected: Some(i), .. }), "delete") => Some(Screen::DeleteWorld { index: i }),
+            (Some(Screen::Worlds { selected: Some(i), .. }), "recreate") => self.worlds.get(i).map(|w| {
+                let mut meta = w.meta.clone(); meta.last_played = 0;
+                Screen::CreateWorld { seed: meta.seed.to_string(), meta, focus: 0 }
+            }),
+            (Some(Screen::Worlds { selected: Some(i), .. }), "play") => match self.worlds.get(i).cloned() { Some(w) => { self.play_world(w); self.screen.take() } None => Some(Screen::Title) },
+            (Some(Screen::CreateWorld { mut meta, seed, focus }), id) if matches!(id, "gamemode" | "difficulty" | "commands" | "worldtype") => {
+                match id { "gamemode" => meta.gamemode = (meta.gamemode + 1) % 3, "difficulty" => meta.difficulty = (meta.difficulty + 1) % 4, "commands" => meta.commands = !meta.commands, _ => meta.flat = !meta.flat }
+                Some(Screen::CreateWorld { meta, seed, focus })
+            }
+            (Some(Screen::CreateWorld { mut meta, seed, .. }), "create") => {
+                meta.seed = crate::worlds::parse_seed(&seed);
+                if meta.name.trim().is_empty() { meta.name = t("selectWorld.newWorld"); }
+                match crate::worlds::create(&meta) {
+                    Ok(dir) => {
+                        let folder = dir.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+                        self.play_world(crate::worlds::WorldEntry { dir, folder, meta });
+                        self.screen.take()
+                    }
+                    Err(e) => Some(Screen::Connecting { addr: String::new(), error: Some(format!("{e:#}")) }),
+                }
+            }
+            (Some(Screen::CreateWorld { .. }), "cancel") | (Some(Screen::EditWorld { .. }), "cancel") | (Some(Screen::DeleteWorld { .. }), "cancel") => {
+                self.worlds = crate::worlds::list();
+                Some(if self.worlds.is_empty() { Screen::Title } else { Screen::Worlds { selected: None, last_click: None, search: String::new(), scroll: 0.0 } })
+            }
+            (Some(Screen::EditWorld { index, name }), "save") => {
+                if let Some(w) = self.worlds.get_mut(index) { w.meta.name = name; let _ = crate::worlds::save_meta(&w.dir, &w.meta); }
+                Some(Screen::Worlds { selected: Some(index), last_click: None, search: String::new(), scroll: 0.0 })
+            }
+            (Some(Screen::EditWorld { index, name }), id) if matches!(id, "reset_icon" | "open_folder" | "backup" | "backup_folder") => {
+                if let Some(w) = self.worlds.get(index).cloned() {
+                    match id {
+                        "reset_icon" => { let _ = std::fs::remove_file(w.dir.join("icon.png")); self.icon_slots.remove(&format!("world:{}", w.folder)); }
+                        "open_folder" => crate::worlds::open_folder(&w.dir),
+                        "backup" => { if let Err(e) = crate::worlds::backup(&w) { log::warn!("backup: {e:#}"); } }
+                        _ => crate::worlds::open_folder(&crate::worlds::backups_dir()),
+                    }
+                }
+                Some(Screen::EditWorld { index, name })
+            }
+            (Some(Screen::DeleteWorld { index }), "confirm") => {
+                if let Some(w) = self.worlds.get(index) { if let Err(e) = crate::worlds::delete(&w.dir) { log::warn!("{e:#}"); } }
+                self.worlds = crate::worlds::list();
+                Some(if self.worlds.is_empty() { Screen::Title } else { Screen::Worlds { selected: None, last_click: None, search: String::new(), scroll: 0.0 } })
+            }
             (Some(Screen::Title), "multiplayer") => Some(Screen::Multiplayer { selected: None, last_click: None }),
             (Some(Screen::Title), "options") => Some(Screen::Options { from_pause: false }),
             (Some(Screen::Title), "quit") => { self.quit = true; Some(Screen::Title) }
@@ -344,7 +477,7 @@ impl Game {
             (Some(Screen::Connecting { .. }), "cancel") | (Some(Screen::Connecting { .. }), "back") => { self.disconnect(); Some(Screen::Multiplayer { selected: None, last_click: None }) }
             (Some(Screen::Pause), "resume") => None,
             (Some(Screen::Pause), "options") => Some(Screen::Options { from_pause: true }),
-            (Some(Screen::Pause), "disconnect") => { self.disconnect(); Some(Screen::Title) }
+            (Some(Screen::Pause), "disconnect") => { self.leave_world(); Some(Screen::Title) }
             (Some(Screen::Options { from_pause }), "gui") => { self.cfg.gui_scale = (self.cfg.gui_scale + 1) % 5; self.cfg.save(); Some(Screen::Options { from_pause }) }
             (Some(Screen::Options { from_pause }), "fullscreen") => { self.cfg.fullscreen = !self.cfg.fullscreen; self.cfg.save(); self.fullscreen_changed = true; Some(Screen::Options { from_pause }) }
             (Some(Screen::Options { from_pause }), id) if id.starts_with("page:") => {
@@ -412,6 +545,36 @@ impl Game {
                 }
                 true
             }
+            Some(Screen::Worlds { search, .. }) => {
+                match code {
+                    KeyCode::Escape => self.menu_action("back"),
+                    KeyCode::Backspace => { search.pop(); }
+                    KeyCode::Enter | KeyCode::NumpadEnter => self.menu_action("play"),
+                    _ => if let Some(t) = text { for c in t.chars() { if !c.is_control() && search.len() < 32 { search.push(c); } } },
+                }
+                true
+            }
+            Some(Screen::CreateWorld { meta, seed, focus }) => {
+                match code {
+                    KeyCode::Escape => self.menu_action("cancel"),
+                    KeyCode::Tab => *focus = 1 - *focus,
+                    KeyCode::Backspace => { if *focus == 0 { meta.name.pop(); } else { seed.pop(); } }
+                    KeyCode::Enter | KeyCode::NumpadEnter => self.menu_action("create"),
+                    _ => if let Some(t) = text { let f = if *focus == 0 { &mut meta.name } else { seed }; for c in t.chars() { if !c.is_control() && f.len() < 32 { f.push(c); } } },
+                }
+                true
+            }
+            Some(Screen::EditWorld { name, .. }) => {
+                match code {
+                    KeyCode::Escape => self.menu_action("cancel"),
+                    KeyCode::Backspace => { name.pop(); }
+                    KeyCode::Enter | KeyCode::NumpadEnter => self.menu_action("save"),
+                    _ => if let Some(t) = text { for c in t.chars() { if !c.is_control() && name.len() < 32 { name.push(c); } } },
+                }
+                true
+            }
+            Some(Screen::DeleteWorld { .. }) if esc => { self.menu_action("cancel"); true }
+            Some(Screen::Message { .. }) => true,
             Some(Screen::Direct { addr }) => {
                 match code {
                     KeyCode::Backspace => { addr.pop(); }
@@ -485,6 +648,20 @@ impl Game {
         let (w, h) = (self.gpu.size.0 as f32, self.gpu.size.1 as f32);
         // behind every other menu: the blurred world (in game) or the blurred panorama (render.rs Backdrop)
         if let Some(Screen::Death { .. }) = &self.screen { a.gradient(ui, 0.0, 0.0, w, h, [80, 0, 0, 96], [128, 48, 48, 160]); }
+        if let Some(Screen::Message { text }) = &self.screen {
+            let tw = a.text_width(text, 1.0);
+            let (gw, gh) = self.gui_size();
+            let (bx, by) = (((gw - tw) / 2.0 - 6.0).floor(), (gh / 2.0 - 10.0).floor());
+            a.rect(ui, bx * s, by * s, (tw + 12.0) * s, 20.0 * s, [255; 4]);
+            a.rect(ui, (bx + 1.0) * s, (by + 1.0) * s, (tw + 10.0) * s, 18.0 * s, [0, 0, 0, 255]);
+        }
+        if matches!(self.screen, Some(Screen::Worlds { .. })) {
+            let iw = if self.connected && self.spawned { "inworld_" } else { "" };
+            let (top, bottom) = (48.0 * s, h - 60.0 * s);
+            let tile = 16.0 * s;
+            let mut y = top; while y < bottom { let mut x = 0.0; while x < w { a.sprite_sized(ui, &format!("{iw}menu_list_background"), x, y, 16.0, ((bottom - y) / s).min(16.0), s, [255; 4]); x += tile; } y += tile; }
+            let mut x = 0.0; while x < w { a.sprite_sized(ui, &format!("{iw}header_separator"), x, top - 2.0 * s, 32.0, 2.0, s, [255; 4]); a.sprite_sized(ui, &format!("{iw}footer_separator"), x, bottom, 32.0, 2.0, s, [255; 4]); x += 32.0 * s; }
+        }
         if matches!(self.screen, Some(Screen::Page { .. }) | Some(Screen::Multiplayer { .. })) {
             // list area between a 33-unit header and footer: darker tiles + separator lines
             let iw = if self.connected && self.spawned { "inworld_" } else { "" };
@@ -533,9 +710,10 @@ impl Game {
                     a.nine(ui, if hov(&wd) { "sprites/widget/slider_handle_highlighted" } else { "sprites/widget/slider_handle" }, x + (value * (wd.w - 8.0)) * s, y, 8.0, 20.0, 1.0, s);
                     a.text_centered(ui, label, x + wd.w * s / 2.0, y + 6.0 * s, s, [255; 4]);
                 }
-                Kind::Field { text, focused, .. } => {
+                Kind::Field { text, focused, hint } => {
                     a.nine(ui, if *focused { "sprites/widget/text_field_highlighted" } else { "sprites/widget/text_field" }, x, y, wd.w, wd.h, 1.0, s);
                     let cursor = if *focused && (self.frames.1.elapsed().as_millis() / 300) % 2 == 0 { "_" } else { "" };
+                    if text.is_empty() && !hint.is_empty() { a.text(ui, hint, x + 4.0 * s, y + 6.0 * s, s, [128, 128, 128, 255]); }
                     a.text(ui, &format!("{text}{cursor}"), x + 4.0 * s, y + 6.0 * s, s, [224, 224, 224, 255]);
                 }
                 Kind::Label { text, color, scale } => a.text_centered(ui, text, wd.x * s, y, s * scale, *color),
@@ -546,6 +724,20 @@ impl Game {
                     } else if let Some((iw, ih)) = a.size(sprite) {
                         a.sprite(ui, sprite, x + ((wd.w - iw) / 2.0).floor() * s, y + ((wd.h - ih) / 2.0).floor() * s, s);
                     }
+                }
+                Kind::World { index, selected } => {
+                    let Some(wl) = self.worlds.get(*index) else { continue };
+                    if *selected { a.rect(ui, x, y, wd.w * s, wd.h * s, [160, 160, 160, 255]); a.rect(ui, x + s, y + s, (wd.w - 2.0) * s, (wd.h - 2.0) * s, [0, 0, 0, 255]); }
+                    else if hov(&wd) { a.rect(ui, x, y, wd.w * s, wd.h * s, [255, 255, 255, 24]); }
+                    let tx = x + 35.0 * s;
+                    a.text(ui, &wl.meta.name, tx, y + 1.0 * s, s, [255; 4]);
+                    let when = crate::worlds::format_time(wl.meta.last_played);
+                    a.text(ui, &format!("{} ({when})", wl.folder), tx, y + 12.0 * s, s, [128, 128, 128, 255]);
+                    let gm = ["gameMode.survival", "gameMode.creative", "gameMode.hardcore", "gameMode.adventure"][(wl.meta.gamemode as usize).min(3)];
+                    let mut info = t(gm);
+                    if wl.meta.commands { info.push_str(&format!(", {}", t("selectWorld.commands"))); }
+                    info.push_str(&format!(", {} 26.2", t("selectWorld.version")));
+                    a.text(ui, &info, tx, y + 23.0 * s, s, [128, 128, 128, 255]);
                 }
                 Kind::Server { index, selected } => {
                     let Some(srv) = self.cfg.servers.get(*index) else { continue };
@@ -602,9 +794,12 @@ impl Game {
     pub(crate) fn draw_menu_icons(&self, m: &mut MeshData) {
         let s = self.gui_scale();
         for wd in self.widgets() {
-            let Kind::Server { index, .. } = wd.kind else { continue };
-            let Some(srv) = self.cfg.servers.get(index) else { continue };
-            if let Some(&slot) = self.icon_slots.get(&srv.addr) {
+            let key = match wd.kind {
+                Kind::Server { index, .. } => match self.cfg.servers.get(index) { Some(srv) => srv.addr.clone(), None => continue },
+                Kind::World { index, .. } => match self.worlds.get(index) { Some(w) => format!("world:{}", w.folder), None => continue },
+                _ => continue,
+            };
+            if let Some(&slot) = self.icon_slots.get(&key) {
                 self.ui.quad(m, (wd.x + 2.0) * s, (wd.y + 2.0) * s, 32.0 * s, 32.0 * s, crate::render::icon_uv(slot), [255; 4]);
             }
         }

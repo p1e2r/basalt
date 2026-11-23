@@ -28,6 +28,8 @@ pollster = "0.3"
 serde.workspace = true
 # pure-Rust Ogg Vorbis decoder for the launcher asset store sounds
 lewton = "0.10"
+# local date/time for the world list ("dd/mm/yyyy, HH.MM")
+jiff = { version = "1", default-features = false, features = ["std", "tz-system"] }
 
 # audio output: on by default on macOS/Windows; on Linux behind `--features audio` (needs ALSA headers)
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]

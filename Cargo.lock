@@ -215,6 +215,7 @@ dependencies = [
  "bytemuck",
  "env_logger",
  "glam",
+ "jiff",
  "lewton",
  "log",
  "md-5",
@@ -1129,6 +1130,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
+ "windows-link",
 ]
 
 [[package]]
