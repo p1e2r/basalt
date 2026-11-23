@@ -290,6 +290,20 @@ fn main() -> Result<()> {
                 }
             }
         }
+        "refs" => {
+            // refs REGION R CX,CZ: the structure references saved in chunk CX,CZ (+ status)
+            let v: Vec<i32> = args[4].split(',').map(|x| x.parse().unwrap()).collect();
+            if let Some(root) = read_nbt(dir, v[0], v[1])? {
+                println!("status {:?}", root.get("Status"));
+                if let Some(Tag::Compound(rf)) =
+                    root.get("structures").and_then(|s| s.get("References"))
+                {
+                    for (k, t) in rf {
+                        println!("{k}: {:?}", t);
+                    }
+                }
+            }
+        }
         "scan" => {
             // scan ID R SEED (dir argument = id): Basalt's starts of ID in the placement regions
             // within R regions of the origin, nearest first ("cx cz block-x block-z")
