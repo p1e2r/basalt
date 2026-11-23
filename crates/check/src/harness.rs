@@ -42,7 +42,7 @@ fn scenario_paths(id: &str) -> Vec<&'static str> {
     let by_prefix: &[(&str, &[&str])] = &[
         ("m1_", &["crates/check/src/scenarios/m1.rs", "crates/server/src/game/track.rs"]),
         ("m2_", &["crates/check/src/scenarios/m1.rs", "crates/server/src/game/track.rs", "crates/server/src/commands.rs", "crates/server/src/cmdparse.rs", "crates/server/src/game/cmd.rs"]),
-        ("m3_", &["crates/check/src/scenarios/m3.rs", "crates/worldgen/**"]),
+        ("m3_", &["crates/check/src/scenarios/m3.rs", "crates/worldgen/**", "crates/server/src/game/cmd.rs", "crates/server/src/commands.rs"]),
         ("m4_", &["crates/check/src/scenarios/m4.rs", "crates/game/**", "crates/server/src/game.rs", "crates/server/src/game/{inv,items,health,combat,env,explosion}.rs"]),
         ("m5_", &["crates/check/src/scenarios/m5.rs", "crates/game/**", "crates/server/src/game/{mob,ai,path,arrow,combat,explosion,spawn,health,track,items}.rs"]),
         ("m6_", &["crates/check/src/scenarios/m6.rs"]),
@@ -77,6 +77,7 @@ pub fn all() -> Vec<Entry> {
     }
     v.push(Entry { id: "fuzz_worldgen".into(), kind: HKind::Script, group: "Fuzz".into(), paths: ["crates/worldgen/**", "crates/data/**", "crates/nbt/**", "tools/parity.sh", "crates/check/src/driver.rs"].map(String::from).to_vec(), desc: "worldgen parity vs vanilla over N seeds x several sites (tools/parity.sh)".into() });
     v.push(Entry { id: "worldgen_nether".into(), kind: HKind::Script, group: "M8".into(), paths: ["crates/worldgen/**", "crates/data/**", "crates/nbt/**", "tools/parity.sh", "crates/check/src/driver.rs"].map(String::from).to_vec(), desc: "nether worldgen parity vs vanilla (seeds 12345, 42 x 5 sites; tools/parity.sh --nether)".into() });
+    v.push(Entry { id: "worldgen_structures".into(), kind: HKind::Script, group: "M3".into(), paths: ["crates/worldgen/**", "crates/data/**", "crates/nbt/**", "tools/structure-parity.sh", "tools/structure-world.sh", "crates/check/src/driver.rs", "crates/check/known-divergences.txt"].map(String::from).to_vec(), desc: "structure parity vs vanilla worlds (starts per type, jigsaw pieces, block-exact % in piece boxes; tools/structure-parity.sh)".into() });
     // the client oracle's block-meshing parity (crates/check/src/client): `basalt-check client-mesh`
     let mut client_paths: Vec<String> = crate::client::MESH_AFFECTED.iter().map(|s| s.to_string()).collect();
     client_paths.extend(["crates/check/src/client/**", "tools/oracle-mod/**", "crates/check/Cargo.toml", "crates/data/**", "crates/world/**", "Cargo.lock"].map(String::from));

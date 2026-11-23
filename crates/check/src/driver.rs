@@ -275,6 +275,17 @@ pub fn try_main() -> Option<i32> {
             let detail = if res.is_empty() { "parity script produced no RESULT line".into() } else { res.trim_start_matches("RESULT ").to_string() };
             if pass && a.opts.replay.is_none() { cache.store_pass(&key_of(e, &a), &detail); }
             rows.push(RunRow { id: e.id.clone(), kind: "script", result, secs: t.elapsed().as_secs_f64(), detail });
+        } else if e.id == "worldgen_structures" {
+            eprintln!("== structure parity (tools/structure-parity.sh)");
+            let o = Command::new("bash").arg("tools/structure-parity.sh").arg("--out").arg(&out).output();
+            let (txt, ok) = match o { Ok(o) => (String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr), true), Err(e) => (e.to_string(), false) };
+            for l in txt.lines().filter(|l| l.starts_with("PARITY") || l.starts_with("RESULT") || l.starts_with("note")) { println!("{l}"); }
+            let res = txt.lines().rev().find(|l| l.starts_with("RESULT fuzz=structures")).unwrap_or("").to_string();
+            let kv: std::collections::HashMap<&str, &str> = res.split_whitespace().skip(1).filter_map(|p| p.split_once('=')).collect();
+            let pass = ok && !res.is_empty() && kv.get("new") == Some(&"0") && kv.get("errors") == Some(&"0");
+            let detail = if res.is_empty() { "structure parity script produced no RESULT line".into() } else { res.trim_start_matches("RESULT ").to_string() };
+            if pass && a.opts.replay.is_none() { cache.store_pass(&key_of(e, &a), &detail); }
+            rows.push(RunRow { id: e.id.clone(), kind: "script", result: if pass { "pass" } else { "FAIL" }, secs: t.elapsed().as_secs_f64(), detail });
         } else if e.id == "client_mesh" {
             if let Some(why) = crate::client::oracle::unavailable(std::path::Path::new("vanilla/oracle")) {
                 rows.push(RunRow { id: e.id.clone(), kind: "script", result: "SKIP", secs: 0.0, detail: why });

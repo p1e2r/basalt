@@ -37,6 +37,7 @@ pub const IMPLEMENTED: &[&str] = &[
     "kick",
     "kill",
     "list",
+    "locate",
     "me",
     "msg",
     "op",

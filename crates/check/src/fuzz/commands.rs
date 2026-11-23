@@ -17,7 +17,7 @@ use std::time::Duration;
 pub static HARNESS: Harness = Harness { id: "commands", desc: "random valid/invalid command strings: outcome class + translation key", default_cases: 500, long_cases: 6000, gen, run, compare };
 
 /// Commands exercised (kept in sync with crates/server/src/commands.rs IMPLEMENTED by a unit test below).
-pub const COMMANDS: &[&str] = &["gamemode", "tp", "teleport", "give", "time", "say", "list", "save-all", "effect", "enchant", "setblock", "fill", "kill", "summon", "help", "weather", "clear"];
+pub const COMMANDS: &[&str] = &["gamemode", "tp", "teleport", "give", "time", "say", "list", "save-all", "effect", "enchant", "setblock", "fill", "kill", "summon", "help", "weather", "clear", "locate"];
 
 const SELECTORS_OK: &[&str] = &["@s", "@s", "@s", "@p", "@a[distance=..3]", "@e[type=minecraft:player,distance=..3]", "@s[gamemode=survival]", "@s[limit=1]"];
 const SELECTORS_BAD: &[&str] = &["@x", "@e[", "@e[type=]", "@e[type=foo]", "@e[limit=0]", "nobody_here", "@s[", "@", "@a[distance=abc]", "@e[distance=..-1]", "@s[gamemode=nope]", "@e[sort=xyz]"];
@@ -118,6 +118,13 @@ fn gen(r: &mut Rng, _i: usize) -> Value {
                 0 => format!("weather {}{}", r.pick(&["clear", "rain", "thunder"]), if r.chance(0.5) { format!(" {}", dur(r)) } else { String::new() }),
                 1 => r.pick(&["weather", "weather rain 10 extra"]).to_string(),
                 _ => format!("weather {} {}", r.pick(&["foo", "Rain", "rain"]), r.pick(&["-5", "abc", "1x", ""])),
+            },
+            // the fuzz arena is a flat world (no structures there, vanilla's is generated): only the
+            // world-independent error paths; positions are compared by m3_locate_structure
+            "locate" => match kind {
+                0 => format!("locate structure {}", r.pick(&["minecraft:not_a_structure", "foo", "minecraft:", "#minecraft:not_a_tag"])),
+                1 => r.pick(&["locate", "locate structure", "locate structure minecraft:village_plains extra"]).to_string(),
+                _ => format!("locate structure {}", r.pick(&["Minecraft:village", "village plains", "minecraft:village_plains["])),
             },
             "clear" => match kind {
                 0 => r.pick(&["clear", "clear @s", "clear @s stone", "clear @s diamond_sword", "clear @s diamond_sword 1", "clear @s stone 0"]).to_string(),
