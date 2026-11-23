@@ -53,6 +53,75 @@ impl Game {
         true
     }
 
+    /// Sheep eating grass (baby 1/50 per tick, adult 1/1000): 40-tick animation (entity event 10),
+    /// then the short grass it stands in goes, or the grass block under it becomes dirt; the sheep
+    /// regrows its wool and a baby grows 1200 ticks. Returns true while eating (it stands still).
+    pub(super) fn sheep_eat(&mut self, m: &mut Mob) -> bool {
+        if m.kind != MobKind::Sheep {
+            return false;
+        }
+        let feet = [
+            m.pos[0].floor() as i32,
+            m.pos[1].floor() as i32,
+            m.pos[2].floor() as i32,
+        ];
+        if m.eat_ticks > 0 {
+            m.eat_ticks -= 1;
+            if m.eat_ticks == 4 {
+                let here =
+                    basalt_data::BlockState(self.world.get_block(feet[0], feet[1], feet[2])).name();
+                let below =
+                    basalt_data::BlockState(self.world.get_block(feet[0], feet[1] - 1, feet[2]))
+                        .name();
+                let ate = if here == "short_grass" {
+                    self.set_block(feet[0], feet[1], feet[2], 0);
+                    true
+                } else if below == "grass_block" {
+                    self.set_block(
+                        feet[0],
+                        feet[1] - 1,
+                        feet[2],
+                        super::block_default("dirt").unwrap_or(0),
+                    );
+                    true
+                } else {
+                    false
+                };
+                if ate {
+                    if m.sheared {
+                        m.sheared = false;
+                        let (eid, col) = (m.eid, m.sheep_color);
+                        self.send_mob_data(eid, |w| {
+                            w.u8(18).varint(0).u8(col & 15);
+                        });
+                    }
+                    if m.baby {
+                        m.grow += 1200;
+                    }
+                }
+            }
+            return true;
+        }
+        if !m.on_ground {
+            return false;
+        }
+        let chance = if m.baby { 50 } else { 1000 };
+        if self.rng.gen_range(0..chance) != 0 {
+            return false;
+        }
+        let here = basalt_data::BlockState(self.world.get_block(feet[0], feet[1], feet[2])).name();
+        let below =
+            basalt_data::BlockState(self.world.get_block(feet[0], feet[1] - 1, feet[2])).name();
+        if here != "short_grass" && below != "grass_block" {
+            return false;
+        }
+        m.eat_ticks = 40;
+        let mut w = Writer::with_id(cb::ENTITY_EVENT);
+        w.i32(m.eid).u8(10);
+        self.send_to_viewers(m.eid, &w);
+        true
+    }
+
     /// Per tick for an animal: timers, growing up, and the breed goal. Returns the partner to walk
     /// to while in love (the caller makes it the movement goal).
     pub(super) fn breed_tick(&mut self, m: &mut Mob) -> Option<[f64; 3]> {

@@ -331,3 +331,21 @@ pub fn breeding(ctx: &mut Ctx) -> Result<()> {
     let _ = o;
     Ok(())
 }
+
+/// Sheep eat grass: a (baby) sheep on grass now and then plays the eating animation (entity
+/// event 10) and turns the grass block under it into dirt; a sheared sheep gets its wool back.
+pub fn sheep_eat_grass(ctx: &mut Ctx) -> Result<()> {
+    let (bot, o) = roofed(ctx, 8, 5)?;
+    fill(&bot, [o[0], ARENA_Y, o[2]], [o[0] + 7, ARENA_Y, o[2] + 7], "grass_block")?;
+    let t0 = Instant::now();
+    let (eid, _) = summon(&bot, "sheep", [o[0] as f64 + 4.5, Y as f64, o[2] as f64 + 4.5], "{Age:-24000,Sheared:1b}")?;
+    let ate = bot.wait_until(Duration::from_secs(25), |s| s.entity_events.iter().any(|ev| ev.0 >= t0 && ev.1 == eid && ev.2 == 10));
+    bot.wait_ticks(45);
+    let dirt = { let s = bot.st(); (0..8).flat_map(|x| (0..8).map(move |z| (x, z))).filter(|(x, z)| s.world.name(o[0] + x, ARENA_Y, o[2] + z) == "dirt").count() };
+    let wool_back = bot.st().entities.get(&eid).and_then(|e| e.meta.get(&18).cloned()).map(|m| format!("{m:?}")).unwrap_or_default();
+    ctx.note(format!("ate {ate}, dirt cells {dirt}, wool meta {wool_back}"));
+    ctx.check(ate, "baby sheep never ate grass in 25 s");
+    ctx.metric("ate_grass", ate as u8 as f64, 0.0);
+    ctx.metric("grass_to_dirt", (dirt >= 1) as u8 as f64, 0.0);
+    Ok(())
+}

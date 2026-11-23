@@ -60,6 +60,7 @@ pub static ALL: &[Spec] = &[
     spec!("M5", "m5_cow_loot", m5::cow_loot, Flat, Both, true, "cow killed by player: 1-3 beef, 0-2 leather"),
     spec!("M5", "m5_difficulty", m5::difficulty, Flat, Both, true, "/difficulty replies, change_difficulty, zombie damage per difficulty, peaceful refuses monsters"),
     spec!("M5", "m5_xp_command", m5::xp_command, Flat, Both, true, "/xp add|set|query points and levels: replies and set_experience totals"),
+    spec!("M5", "m5_sheep_eat_grass", m5::sheep_eat_grass, Flat, Both, true, "baby sheep eat grass: eating animation, grass turns to dirt"),
     spec!("M5", "m5_breeding", m5::breeding, Flat, Both, true, "feeding two cows wheat: love mode, baby cow, 1-7 xp"),
     spec!("M5", "m5_xp_orbs", m5::xp_orbs, Flat, Both, true, "player kills drop experience orbs (cow 1-3); collected by walking onto them"),
     spec!("M5", "m5_sheep_loot", m5::sheep_loot, Flat, Both, true, "red sheep drops 1 red wool; sheared sheep none"),

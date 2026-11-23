@@ -287,6 +287,8 @@ impl Game {
                 } else if let Some(s) = m.ai.panic_target { *goal = Some([s[0] as f64 + 0.5, s[1] as f64, s[2] as f64 + 0.5]); }
                 return;
             }
+            // sheep: stand still while eating grass
+            if self.sheep_eat(m) { return; }
             // breed: walk to the partner while in love
             if let Some(pp) = self.breed_tick(m) {
                 *look = Some([pp[0], pp[1] + 0.8, pp[2]]);

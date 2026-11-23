@@ -124,6 +124,8 @@ pub struct Mob {
     pub egg_timer: u32,
     /// breeding: love ticks left, ticks spent near the partner, cooldown, who fed it, baby growth
     pub love: u32, pub love_with: u32, pub breed_cooldown: u32, pub lover: Option<i32>, pub grow: i32,
+    /// sheep eating grass: ticks of the eating animation left
+    pub eat_ticks: u32,
     pub ambient_timer: i32,
     pub step_dist: f64,
     // what viewers last saw
@@ -140,7 +142,7 @@ pub fn angle(deg: f32) -> u8 { ((deg / 360.0 * 256.0).round() as i32 & 0xFF) as 
 impl Mob {
     pub fn new(eid: i32, kind: MobKind, pos: [f64; 3], yaw: f32) -> Mob {
         Mob { eid, uuid: Uuid::new_v4(), kind, pos, vel: [0.0; 3], yaw, pitch: 0.0, head_yaw: yaw, health: kind.stats().health, on_ground: false,
-            h_collision: false, in_water: false, baby: false, sheep_color: 0, sheared: false, no_ai: false, persistent: false, age: 0, hurt_cooldown: 0, love: 0, love_with: 0, breed_cooldown: 0, lover: None, grow: 0,
+            h_collision: false, in_water: false, baby: false, sheep_color: 0, sheared: false, no_ai: false, persistent: false, age: 0, hurt_cooldown: 0, love: 0, love_with: 0, breed_cooldown: 0, lover: None, grow: 0, eat_ticks: 0,
             fire_ticks: 0, fall_distance: 0.0, dead: None, last_player_hit: None, ai: Ai { swell_dir: -1, ..Default::default() },
             egg_timer: 6000, ambient_timer: 0, step_dist: 0.0, sent_pos: pos, sent_rot: (angle(yaw), 0, angle(yaw)), sent_fire: false, since_sync: 0 }
     }
