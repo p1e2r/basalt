@@ -1,19 +1,30 @@
 //! Text components → display strings, using the en_us language file from the client jar.
 use basalt_nbt::Tag;
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 
-static LANG: OnceLock<HashMap<String, String>> = OnceLock::new();
+/// (en_us from the jar, the selected language on top of it)
+type Tables = (HashMap<String, String>, HashMap<String, String>);
+static LANG: OnceLock<RwLock<Tables>> = OnceLock::new();
+
+fn table() -> &'static RwLock<Tables> { LANG.get_or_init(|| RwLock::new((HashMap::new(), HashMap::new()))) }
 
 /// Install the language table (called once after the jar is read).
 pub fn init(json: Option<&[u8]>) {
     let map = json.and_then(|j| serde_json::from_slice::<HashMap<String, String>>(j).ok()).unwrap_or_default();
-    let _ = LANG.set(map);
+    table().write().unwrap().0 = map;
+}
+
+/// Switch to another language (its json from the launcher asset store); None = back to en_us.
+pub fn set_language(json: Option<&[u8]>) {
+    let map = json.and_then(|j| serde_json::from_slice::<HashMap<String, String>>(j).ok()).unwrap_or_default();
+    table().write().unwrap().1 = map;
 }
 
 /// Translate a key with positional arguments (`%s`, `%1$s`, `%%`).
 pub fn tr(key: &str, args: &[String]) -> String {
-    let fmt = LANG.get().and_then(|m| m.get(key)).map(|s| s.as_str());
+    let t = table().read().unwrap();
+    let fmt = t.1.get(key).or_else(|| t.0.get(key)).map(|s| s.as_str());
     let Some(fmt) = fmt else {
         return if args.is_empty() { key.to_string() } else { format!("{key} {}", args.join(" ")) };
     };

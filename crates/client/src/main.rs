@@ -14,10 +14,14 @@ mod menu;
 mod mesh;
 mod meshdump;
 mod net;
+mod options;
+mod particles;
 mod player;
 mod render;
 mod scenario;
+mod script;
 mod sound;
+mod status;
 mod suggest;
 mod ui;
 mod world;
@@ -50,13 +54,14 @@ pub struct Args {
     time: Option<i64>, fov: Option<f32>, render_distance: Option<u32>, gui_scale: Option<u32>, no_gui: bool, options: Option<String>,
     asset_grid: Option<String>, grid_items: bool, allowlist: String, bench: Option<String>, seconds: f32, bench_mode: String,
     mesh_dump: Option<String>, mesh_out: String,
+    script: Option<String>, script_log: Option<String>,
 }
 
 fn parse_args() -> Args {
     let mut a = Args { data: "data".into(), addr: "127.0.0.1:25566".into(), addr_given: false, name: "Basalt".into(), jar: std::env::var("BASALT_JAR").unwrap_or_else(|_| "vanilla/client.jar".into()),
         screenshot: None, wait: 8.0, size: (1280, 720), pos: None, look: None, cmds: Vec::new(), walk: 0.0, chat: Vec::new(), click: None, clicks: Vec::new(), hold: 1.0, later: Vec::new(), attack: 0, attack_every: 0.7,
         scenario: None, vanilla: None, assets: None, asset_index: None, auto_respawn: false,
-        time: None, fov: None, render_distance: None, gui_scale: None, no_gui: false, options: None, asset_grid: None, grid_items: false, allowlist: "tools/asset-allowlist.txt".into(), mesh_dump: None, mesh_out: "target/mesh-dump".into(),
+        time: None, fov: None, render_distance: None, gui_scale: None, no_gui: false, options: None, asset_grid: None, grid_items: false, allowlist: "tools/asset-allowlist.txt".into(), mesh_dump: None, mesh_out: "target/mesh-dump".into(), script: None, script_log: None,
         bench: None, seconds: 20.0, bench_mode: "rotate".into() };
     let mut it = std::env::args().skip(1);
     let triple = |s: String| -> Option<[f64; 3]> { let v: Vec<f64> = s.split(',').filter_map(|p| p.parse().ok()).collect(); (v.len() == 3).then(|| [v[0], v[1], v[2]]) };
@@ -84,6 +89,8 @@ fn parse_args() -> Args {
             "--walk" => a.walk = v().parse().unwrap_or(0.0),
             "--look" => { let s = v(); if let Some((y, p)) = s.split_once(',') { a.look = Some((y.parse().unwrap_or(0.0), p.parse().unwrap_or(0.0))); } }
             "--scenario" => a.scenario = Some(v()),
+            // scripted input (test hook, see script.rs): JSON-lines ops as in tools/oracle-mod/SCHEMA.md; serverbound packets go to --script-log
+            "--script" => a.script = Some(v()), "--script-log" => a.script_log = Some(v()),
             "--vanilla" => a.vanilla = Some(v()),
             "--auto-respawn" => a.auto_respawn = true,
             "--time" => a.time = v().parse().ok(),
@@ -220,6 +227,20 @@ pub struct Game {
     /// other players' block_destruction progress: eid → (block, stage)
     destroy: HashMap<i32, ([i32; 3], i8)>,
     fp_swing: i32,
+    /// sprint state last reported with player_command
+    sprinting: bool,
+    pub particles: particles::Particles,
+    /// first-person equip progress (now, previous tick) and the (slot, item) it was raised for
+    pub equip: (f32, f32), equip_for: i32,
+    /// item name shown above the hotbar after selecting a different item, and its remaining ticks
+    pub held_name: (String, i32),
+    /// title screen splash line and when the menus started (panorama spin, splash pulse)
+    pub splash: String, pub menu_t0: Instant,
+    /// server list pings by address, their result channel, and favicon slots by address
+    pub pings: HashMap<String, status::PingState>,
+    ping_chan: (mpsc::Sender<status::PingResult>, mpsc::Receiver<status::PingResult>),
+    pub icon_slots: HashMap<String, usize>,
+    pub ping_rounds: u32,
     step_dist: f64,
     last_place: Instant,
     last_space: Option<Instant>,
@@ -249,7 +270,7 @@ pub struct Game {
     frames: (u32, Instant, f32),
 }
 
-pub(crate) fn send(out: &tokio::sync::mpsc::UnboundedSender<Vec<u8>>, w: Writer) { let _ = out.send(w.buf); }
+pub(crate) fn send(out: &tokio::sync::mpsc::UnboundedSender<Vec<u8>>, w: Writer) { script::log_packet(&w.buf); let _ = out.send(w.buf); }
 
 pub struct GameOpts { pub name: String, pub addr: Option<String>, pub auto_respawn: bool, pub sounds: sound::Sounds, pub cfg: menu::Config }
 
@@ -268,11 +289,22 @@ impl Game {
             dirty: HashMap::new(), in_flight: HashSet::new(), events: rx, out: otx, entities: HashMap::new(), player_names: HashMap::new(), my_eid: 0, name: o.name,
             chat: Vec::new(), chat_input: None, cmd_tree: None, sug: Sug::default(), hp: 20.0, food: 20, hotbar: Default::default(), held: 0, inventory: vec![ItemStack::default(); 46], inv_state: 0, carried: ItemStack::default(), day_time: 6000,
             spawned: false, loaded_sent: false, connected: false, keys: HashSet::new(), mouse: [false; 2], mouse_pos: (0.0, 0.0), slider_drag: None, last_tick: Instant::now(),
-            last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, step_dist: 0.0,
+            last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, sprinting: false, particles: Default::default(), equip: (1.0, 1.0), equip_for: -1, held_name: (String::new(), 0), splash: String::new(), menu_t0: Instant::now(), pings: HashMap::new(), ping_chan: mpsc::channel(), icon_slots: HashMap::new(), ping_rounds: 0, step_dist: 0.0,
             last_place: Instant::now(), last_space: None, debug: false, disconnected: None, death_msg: None, respawn_at: None, auto_respawn: o.auto_respawn,
             screen: Some(Screen::Title), cfg: o.cfg, sounds, last_addr: String::new(), quit: false, fullscreen_changed: false, hide_entities: false, hide_cracks: false, hide_gui: false, hide_hand: false, fixed_time: None, last_chunk_at: Instant::now(), stats: Stats::default(), clicks_sent: 0, ticks: 0,
             frames: (0, Instant::now(), 0.0),
         };
+        // title panorama (launcher asset store; the jar only has a placeholder) and a random splash
+        let faces: Vec<assets::Image> = (0..6).filter_map(|i| g.sounds.read_object(&format!("minecraft/textures/gui/title/background/panorama_{i}.png")).and_then(|b| assets::decode_png(&b).ok())).collect();
+        if faces.len() == 6 { g.gpu.set_panorama(&faces.iter().map(|f| (f.w, f.h, f.rgba.as_slice())).collect::<Vec<_>>()); }
+        else { log::warn!("title panorama not in the launcher asset store ({} of 6 faces); menus use a plain dark backdrop", faces.len()); }
+        if !g.assets.splashes.is_empty() {
+            let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos() as usize).unwrap_or(0);
+            g.splash = g.assets.splashes[n % g.assets.splashes.len()].clone();
+        }
+        if g.cfg.language != "en_us" && !g.cfg.language.is_empty() { let l = g.cfg.language.clone(); g.set_language(&l); }
+        for (k, v) in g.cfg.extra.clone() { if let Some(cat) = k.strip_prefix("vol.") { g.sounds.set_category(cat, v); } }
+        if g.cfg.extra.get("hide_splash").copied().unwrap_or(0.0) > 0.5 { g.splash.clear(); }
         if let Some(a) = o.addr { g.connect(&a); }
         Ok(g)
     }
@@ -414,8 +446,9 @@ impl Game {
                 let ps = kind.player_start();
                 for i in 0..36 { if ps + i < slots.len() { slots[ps + i] = self.inventory[9 + i].clone(); } }
                 self.chat_input = None; self.mouse = [false; 2];
-                self.screen = Some(Screen::Container(container::Open { window, kind, title, slots, state: 0, drag: None, last_click: None, hover: None }));
+                self.screen = Some(Screen::Container(container::Open { window, kind, title, slots, state: 0, drag: None, last_click: None, hover: None, props: [0; 4] }));
             }
+            Event::ContainerData { window, id, value } => { if let Some(Screen::Container(c)) = &mut self.screen { if c.window == window && (0..4).contains(&id) { c.props[id as usize] = value; } } }
             Event::CloseScreen(w) => { if self.open_container().map(|c| c.window == w).unwrap_or(false) { self.screen = None; self.carried = ItemStack::default(); } }
             Event::AddEntity { id, uuid, kind, pos, vel, yaw, pitch, head_yaw } => { self.entities.insert(id, entity::Entity::new(id, uuid, kind, pos, vel, yaw, pitch, head_yaw)); }
             Event::MoveEntity { id, delta, rot, on_ground } => { if let Some(e) = self.entities.get_mut(&id) { let p = [e.server_pos[0] + delta[0], e.server_pos[1] + delta[1], e.server_pos[2] + delta[2]]; e.move_to(p, rot); e.on_ground = on_ground; } }
@@ -437,7 +470,11 @@ impl Game {
                 self.sounds.play(&event, p, volume, pitch);
             }
             Event::LevelEvent { event, pos, data } => {
-                if event == 2001 { self.block_sound(data as u16, "break", [pos[0] as f64 + 0.5, pos[1] as f64 + 0.5, pos[2] as f64 + 0.5]); }
+                if event == 2001 {
+                    self.block_sound(data as u16, "break", [pos[0] as f64 + 0.5, pos[1] as f64 + 0.5, pos[2] as f64 + 0.5]);
+                    let tint = self.particle_tint(data as u16, pos);
+                    self.particles.block_break(&self.assets, data as u16, pos, tint);
+                }
             }
             Event::PlayerName { uuid, name } => { self.player_names.insert(uuid, name); }
             Event::Commands(b) => match suggest::Tree::parse(&b) { Ok(t) => self.cmd_tree = Some(t), Err(e) => log::warn!("commands packet: {e:#}") },
@@ -481,6 +518,21 @@ impl Game {
     }
 
     fn pump(&mut self) {
+        while let Ok((addr, r)) = self.ping_chan.1.try_recv() {
+            let st = match r {
+                Ok(mut st) => {
+                    if let Some(icon) = st.icon.take().filter(|i| i.w == 64 && i.h == 64) {
+                        let n = self.icon_slots.len();
+                        let slot = *self.icon_slots.entry(addr.clone()).or_insert(n);
+                        self.gpu.set_icon(slot, &icon.rgba);
+                        st.icon = Some(icon);
+                    }
+                    status::PingState::Done(st)
+                }
+                Err(e) => status::PingState::Failed(format!("{e:#}")),
+            };
+            self.pings.insert(addr, st);
+        }
         let start = Instant::now();
         while let Ok(ev) = self.events.try_recv() { self.handle(ev); if start.elapsed() > Duration::from_millis(30) { break; } }
         while let Ok((k, m, dt)) = self.mesher.done.try_recv() {
@@ -552,6 +604,17 @@ impl Game {
         self.ticks += 1;
         for e in self.entities.values_mut() { e.tick(); }
         if self.fp_swing >= 0 { self.fp_swing += 1; if self.fp_swing >= 6 { self.fp_swing = -1; } }
+        if !self.particles.is_empty() { self.particles.tick(&self.assets, &self.world); }
+        // switching to a different item lowers the hand, which then rises over a few ticks
+        let h = &self.hotbar[self.held as usize];
+        let now = if h.count > 0 { h.item } else { -1 };
+        if now != self.equip_for {
+            if self.ticks > 0 { self.equip.0 = 0.0; }
+            self.equip_for = now;
+            self.held_name = if now >= 0 { (crate::lang::item_name(now), 40) } else { (String::new(), 0) };
+        }
+        self.equip.1 = self.equip.0; self.equip.0 = (self.equip.0 + 0.4).min(1.0);
+        if self.held_name.1 > 0 { self.held_name.1 -= 1; }
         if self.respawn_at.map(|t| Instant::now() >= t).unwrap_or(false) { self.respawn_at = None; self.respawn(); }
         if !self.spawned || matches!(self.screen, Some(Screen::Death { .. })) { return; }
         if !self.loaded_sent && !self.world.chunks.is_empty() {
@@ -561,6 +624,12 @@ impl Game {
         let flags = (inp.forward > 0.0) as u8 | ((inp.forward < 0.0) as u8) << 1 | ((inp.strafe > 0.0) as u8) << 2 | ((inp.strafe < 0.0) as u8) << 3
             | (inp.jump as u8) << 4 | (inp.sneak as u8) << 5 | (inp.sprint as u8) << 6;
         if flags != self.last_input_flags { let mut w = Writer::with_id(sb::PLAYER_INPUT); w.u8(flags); send(&self.out, w); self.last_input_flags = flags; }
+        // sprinting also sends player_command 1 (start) / 2 (stop), like the vanilla client (oracle client-input, 2026-11-23)
+        let sprinting = inp.sprint && inp.forward > 0.0 && !inp.sneak && !self.player.flying;
+        if sprinting != self.sprinting {
+            self.sprinting = sprinting;
+            let mut w = Writer::with_id(sb::PLAYER_COMMAND); w.varint(self.my_eid).varint(if sprinting { 1 } else { 2 }).varint(0); send(&self.out, w);
+        }
         let before = self.player.pos;
         self.player.tick(&self.assets, &self.world, inp);
         // footsteps
@@ -652,7 +721,9 @@ impl Game {
             d.ticks += 1;
             let (b, f, ticks, total) = (d.block, d.face, d.ticks, d.total);
             if ticks % 4 == 0 { let st = self.world.get(b[0], b[1], b[2]); self.block_sound(st, "hit", [b[0] as f64 + 0.5, b[1] as f64 + 0.5, b[2] as f64 + 0.5]); }
-            if self.fp_swing < 0 || self.fp_swing >= 3 { self.swing_arm(); }
+            // vanilla sends a swing every tick while digging; the animation only restarts once half done
+            if self.fp_swing < 0 || self.fp_swing >= 3 { self.swing_arm(); } else { let mut w = Writer::with_id(sb::SWING); w.varint(0); send(&self.out, w); }
+            { let st = self.world.get(b[0], b[1], b[2]); let tint = self.particle_tint(st, b); self.particles.block_hit(&self.assets, st, b, f, tint); }
             if ticks >= total {
                 self.player_action(2, b, f);
                 self.break_local(b);
@@ -677,9 +748,25 @@ impl Game {
         }
     }
 
+    /// Colour block particles take: the block's biome tint, except grass blocks (their chips are dirt).
+    fn particle_tint(&self, st: u16, b: [i32; 3]) -> [u8; 3] {
+        use assets::Tint;
+        let biomes = self.biomes.lock().unwrap().clone();
+        let bi = biomes.get(self.world.biome(b[0], b[1], b[2]) as usize);
+        let c = match self.assets.info(st).tint {
+            Tint::None => return [255; 3],
+            _ if basalt_data::BlockState(st as u32).name() == "grass_block" => return [255; 3],
+            Tint::Grass => bi.map(|b| b.grass).unwrap_or(0x79C05A), Tint::Foliage => bi.map(|b| b.foliage).unwrap_or(0x59AE30),
+            Tint::Water => bi.map(|b| b.water).unwrap_or(0x3F76E4), Tint::Fixed(c) => c, Tint::DryFoliage => bi.map(|b| b.dry_foliage).unwrap_or(0x7B5334),
+        };
+        [(c >> 16) as u8, (c >> 8) as u8, c as u8]
+    }
+
     fn break_local(&mut self, b: [i32; 3]) {
         let st = self.world.get(b[0], b[1], b[2]);
         self.block_sound(st, "break", [b[0] as f64 + 0.5, b[1] as f64 + 0.5, b[2] as f64 + 0.5]);
+        let tint = self.particle_tint(st, b);
+        self.particles.block_break(&self.assets, st, b, tint);
         self.world.set(b[0], b[1], b[2], 0); self.mark_block(b[0], b[1], b[2]);
     }
 
@@ -844,7 +931,8 @@ impl Game {
         self.player.pitch = (self.player.pitch + dy as f32 * f).clamp(-90.0, 90.0);
     }
     pub fn scroll(&mut self, dy: f32) {
-        if self.screen.is_some() || dy.abs() < 0.5 { return; }
+        if self.screen.is_some() { self.menu_scroll(dy); return; }
+        if dy.abs() < 0.5 { return; }
         let s = (self.held as i32 - dy.signum() as i32).rem_euclid(9) as u8; self.set_held(s);
     }
 
@@ -941,6 +1029,13 @@ impl Game {
                 let (x, y) = (hx + (3.0 + i as f32 * 20.0) * s, hy + 3.0 * s);
                 ui::item_icon(&self.assets, items, it.item, x, y, s);
                 ui::item_decorations(a, deco, it, self.max_damage(it.item), x, y, s);
+            }
+            // name of a newly selected item above the hotbar: 2 s, fading over the last half second
+            if self.held_name.1 > 0 && !self.held_name.0.is_empty() && self.screen.is_none() {
+                let alpha = (self.held_name.1 * 256 / 10).min(255) as u8;
+                let ty = h - (if self.player.gamemode == 1 || self.player.gamemode == 3 { 45.0 } else { 59.0 }) * s;
+                let tw = a.text_width(&self.held_name.0, s);
+                a.text(deco, &self.held_name.0, ((w - tw) / 2.0).floor(), ty, s, [255, 255, 255, alpha]);
             }
             // hearts + food (survival / adventure)
             if self.player.gamemode == 0 || self.player.gamemode == 2 {
@@ -1042,7 +1137,7 @@ impl Game {
             params: [fog_start, fog_end, daylight, day_time as f32], screen: [w, h, underwater as u8 as f32, 0.0], sun: [sun[0], sun[1], sun[2], 0.0],
         };
         let cam = Vec3::new(eye[0] as f32, eye[1] as f32, eye[2] as f32);
-        let mut fd = FrameData { u, cam, vp, render_dist, extra: MeshData::default(), skinned: MeshData::default(), items3d: MeshData::default(), overlay: MeshData::default(), layers: Vec::new() };
+        let mut fd = FrameData { u, cam, vp, render_dist, extra: MeshData::default(), skinned: MeshData::default(), items3d: MeshData::default(), overlay: MeshData::default(), hand_skin: MeshData::default(), hand_items: MeshData::default(), layers: Vec::new(), backdrop: self.backdrop(), blur: self.cfg.extra.get("menu_blur").copied().unwrap_or(5.0) };
         let in_world = self.connected && self.spawned;
         if in_world {
             // block outline
@@ -1086,17 +1181,23 @@ impl Game {
                     }
                 }
             }
-            // first-person arm
-            if self.screen.is_none() && !self.hide_gui && self.player.gamemode != 3 && self.hotbar[self.held as usize].count == 0 && !self.hide_hand && std::env::var("BASALT_NOHAND").is_err() {
+            self.particles.build(&self.world, self.player.yaw, self.player.pitch, a, &mut fd.items3d);
+            // first-person arm, or the held item in its place
+            if self.screen.is_none() && !self.hide_gui && self.player.gamemode != 3 && !self.hide_hand && std::env::var("BASALT_NOHAND").is_err() {
                 let sw = if self.fp_swing >= 0 { (self.fp_swing as f32 + a) / 6.0 } else { 0.0 };
                 let (sl, bl) = self.world.light(eye[0].floor() as i32, eye[1].floor() as i32, eye[2].floor() as i32);
-                entity::first_person_arm(&self.entity_atlas, &net::offline_uuid(&self.name), cam, self.player.yaw, self.player.pitch, sw, 0.0, [sl * 17, bl * 17], &mut fd.skinned);
+                let held = &self.hotbar[self.held as usize];
+                if held.count == 0 {
+                    entity::first_person_arm(&self.entity_atlas, &net::offline_uuid(&self.name), cam, self.player.yaw, self.player.pitch, sw, 0.0, [sl * 17, bl * 17], &mut fd.hand_skin);
+                } else {
+                    let equip = (self.equip.1 + (self.equip.0 - self.equip.1) * a).clamp(0.0, 1.0);
+                    entity::first_person_item(&self.assets, held.item, cam, self.player.yaw, self.player.pitch, sw, equip, [sl * 17, bl * 17], &mut fd.hand_items);
+                }
             }
         }
         // 2D: HUD, then the open screen
         let (mut ui, mut items, mut deco) = (MeshData::default(), MeshData::default(), MeshData::default());
         if !self.hide_gui { self.build_hud(&mut ui, &mut items, &mut deco, &vp, alpha as f32); }
-        // held item in the corner of the view (flat, simple)
         fd.layers.push((ui, Tex::Ui)); fd.layers.push((items, Tex::Blocks)); fd.layers.push((deco, Tex::Ui));
         match &self.screen {
             Some(Screen::Container(c)) => {
@@ -1104,10 +1205,26 @@ impl Game {
                 self.draw_container(c, &mut bg, &mut ents, &mut it, &mut top, &mut top_items);
                 fd.layers.push((bg, Tex::Ui)); fd.layers.push((ents, Tex::Entities)); fd.layers.push((it, Tex::Blocks)); fd.layers.push((top, Tex::Ui)); fd.layers.push((top_items, Tex::Blocks));
             }
-            Some(_) => { let mut m = MeshData::default(); self.draw_menu(&mut m); fd.layers.push((m, Tex::Ui)); }
+            Some(_) => {
+                let (mut m, mut icons) = (MeshData::default(), MeshData::default());
+                self.draw_menu(&mut m); self.draw_menu_icons(&mut icons);
+                fd.layers.push((m, Tex::Ui)); fd.layers.push((icons, Tex::Icons));
+            }
             None => {}
         }
         fd
+    }
+
+    pub(crate) fn ping_chan_tx(&self) -> mpsc::Sender<status::PingResult> { self.ping_chan.0.clone() }
+
+    /// Behind menus: the blurred world in game, the blurred spinning panorama elsewhere.
+    fn backdrop(&self) -> render::Backdrop {
+        match &self.screen {
+            None | Some(Screen::Container(_)) | Some(Screen::Death { .. }) => render::Backdrop::None,
+            Some(_) if self.connected && self.spawned => render::Backdrop::Blur,
+            // spin rate and tilt by eye against a vanilla 26.2 recording
+            Some(_) => render::Backdrop::Panorama { yaw: self.menu_t0.elapsed().as_secs_f32() * 1.2, pitch: 10.0 },
+        }
     }
 
     fn render(&mut self, alpha: f64, screenshot: Option<&str>) -> Result<()> {
@@ -1136,10 +1253,10 @@ impl Game {
     }
 }
 
-pub struct FrameData { u: Uniforms, cam: Vec3, vp: Mat4, render_dist: f32, extra: MeshData, skinned: MeshData, items3d: MeshData, overlay: MeshData, layers: Vec<(MeshData, Tex)> }
+pub struct FrameData { u: Uniforms, cam: Vec3, vp: Mat4, render_dist: f32, extra: MeshData, skinned: MeshData, items3d: MeshData, overlay: MeshData, hand_skin: MeshData, hand_items: MeshData, layers: Vec<(MeshData, Tex)>, backdrop: render::Backdrop, blur: f32 }
 impl FrameData {
     fn as_frame(&self, min_y: f32) -> Frame<'_> {
-        Frame { uniforms: self.u, cam: self.cam, vp: self.vp, render_dist: self.render_dist + 32.0, min_y, extra: &self.extra, skinned: &self.skinned, items3d: &self.items3d, overlay: &self.overlay, ui_layers: &self.layers }
+        Frame { uniforms: self.u, cam: self.cam, vp: self.vp, render_dist: self.render_dist + 32.0, min_y, extra: &self.extra, skinned: &self.skinned, items3d: &self.items3d, overlay: &self.overlay, hand_skin: &self.hand_skin, hand_items: &self.hand_items, ui_layers: &self.layers, hud_layers: 3, backdrop: self.backdrop, blur: self.blur }
     }
 }
 
@@ -1340,6 +1457,7 @@ fn main() -> Result<()> {
     if let Some(req) = args.mesh_dump.clone() { return meshdump::run(&assets, &req, &args.mesh_out); }
     if let Some(out) = args.asset_grid.clone() { let ok = assetgrid::run(&args, assets, &out)?; std::process::exit(if ok { 0 } else { 1 }); }
     if let Some(out) = args.bench.clone() { return bench::run(&args, assets, &out); }
+    if let Some(file) = args.script.clone() { return script::run(&args, assets, &file); }
     if let Some(name) = args.scenario.clone() { let ok = scenario::run(&args, assets, &name)?; std::process::exit(if ok { 0 } else { 1 }); }
     if let Some(out) = args.screenshot.clone() { return run_screenshot(&args, assets, &out); }
     let el = EventLoop::new()?;

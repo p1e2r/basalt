@@ -24,13 +24,26 @@ impl Game {
                 let effects: serde_json::Map<_, _> = p.effects.iter().map(|(id, (a, t))| (reg::MOB_EFFECT.get(*id as usize).copied().unwrap_or("?").to_string(), json!([a, t]))).collect();
                 let j = json!({ "name": p.name, "health": p.health, "food": p.food, "saturation": p.saturation, "exhaustion": p.exhaustion,
                     "air": p.air, "ticks_frozen": p.ticks_frozen, "fire_ticks": p.fire_ticks, "effects": effects, "inventory": inv,
-                    "pos": p.pos, "gamemode": p.gamemode, "dead": p.dead, "on_ground": p.on_ground });
+                    "pos": p.pos, "gamemode": p.gamemode, "dead": p.dead, "on_ground": p.on_ground, "xp_total": p.xp });
                 reply(self, format!("BASALT_STATE {j}"));
             }
             "basalt:block" => {
                 let c: Option<Vec<i32>> = args.iter().skip(1).take(3).map(|a| a.parse().ok()).collect();
                 match c { Some(c) if c.len() == 3 => { let s = BlockState(self.world.get_block(c[0], c[1], c[2])).to_string(); reply(self, format!("BASALT_BLOCK {s}")); }
                     _ => reply(self, "BASALT_ERROR usage: /basalt:block x y z".into()) }
+            }
+            "basalt:container" => {
+                let c: Option<Vec<i32>> = args.iter().skip(1).take(3).map(|a| a.parse().ok()).collect();
+                let Some(c) = c.filter(|c| c.len() == 3) else { reply(self, "BASALT_ERROR usage: /basalt:container x y z".into()); return };
+                let pos = [c[0], c[1], c[2]];
+                match self.bes.get(&pos) {
+                    Some(b) => {
+                        let items: serde_json::Map<_, _> = b.items.iter().enumerate().filter(|(_, s)| s.count > 0).map(|(i, s)| (i.to_string(), json!([reg::ITEM.get(s.item as usize).copied().unwrap_or("?"), s.count, s.damage]))).collect();
+                        let j = json!({ "kind": b.kind.name(), "items": items, "lit": b.lit, "lit_total": b.lit_total, "cook": b.cook, "cook_total": b.cook_total, "used": b.used, "viewers": b.viewers.len() });
+                        reply(self, format!("BASALT_CONTAINER {j}"));
+                    }
+                    None => reply(self, "BASALT_CONTAINER null".into()),
+                }
             }
             "basalt:items" => {
                 let r: f64 = args.get(1).and_then(|a| a.parse().ok()).unwrap_or(16.0);

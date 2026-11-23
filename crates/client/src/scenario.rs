@@ -14,7 +14,7 @@ use winit::keyboard::KeyCode;
 const W: u32 = 854;
 const H: u32 = 480;
 
-pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus"];
+pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list"];
 
 enum Outcome { Pass(String), Skip(String) }
 
@@ -40,7 +40,7 @@ pub fn run(args: &Args, assets: Arc<Assets>, name: &str) -> Result<bool> {
         let t = Instant::now();
         let r = match s {
             "edge_chunks" => edge_chunks(&ctx), "inventory" => inventory(&ctx), "crafting_table" => crafting_table(&ctx), "death" => death(&ctx),
-            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx),
+            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx),
             other => Err(anyhow!("unknown scenario {other} (known: {})", ALL.join(", "))),
         };
         let secs = t.elapsed().as_secs_f32();
@@ -677,7 +677,7 @@ fn menus(c: &Ctx) -> Result<Outcome> {
     if !matches!(g.screen, Some(Screen::Title)) { bail!("not on the title screen"); }
     let img = capture(&mut g)?; save(&g, &img, "title");
     // logo drawn: bright pixels near the top centre
-    let logo = (0..W as i32).step_by(3).filter(|&x| { let p = px(&img, x, 60); p[0] as u32 + p[1] as u32 + p[2] as u32 > 300 }).count();
+    let logo = (0..W as i32).step_by(3).filter(|&x| { let p = px(&img, x, 100); p[0] as u32 + p[1] as u32 + p[2] as u32 > 300 }).count();
     if logo < 10 { bail!("title logo not drawn"); }
     press_widget(&mut g, "multiplayer")?;
     if !matches!(g.screen, Some(Screen::Multiplayer { .. })) { bail!("Multiplayer button did not open the server list"); }
@@ -722,4 +722,264 @@ fn menus(c: &Ctx) -> Result<Outcome> {
     click_at(&mut g, x, y, 0)?; click_at(&mut g, x, y, 0)?;
     if !wait_until(&mut g, 20.0, |g| g.spawned && g.screen.is_none())? { bail!("did not join from the server list"); }
     Ok(Outcome::Pass(format!("title→multiplayer→direct→join, pause→options fov {new_fov}→saved, disconnect→title, add server→join; ui clicks {clicks}+")))
+}
+
+/// Right-click the block at `b` (placed in front of the player) and wait for the screen kind.
+fn open_block(g: &mut Game, b: [i32; 3], kind: Kind) -> Result<()> {
+    look_at(g, [b[0] as f64 + 0.5, b[1] as f64 + 0.5, b[2] as f64 + 0.5]);
+    step(g)?;
+    g.mouse_button(1, true); step(g)?; g.mouse_button(1, false);
+    if !wait_until(g, 4.0, |g| container(g).map(|c| c.kind == kind && c.slots.len() == kind.slot_count()).unwrap_or(false))? { bail!("screen {kind:?} did not open"); }
+    wait(g, 0.3)
+}
+
+/// Chest window: open_screen (3 rows), contents, left/right/shift clicks with the real container_click format;
+/// the result is checked against the server by closing and reopening.
+fn chest(c: &Ctx) -> Result<Outcome> {
+    let mut g = c.game("chest")?;
+    join(&mut g)?;
+    cmd(&mut g, "gamemode survival");
+    tp(&mut g, [320.5, -60.0, 0.5], 0.0, 0.0)?;
+    cmd(&mut g, "setblock 320 -60 2 chest[facing=north]");
+    cmd(&mut g, "item replace block 320 -60 2 container.0 with diamond 5");
+    cmd(&mut g, "item replace block 320 -60 2 container.1 with iron_ore 10");
+    cmd(&mut g, "give @s cobblestone 7");
+    let (dia, iron, cobble) = (item_id("diamond"), item_id("iron_ore"), item_id("cobblestone"));
+    if !wait_until(&mut g, 5.0, |g| count_item(&g.inventory, cobble) == 7 && basalt_data::BlockState(g.world.get(320, -60, 2) as u32).name() == "chest")? { bail!("setup failed"); }
+    wait(&mut g, 0.3)?;
+    let kind = Kind::Generic(3);
+    open_block(&mut g, [320, -60, 2], kind)?;
+    let img = capture(&mut g)?; save(&g, &img, "chest");
+    {
+        let cs = &container(&g).unwrap().slots;
+        if cs[0].item != dia || cs[0].count != 5 || cs[1].item != iron || cs[1].count != 10 { bail!("chest contents on open: slot0 {:?} slot1 {:?}", cs[0], cs[1]); }
+        if count_item(&cs[27..], cobble) != 7 { bail!("inventory part has {} cobblestone", count_item(&cs[27..], cobble)); }
+        if container(&g).unwrap().title != crate::lang::tr("container.chest", &[]) { bail!("title {:?}", container(&g).unwrap().title); }
+    }
+    // pick the diamonds up and put them in slot 3
+    let p = slot_center(&g, kind, 0); click_at(&mut g, p.0, p.1, 0)?;
+    let p = slot_center(&g, kind, 3); click_at(&mut g, p.0, p.1, 0)?;
+    // shift-click the iron ore: moves into the inventory
+    g.key(KeyCode::ShiftLeft, true, None);
+    let p = slot_center(&g, kind, 1); click_at(&mut g, p.0, p.1, 0)?;
+    g.key(KeyCode::ShiftLeft, false, None);
+    // right-click takes half of the diamonds, a second right-click places them one by one
+    let p = slot_center(&g, kind, 3); click_at(&mut g, p.0, p.1, 1)?;
+    let p = slot_center(&g, kind, 5); click_at(&mut g, p.0, p.1, 0)?;
+    if !wait_until(&mut g, 3.0, |g| container(g).map(|c| c.slots[3].count == 2 && c.slots[5].count == 3 && c.slots[0].count == 0 && c.slots[1].count == 0 && count_item(&c.slots[27..], iron) == 10).unwrap_or(false))? {
+        let cs = &container(&g).unwrap().slots;
+        bail!("after clicks: slot3 {:?} slot5 {:?} slot0 {:?} slot1 {:?} iron in inventory {}", cs[3], cs[5], cs[0], cs[1], count_item(&cs[27..], iron));
+    }
+    tap(&mut g, KeyCode::Escape, None)?;
+    if g.screen.is_some() { bail!("Esc did not close the chest"); }
+    wait(&mut g, 0.5)?;
+    // reopen: the server must have the same contents
+    open_block(&mut g, [320, -60, 2], kind)?;
+    let cs = container(&g).unwrap().slots.clone();
+    if cs[3].item != dia || cs[3].count != 2 || cs[5].item != dia || cs[5].count != 3 || cs[0].count != 0 || cs[1].count != 0 { bail!("server contents after reopening: slot3 {:?} slot5 {:?}", cs[3], cs[5]); }
+    if count_item(&cs[27..], iron) != 10 || count_item(&cs[27..], cobble) != 7 { bail!("inventory after reopening: iron {} cobble {}", count_item(&cs[27..], iron), count_item(&cs[27..], cobble)); }
+    tap(&mut g, KeyCode::Escape, None)?;
+    Ok(Outcome::Pass("chest screen (3 rows): contents from the server, pickup/place/half/shift clicks, state identical after reopening".into()))
+}
+
+/// Furnace window: slots + the flame and arrow progress sprites driven by container_set_data, taking the result.
+fn furnace(c: &Ctx) -> Result<Outcome> {
+    let mut g = c.game("furn")?;
+    join(&mut g)?;
+    cmd(&mut g, "gamemode survival");
+    tp(&mut g, [340.5, -60.0, 0.5], 0.0, 0.0)?;
+    cmd(&mut g, "setblock 340 -60 2 furnace[facing=north]");
+    let (ore, coal, ingot) = (item_id("iron_ore"), item_id("coal"), item_id("iron_ingot"));
+    if !wait_until(&mut g, 5.0, |g| basalt_data::BlockState(g.world.get(340, -60, 2) as u32).name() == "furnace")? { bail!("setup failed"); }
+    let kind = Kind::Furnace(0);
+    // idle window as the reference picture
+    open_block(&mut g, [340, -60, 2], kind)?;
+    let idle = capture(&mut g)?; save(&g, &idle, "furnace_idle");
+    tap(&mut g, KeyCode::Escape, None)?;
+    wait(&mut g, 0.3)?;
+    cmd(&mut g, "item replace block 340 -60 2 container.0 with iron_ore 2");
+    cmd(&mut g, "item replace block 340 -60 2 container.1 with coal 2");
+    wait(&mut g, 1.0)?;
+    open_block(&mut g, [340, -60, 2], kind)?;
+    {
+        let cs = &container(&g).unwrap().slots;
+        if cs[0].item != ore || cs[1].item != coal { bail!("furnace slots on open: {:?} {:?}", cs[0], cs[1]); }
+    }
+    if !wait_until(&mut g, 4.0, |g| container(g).map(|c| c.props[1] == 1600 && c.props[3] == 200 && c.props[2] >= 20).unwrap_or(false))? { bail!("furnace properties {:?}", container(&g).map(|c| c.props)); }
+    let img = capture(&mut g)?; save(&g, &img, "furnace_cooking");
+    let (s, (ox, oy)) = (g.gui_scale(), g.container_origin(kind));
+    let rect = |x: f32, y: f32, w: f32, h: f32| ((ox + x * s) as i32, (oy + y * s) as i32, (ox + (x + w) * s) as i32, (oy + (y + h) * s) as i32);
+    let (f0, f1, f2, f3) = rect(56.0, 36.0, 14.0, 14.0);
+    let flame = diff_count(&idle, &img, f0, f1, f2, f3);
+    let (a0, a1, a2, a3) = rect(79.0, 34.0, 24.0, 16.0);
+    let arrow = diff_count(&idle, &img, a0, a1, a2, a3);
+    // the flame is lit (pixel count scales with the gui scale squared), the arrow partly filled
+    let (min_flame, min_arrow) = ((s * s * 20.0) as usize, (s * s * 6.0) as usize); // at ~10% progress the arrow is only a few texels wide
+    if flame < min_flame { bail!("flame sprite not drawn: {flame} differing pixels (< {min_flame})"); }
+    if arrow < min_arrow { bail!("arrow sprite not drawn: {arrow} differing pixels (< {min_arrow})"); }
+    // the arrow keeps growing
+    let p0 = container(&g).unwrap().props[2];
+    wait(&mut g, 1.0)?;
+    let p1 = container(&g).unwrap().props[2];
+    if p1 <= p0 { bail!("cook progress did not advance: {p0} -> {p1}"); }
+    let img2 = capture(&mut g)?;
+    let arrow2 = diff_count(&idle, &img2, a0, a1, a2, a3);
+    if arrow2 <= arrow { bail!("arrow did not grow: {arrow} -> {arrow2} pixels"); }
+    // wait for the first ingot and take it with a shift-click
+    if !wait_until(&mut g, 14.0, |g| container(g).map(|c| c.slots[2].item == ingot).unwrap_or(false))? { bail!("no ingot in the result slot after 14 s (props {:?})", container(&g).map(|c| c.props)); }
+    g.key(KeyCode::ShiftLeft, true, None);
+    let p = slot_center(&g, kind, 2); click_at(&mut g, p.0, p.1, 0)?;
+    g.key(KeyCode::ShiftLeft, false, None);
+    if !wait_until(&mut g, 3.0, |g| container(g).map(|c| c.slots[2].count == 0 && count_item(&c.slots[3..], ingot) == 1).unwrap_or(false))? { bail!("ingot not moved to the inventory"); }
+    // the input and fuel slots follow the server: one ore smelted, one coal burning, one left
+    let cs = container(&g).unwrap().slots.clone();
+    if cs[0].count != 1 || cs[1].count != 1 { bail!("input {:?} fuel {:?} after the first ingot (one coal was lit, one is left)", cs[0], cs[1]); }
+    tap(&mut g, KeyCode::Escape, None)?;
+    Ok(Outcome::Pass(format!("furnace screen: flame {flame} + arrow {arrow}->{arrow2} px vs idle, progress {p0}->{p1}, ingot taken by shift-click")))
+}
+
+/// Held item in first person (block model and an extruded flat item), the lower/raise animation on
+/// switching, and the item name shown above the hotbar (vanilla client recording, 2026-11-23).
+fn held_item(c: &Ctx) -> Result<Outcome> {
+    let mut g = c.game("held")?;
+    join(&mut g)?;
+    cmd(&mut g, "gamemode survival");
+    cmd(&mut g, "clear @s");
+    cmd(&mut g, "time set noon");
+    tp(&mut g, [860.5, -60.0, 860.5], 0.0, 20.0)?;
+    let mut details = Vec::new();
+    for item in ["oak_planks", "torch"] {
+        cmd(&mut g, "clear @s");
+        cmd(&mut g, &format!("give @s {item}"));
+        if !wait_until(&mut g, 3.0, |g| g.hotbar[0].item == item_id(item) && g.hotbar[0].count > 0)? { bail!("no {item}"); }
+        let want = crate::lang::item_name(item_id(item));
+        if !wait_until(&mut g, 0.3, |g| g.held_name.1 > 0 && g.held_name.0 == want)? { bail!("item name not shown for {item}: {:?}", g.held_name); }
+        if g.equip.0 >= 1.0 { bail!("no equip animation after selecting {item}"); }
+        wait(&mut g, 0.5)?;
+        if g.equip.0 < 1.0 { bail!("equip animation did not finish for {item}"); }
+        g.fp_swing = -1;
+        let with = capture(&mut g)?;
+        g.hide_hand = true; let without = capture(&mut g)?; g.hide_hand = false;
+        // the item sits in the lower right quarter of the view
+        let (w, h) = (W as i32, H as i32);
+        let inside = diff_count(&with, &without, w / 2, h / 2, w, h);
+        let outside = diff_count(&with, &without, 0, 0, w / 2, h / 2);
+        save(&g, &with, &format!("held_{item}"));
+        if inside < 800 { bail!("{item} barely drawn in the hand ({inside} px)"); }
+        if outside > inside / 10 { bail!("{item} drawn outside the lower right ({outside} px)"); }
+        // the name fades out after about 2 s
+        wait(&mut g, 2.3)?;
+        if g.held_name.1 > 0 { bail!("item name still shown after 2.3 s"); }
+        details.push(format!("{item} {inside}px"));
+    }
+    Ok(Outcome::Pass(details.join(", ")))
+}
+
+/// Breaking a block bursts chips of its texture that fall and vanish; digging sprays a few.
+fn break_particles(c: &Ctx) -> Result<Outcome> {
+    let mut g = c.game("parts")?;
+    join(&mut g)?;
+    cmd(&mut g, "gamemode survival");
+    cmd(&mut g, "clear @s");
+    tp(&mut g, [900.5, -60.0, 900.5], 0.0, 0.0)?;
+    let b = [900, -60, 902];
+    cmd(&mut g, &format!("setblock {} {} {} dirt", b[0], b[1], b[2]));
+    if !wait_until(&mut g, 3.0, |g| basalt_data::BlockState(g.world.get(b[0], b[1], b[2]) as u32).name() == "dirt")? { bail!("setblock failed"); }
+    wait(&mut g, 0.3)?;
+    look_at(&mut g, [b[0] as f64 + 0.5, b[1] as f64 + 0.5, b[2] as f64]);
+    step(&mut g)?;
+    g.last_dig = None;
+    g.mouse_button(0, true);
+    let (mut dig_max, mut after) = (0usize, 0usize);
+    let t0 = Instant::now();
+    while g.last_dig.is_none() && t0.elapsed().as_secs_f32() < 4.0 { step(&mut g)?; dig_max = dig_max.max(g.particles.len()); }
+    g.mouse_button(0, false);
+    if g.last_dig.is_none() { bail!("dirt did not break"); }
+    step(&mut g)?;
+    after = after.max(g.particles.len());
+    let img = capture(&mut g)?; save(&g, &img, "break_particles");
+    if dig_max < 3 { bail!("digging sprayed {dig_max} particles"); }
+    if after < 50 { bail!("break burst only {after} particles (vanilla: 4x4x4)"); }
+    wait(&mut g, 2.5)?;
+    if !g.particles.is_empty() { bail!("{} particles still alive after 2.5 s", g.particles.len()); }
+    Ok(Outcome::Pass(format!("{dig_max} while digging, {after} on break, all gone after 2.5 s")))
+}
+
+/// Title + pause + every Options page renders and works: icons/tooltips, the vanilla options
+/// layout, toggles/cycles/sliders stored in the config, category volumes applied, scrolling lists.
+fn options_pages(c: &Ctx) -> Result<Outcome> {
+    let mut g = c.game_at("opts", None)?;
+    wait(&mut g, 0.2)?;
+    let img = capture(&mut g)?; save(&g, &img, "title_full");
+    press_widget(&mut g, "options")?;
+    if !matches!(g.screen, Some(Screen::Options { .. })) { bail!("Options did not open from the title"); }
+    let img = capture(&mut g)?; save(&g, &img, "options_main");
+    let mut seen = Vec::new();
+    for (id, name) in [("page:skin", "skin"), ("page:sounds", "sounds"), ("page:video", "video"), ("page:controls", "controls"), ("page:language", "language"),
+        ("page:chat", "chat"), ("page:packs", "packs"), ("page:accessibility", "accessibility"), ("page:credits", "credits"), ("page:online", "online")] {
+        press_widget(&mut g, id)?;
+        if !matches!(g.screen, Some(Screen::Page { .. })) { bail!("{id} did not open a page"); }
+        let n = g.widgets().len();
+        if n < 3 { bail!("{name} page has only {n} widgets"); }
+        let img = capture(&mut g)?; save(&g, &img, &format!("page_{name}"));
+        seen.push(format!("{name}:{n}"));
+        press_widget(&mut g, "done")?;
+        if !matches!(g.screen, Some(Screen::Options { .. })) { bail!("Done on {name} did not return to Options"); }
+    }
+    // a toggle persists
+    press_widget(&mut g, "page:skin")?;
+    let before = crate::options::value(&g.cfg, &crate::options::opts(crate::options::Page::Skin)[0]);
+    press_widget(&mut g, "opt:cape")?;
+    let after = crate::options::value(&g.cfg, &crate::options::opts(crate::options::Page::Skin)[0]);
+    if before == after { bail!("Cape toggle did not change"); }
+    if Config::load().extra.get("cape").copied() != Some(after) { bail!("Cape toggle not saved"); }
+    press_widget(&mut g, "opt:cape")?;
+    press_widget(&mut g, "done")?;
+    // a category slider changes the gain of that category's sounds
+    press_widget(&mut g, "page:sounds")?;
+    let blocks = g.widgets().into_iter().find(|w| w.id == "opt:vol.block").ok_or_else(|| anyhow!("no Blocks volume slider"))?;
+    let s = g.gui_scale();
+    click_at(&mut g, (blocks.x + 4.0) * s, (blocks.y + 10.0) * s, 0)?;
+    g.mouse_button(0, false);
+    let vol = g.sounds.categories.get("block").copied().unwrap_or(1.0);
+    if vol > 0.05 { bail!("Blocks volume slider at the left edge left the category at {vol}"); }
+    set_opt_back(&mut g, "vol.block");
+    press_widget(&mut g, "done")?;
+    // the video page scrolls
+    press_widget(&mut g, "page:video")?;
+    let first = g.widgets().iter().filter(|w| w.id.starts_with("opt:")).map(|w| w.id.clone()).next();
+    g.scroll(-5.0);
+    let after_scroll = g.widgets().iter().filter(|w| w.id.starts_with("opt:")).map(|w| w.id.clone()).next();
+    if first == after_scroll { bail!("video settings list did not scroll"); }
+    press_widget(&mut g, "done")?;
+    Ok(Outcome::Pass(format!("pages {}; toggle saved; block volume applied; video list scrolls", seen.join(" "))))
+}
+
+fn set_opt_back(g: &mut Game, id: &str) { g.set_opt(id, 1.0); }
+
+/// Multiplayer list pings: MOTD / players / ping bars for a live server, the error line for a
+/// closed port, the vanilla server's status when reachable, Refresh re-pings.
+fn server_list(c: &Ctx) -> Result<Outcome> {
+    use crate::menu::ServerEntry;
+    use crate::status::PingState;
+    let mut g = c.game_at("slist", None)?;
+    wait(&mut g, 0.2)?;
+    let dead = "127.0.0.1:25798".to_string();
+    g.cfg.servers = vec![ServerEntry { name: "Basalt test".into(), addr: c.args.addr.clone() }, ServerEntry { name: "Closed port".into(), addr: dead.clone() }];
+    let van = vanilla_addr(c);
+    if let Some(v) = &van { g.cfg.servers.push(ServerEntry { name: "Vanilla".into(), addr: v.clone() }); }
+    press_widget(&mut g, "multiplayer")?;
+    let done = |g: &Game| g.cfg.servers.iter().all(|s| !matches!(g.pings.get(&s.addr), Some(PingState::Pinging(_)) | None));
+    if !wait_until(&mut g, 8.0, done)? { bail!("pings did not finish"); }
+    let img = capture(&mut g)?; save(&g, &img, "server_list_pings");
+    let Some(PingState::Done(st)) = g.pings.get(&c.args.addr) else { bail!("Basalt server ping failed: {:?}", g.pings.get(&c.args.addr).map(|p| matches!(p, PingState::Failed(_)))) };
+    if st.protocol != basalt_protocol::PROTOCOL_VERSION as i64 || st.max <= 0 { bail!("bad status: protocol {} max {}", st.protocol, st.max); }
+    let basalt = format!("{}/{} players, {} ms, motd {:?}", st.online, st.max, st.ping_ms, st.motd.iter().map(|l| l.iter().map(|r| r.0.as_str()).collect::<String>()).collect::<Vec<_>>());
+    if !matches!(g.pings.get(&dead), Some(PingState::Failed(_))) { bail!("closed port did not fail"); }
+    let vanilla = match van.as_ref().and_then(|v| g.pings.get(v)) { Some(PingState::Done(st)) => format!("vanilla {} {}/{}", st.version, st.online, st.max), Some(_) => bail!("vanilla server ping failed"), None => "vanilla skipped".into() };
+    let rounds = g.ping_rounds;
+    press_widget(&mut g, "refresh")?;
+    if g.ping_rounds != rounds + 1 { bail!("Refresh did not re-ping"); }
+    if !wait_until(&mut g, 8.0, done)? { bail!("refresh pings did not finish"); }
+    Ok(Outcome::Pass(format!("{basalt}; closed port fails; {vanilla}; refresh ok")))
 }

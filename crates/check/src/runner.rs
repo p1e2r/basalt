@@ -102,6 +102,7 @@ impl Ctx {
 
     pub fn state(&self, bot: &Bot) -> Result<ServerState> { query::state(self.kind, bot) }
     pub fn block_is(&self, bot: &Bot, p: [i32; 3], want: &str) -> Result<bool> { query::block_is(self.kind, bot, p, want) }
+    pub fn container(&self, bot: &Bot, p: [i32; 3]) -> Result<Option<query::ContState>> { query::container(self.kind, bot, p) }
     pub fn items_near(&self, bot: &Bot, r: f64) -> Result<i64> { query::items_near(self.kind, bot, r) }
 
     pub fn gamemode(&self, bot: &Bot, gm: &str) -> Result<()> {

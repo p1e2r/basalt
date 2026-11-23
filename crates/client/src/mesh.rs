@@ -76,6 +76,7 @@ pub fn fluid_flow(a: &Assets, s: &Snapshot, x: i32, y: i32, z: i32, kind: u8, ow
     v
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fluid_corner(a: &Assets, s: &Snapshot, x: i32, y: i32, z: i32, kind: u8, cx: i32, cz: i32) -> f32 {
     let mut cells = [CornerCell::Solid; 4];
     let mut above_same = false;
@@ -339,6 +340,7 @@ pub fn mesh_block(a: &Assets, biomes: &[Biome], s: &Snapshot, x: i32, y: i32, z:
             // sides: culled by the same fluid or a neighbour face covering 0..h; full non-opaque cubes
             // (glass, leaves) get one overlay quad instead; otherwise the flow sprite at half scale, double-sided
             let vt = |h: f32| (1.0 - h) * 0.5;
+            #[allow(clippy::type_complexity)]
             let sides: [(u8, [i32; 3], f32, [[f32; 3]; 4], [[f32; 2]; 4], f32); 4] = [
                 (NORTH, [0, 0, -1], 0.8, [[0.0, h_nw, 0.001], [1.0, h_ne, 0.001], [1.0, yo, 0.001], [0.0, yo, 0.001]], [[0.0, vt(h_nw)], [0.5, vt(h_ne)], [0.5, 0.5], [0.0, 0.5]], h_nw.max(h_ne)),
                 (SOUTH, [0, 0, 1], 0.8, [[1.0, h_se, 0.999], [0.0, h_sw, 0.999], [0.0, yo, 0.999], [1.0, yo, 0.999]], [[0.0, vt(h_se)], [0.5, vt(h_sw)], [0.5, 0.5], [0.0, 0.5]], h_se.max(h_sw)),

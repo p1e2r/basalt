@@ -27,6 +27,8 @@ pub struct Sounds {
     dir: PathBuf,
     cache: HashMap<String, Option<Arc<Pcm>>>,
     pub master: f32,
+    /// per-category volume (options "Music & Sounds"), by category name (block, hostile, ui, ...)
+    pub categories: HashMap<String, f32>,
     pub log: Vec<Played>,
     pub listener: ([f64; 3], f32),
     rng: u64,
@@ -51,7 +53,7 @@ pub fn default_assets() -> (PathBuf, Option<String>) {
 impl Sounds {
     /// Load the sound index. `audio_out`: open an output device (false in tests/headless).
     pub fn load(dir: PathBuf, index: Option<String>, audio_out: bool) -> Sounds {
-        let mut s = Sounds { events: HashMap::new(), objects: HashMap::new(), dir: dir.clone(), cache: HashMap::new(), master: 1.0, log: Vec::new(), listener: ([0.0; 3], 0.0), rng: 0x2545F4914F6CDD1D,
+        let mut s = Sounds { events: HashMap::new(), objects: HashMap::new(), dir: dir.clone(), cache: HashMap::new(), master: 1.0, categories: HashMap::new(), log: Vec::new(), listener: ([0.0; 3], 0.0), rng: 0x2545F4914F6CDD1D,
             #[cfg(any(target_os = "macos", target_os = "windows", feature = "audio"))] out: None };
         let index = index.or_else(|| {
             // newest index file as a fallback
@@ -92,7 +94,21 @@ impl Sounds {
         #[allow(unreachable_code)] { let _ = HAVE_AUDIO; false }
     }
 
-    fn read_object(&self, key: &str) -> Option<Vec<u8>> {
+    pub fn set_category(&mut self, cat: &str, v: f32) { if cat != "master" { self.categories.insert(cat.to_string(), v); } }
+
+    /// (code, "Name (Region)") of the languages in the asset store, sorted like the vanilla list.
+    pub fn languages(&self) -> Vec<(String, String)> {
+        let mut v: Vec<(String, String)> = self.objects.keys().filter_map(|k| k.strip_prefix("minecraft/lang/")?.strip_suffix(".json").map(String::from)).filter_map(|code| {
+            let j: Value = serde_json::from_slice(&self.read_object(&format!("minecraft/lang/{code}.json"))?).ok()?;
+            Some((code.clone(), format!("{} ({})", j["language.name"].as_str()?, j["language.region"].as_str()?)))
+        }).collect();
+        v.push(("en_us".into(), "English (US)".into()));
+        v.sort_by(|a, b| a.1.cmp(&b.1)); v.dedup_by(|a, b| a.0 == b.0);
+        v
+    }
+
+    /// Raw bytes of a launcher asset object by its index key (e.g. "minecraft/textures/gui/title/background/panorama_0.png").
+    pub fn read_object(&self, key: &str) -> Option<Vec<u8>> {
         let h = self.objects.get(key)?;
         std::fs::read(self.dir.join("objects").join(&h[..2]).join(h)).ok()
     }
@@ -141,7 +157,7 @@ impl Sounds {
                 pan = ((d[0] * right[0] + d[2] * right[2]) / dist as f64) as f32;
             }
         }
-        gain *= self.master;
+        gain *= self.master * self.categories.get(category_of(event)).copied().unwrap_or(1.0);
         let pitch = (pitch * v.pitch).clamp(0.5, 2.0);
         self.log.push(Played { event: event.to_string(), file: v.name.clone(), gain, pitch, pan, at: Instant::now() });
         if self.log.len() > 256 { self.log.remove(0); }
@@ -183,6 +199,24 @@ pub fn block_group(name: &str) -> &'static str {
         || name == "crafting_table" || name == "bookshelf" || name == "chest" || name == "barrel" || name == "note_block" || name == "jukebox" || has("fence") && !has("nether_brick") || name == "ladder" || name == "composter" || name == "lectern" || name == "cartography_table" || name == "fletching_table" || name == "smithing_table" || name == "loom" { "wood" }
     else if name.ends_with("_block") && (has("iron") || has("gold") || has("diamond") || has("emerald") || has("netherite") || has("lapis") || has("redstone")) || name == "anvil" || name == "hopper" || name == "cauldron" || name == "iron_bars" || name == "iron_door" || name == "iron_trapdoor" { "metal" }
     else { "stone" }
+}
+
+/// Sound category of an event, for the per-category volume sliders (by event name prefix; the
+/// server's sound packets carry their own source but client-side sounds don't).
+fn category_of(event: &str) -> &'static str {
+    const HOSTILE: &[&str] = &["zombie", "skeleton", "creeper", "spider", "enderman", "witch", "slime", "phantom", "drowned", "husk", "stray", "blaze", "ghast", "piglin_brute", "warden", "pillager", "vindicator", "evoker", "ravager", "guardian", "silverfish", "endermite", "shulker", "vex", "hoglin", "zoglin", "magma_cube", "wither", "ender_dragon", "breeze", "bogged", "creaking"];
+    let mut parts = event.split('.');
+    match (parts.next(), parts.next()) {
+        (Some("music"), _) | (Some("music_disc"), _) if event.starts_with("music.") => "music",
+        (Some("music_disc"), _) | (Some("block"), Some("note_block")) | (Some("block"), Some("jukebox")) => "record",
+        (Some("weather"), _) | (Some("entity"), Some("lightning_bolt")) => "weather",
+        (Some("block"), _) => "block",
+        (Some("ui"), _) => "ui",
+        (Some("ambient"), _) => "ambient",
+        (Some("entity"), Some("player")) | (Some("entity"), Some("item")) | (Some("entity"), Some("experience_orb")) | (Some("item"), _) => "player",
+        (Some("entity"), Some(m)) if HOSTILE.contains(&m) => "hostile",
+        _ => "neutral",
+    }
 }
 
 #[cfg(test)]

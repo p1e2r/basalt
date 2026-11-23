@@ -283,6 +283,7 @@ impl Game {
                 else { self.ok(eid, "commands.kill.success.multiple", vec![s(targets.len())]); }
             }
             "summon entity" | "summon entity pos" | "summon entity pos nbt" => self.cmd_summon(eid, p)?,
+            "item replace block pos slot with item" | "item replace block pos slot with item count" => self.cmd_item_replace_block(eid, p)?,
             "help" | "help command" => self.cmd_help(eid, p)?,
             path if path.starts_with("weather") => {
                 let kind = p.path[1].as_str();
@@ -544,6 +545,26 @@ impl Game {
             if let Some(c) = color { m.sheep_color = c & 15; }
         });
         self.ok(eid, "commands.summon.success", vec![tr(&format!("entity.minecraft.{}", kind.name()), vec![])]);
+        Ok(())
+    }
+
+    // ------------------------------------------------------------ /item replace block
+
+    /// `/item replace block <pos> container.<n> with <item> [count]`: set a slot of a chest/barrel/furnace
+    /// (block entity). Not in the tree sent to clients; the check scenarios use it to fill containers.
+    fn cmd_item_replace_block(&mut self, eid: i32, p: &Parsed) -> R<()> {
+        let pos = self.block_pos_from(eid, p.arg("pos"))?;
+        self.check_block_pos(pos)?;
+        let slot: usize = p.arg("slot").strip_prefix("container.").and_then(|n| n.parse().ok()).ok_or_else(|| err("slot.unknown", &[p.arg("slot")]))?;
+        let id_text = p.arg("item").split('[').next().unwrap_or("");
+        let id = basalt_data::registry_id(reg::ITEM, id_text).ok_or_else(|| err("argument.item.id.invalid", &[id_text]))?;
+        let count: i32 = if p.has("count") { p.arg("count").parse().unwrap_or(1) } else { 1 };
+        let kind = self.be_ensure(pos).ok_or_else(|| err("commands.item.target.not_a_container", &[&pos[0].to_string(), &pos[1].to_string(), &pos[2].to_string()]))?;
+        if slot >= kind.slots() { return Err(err("slot.unknown", &[p.arg("slot")])); }
+        let st = if count > 0 { Stack { item: id, count: count.min(self.max_stack(id)), damage: 0, ench: NO_ENCH } } else { Stack::default() };
+        if let Some(be) = self.bes.get_mut(&pos) { be.items[slot] = st; }
+        self.cont_changed(pos);
+        self.ok(eid, "commands.item.block.set.success", vec![s(pos[0]), s(pos[1]), s(pos[2]), item_name(id)]);
         Ok(())
     }
 

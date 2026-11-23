@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Launch the installed vanilla 26.2 client under Fabric Loader with the test-only oracle mod.
 TEST-ONLY: never shipped. Game dir: vanilla/oracle/game (separate from vanilla/mcclient).
-No server join: the oracle works from the title screen (resources loaded, no world needed).
+No server join at launch: the mesh oracle works from the title screen; the control channel
+(127.0.0.1:ORACLE_CTL_PORT, see SCHEMA.md) can connect to a server and drive the client.
 
 usage: tools/oracle-mod/launch.py            # launch (blocks until the client exits)
        tools/oracle-mod/launch.py --classpath  # print the vanilla compile classpath and exit
 env:   MC_DIR (default ~/Library/Application Support/minecraft), MC_VERSION (26.2), JAVA,
-       ORACLE_DIR (default vanilla/oracle)
+       ORACLE_DIR (default vanilla/oracle), ORACLE_CTL_PORT (scripted-input control channel, default 25789)
 """
 import json, os, platform, subprocess, sys, zipfile
 from pathlib import Path
@@ -85,7 +86,8 @@ def expand(args):
 jvm = expand(vj["arguments"]["jvm"])
 # from Fabric's official launcher profile for loader 0.20.1 / 26.2 (meta.fabricmc.net)
 jvm += ["-XX:+UnlockDiagnosticVMOptions", "-XX:-UseBASE64Intrinsics", "-DFabricMcEmu= net.minecraft.client.main.Main ",
-        f"-Dfabric.addMods={mod}", f"-Dbasalt.oracle.dir={oracle}"]
+        f"-Dfabric.addMods={mod}", f"-Dbasalt.oracle.dir={oracle}",
+        f"-Dbasalt.oracle.ctl.port={os.environ.get('ORACLE_CTL_PORT', '25789')}"]
 game = expand(vj["arguments"]["game"]) + ["--width", "640", "--height", "360"]
 java = os.environ.get("JAVA", "java")
 cmd = [java, "-Xmx3G"] + jvm + ["net.fabricmc.loader.impl.launch.knot.KnotClient"] + game

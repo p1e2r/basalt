@@ -518,6 +518,65 @@ pub fn build_model_gui(atlas: &EntityAtlas, e: &Entity, cx: f32, cy: f32, scale:
     }
 }
 
+/// Held item in first person (right hand): the item model's `display.firstperson_righthand`
+/// transform around the model centre, anchored low on the right of the view. `swing` 0..1 is the
+/// use/attack swing, `equip` 0..1 raises the item after a slot change. Flat items are extruded
+/// one texel thick like vanilla's generated item models. Position and swing tuned by eye against a
+/// vanilla 26.2 client recording (2026-11-23).
+#[allow(clippy::too_many_arguments)]
+pub fn first_person_item(a: &Assets, item: i32, eye: Vec3, yaw: f32, pitch: f32, swing: f32, equip: f32, light: [u8; 2], out: &mut MeshData) {
+    let d = a.item_fp.get(item as usize).copied().flatten().unwrap_or(if a.item_model(item).is_some() { [0.0, 45.0, 0.0, 0.0, 0.0, 0.0, 0.4, 0.4, 0.4] } else { [0.0, -90.0, 25.0, 1.13, 3.2, 1.13, 0.68, 0.68, 0.68] });
+    let s = (swing * PI).sin();
+    let sq = (swing.sqrt() * PI).sin();
+    let r = |deg: f32| deg.to_radians();
+    // our view space faces +Z with +X to the left; vanilla-style hand space faces -Z with +X right
+    let hand = Mat4::from_translation(eye) * Mat4::from_rotation_y(-yaw.to_radians()) * Mat4::from_rotation_x(pitch.to_radians()) * Mat4::from_rotation_y(PI)
+        * Mat4::from_translation(Vec3::new(0.56 - sq * 0.35, -0.52 - (1.0 - equip) * 0.6 + (swing.sqrt() * 2.0 * PI).sin() * 0.12, -0.72 - s * 0.2))
+        * Mat4::from_rotation_x(r(-70.0 * sq)) * Mat4::from_rotation_z(r(-15.0 * sq))
+        * Mat4::from_translation(Vec3::new(d[3], d[4], d[5]) / 16.0)
+        * Mat4::from_rotation_x(r(d[0])) * Mat4::from_rotation_y(r(d[1])) * Mat4::from_rotation_z(r(d[2]))
+        * Mat4::from_scale(Vec3::new(d[6], d[7], d[8])) * Mat4::from_translation(Vec3::splat(-0.5));
+    let tint = a.item_tint.get(item as usize).copied().flatten();
+    let tc = tint.map(|c| [(c >> 16 & 255) as f32 / 255.0, (c >> 8 & 255) as f32 / 255.0, (c & 255) as f32 / 255.0]).unwrap_or([1.0; 3]);
+    let mut quad = |pos: [[f32; 3]; 4], uv: [[f32; 2]; 4], sh: f32, tt: [f32; 3]| {
+        let b = out.verts.len() as u32;
+        for i in 0..4 {
+            let wp = hand * Vec4::new(pos[i][0], pos[i][1], pos[i][2], 1.0);
+            out.verts.push(Vertex { pos: [wp.x, wp.y, wp.z], uv: uv[i], color: [(tt[0] * sh * 255.0) as u8, (tt[1] * sh * 255.0) as u8, (tt[2] * sh * 255.0) as u8, 255], light: [light[0], light[1], 0, 0] });
+        }
+        // both windings: the hand transform may mirror
+        out.idx.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3, b, b + 2, b + 1, b, b + 3, b + 2]);
+    };
+    if let Some(m) = a.item_model(item) {
+        for q in &m.quads { quad(q.pos, q.uv, [0.5, 1.0, 0.8, 0.8, 0.6, 0.6][q.dir as usize], if q.tinted { tc } else { [1.0; 3] }); }
+        return;
+    }
+    let Some(name) = a.item_icons.get(item as usize).and_then(|n| n.as_ref()) else { return };
+    let Some((rect, _)) = a.atlas.rects.get(name) else { return };
+    let (aw, ah) = (a.atlas.w as f32, a.atlas.h as f32);
+    let (w, h) = (rect.w.min(rect.h) as i32, rect.w.min(rect.h) as i32);
+    let opaque = |x: i32, y: i32| x >= 0 && y >= 0 && x < w && y < h && a.atlas.rgba[(((rect.y as i32 + y) as u32 * a.atlas.w + (rect.x as i32 + x) as u32) * 4 + 3) as usize] > 0;
+    let (z0, z1) = (7.5 / 16.0, 8.5 / 16.0);
+    let (u0, v0, u1, v1) = (rect.x as f32 / aw, rect.y as f32 / ah, (rect.x + w as u32) as f32 / aw, (rect.y + h as u32) as f32 / ah);
+    // front and back faces cover the whole sprite (transparent texels are cut out)
+    quad([[0.0, 1.0, z1], [0.0, 0.0, z1], [1.0, 0.0, z1], [1.0, 1.0, z1]], [[u0, v0], [u0, v1], [u1, v1], [u1, v0]], 1.0, tc);
+    quad([[1.0, 1.0, z0], [1.0, 0.0, z0], [0.0, 0.0, z0], [0.0, 1.0, z0]], [[u1, v0], [u1, v1], [u0, v1], [u0, v0]], 1.0, tc);
+    // edges: one strip per opaque texel bordering a transparent one, textured with that texel
+    let (pw, ph) = (1.0 / w as f32, 1.0 / h as f32);
+    for y in 0..h { for x in 0..w {
+        if !opaque(x, y) { continue; }
+        let (tu0, tv0) = ((rect.x as f32 + x as f32 + 0.25) / aw, (rect.y as f32 + y as f32 + 0.25) / ah);
+        let (tu1, tv1) = (tu0 + 0.5 / aw, tv0 + 0.5 / ah);
+        let uv = [[tu0, tv0], [tu0, tv1], [tu1, tv1], [tu1, tv0]];
+        let (mx0, mx1) = (x as f32 * pw, (x + 1) as f32 * pw);
+        let (my1, my0) = (1.0 - y as f32 * ph, 1.0 - (y + 1) as f32 * ph);
+        if !opaque(x - 1, y) { quad([[mx0, my1, z0], [mx0, my0, z0], [mx0, my0, z1], [mx0, my1, z1]], uv, 0.6, tc); }
+        if !opaque(x + 1, y) { quad([[mx1, my1, z1], [mx1, my0, z1], [mx1, my0, z0], [mx1, my1, z0]], uv, 0.6, tc); }
+        if !opaque(x, y - 1) { quad([[mx0, my1, z0], [mx0, my1, z1], [mx1, my1, z1], [mx1, my1, z0]], uv, 1.0, tc); }
+        if !opaque(x, y + 1) { quad([[mx0, my0, z1], [mx0, my0, z0], [mx1, my0, z0], [mx1, my0, z1]], uv, 0.5, tc); }
+    } }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

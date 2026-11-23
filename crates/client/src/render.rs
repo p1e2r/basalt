@@ -31,17 +31,39 @@ pub struct Gpu {
     atlas_bind: wgpu::BindGroup,
     ui_bind: wgpu::BindGroup,
     skin_bind: wgpu::BindGroup,
+    /// server list favicons: 8x4 slots of 64x64 (`set_icon`)
+    icon_tex: wgpu::Texture,
+    icon_bind: wgpu::BindGroup,
     p_opaque: wgpu::RenderPipeline,
     p_cutout: wgpu::RenderPipeline,
     p_trans: wgpu::RenderPipeline,
     p_crack: wgpu::RenderPipeline,
     p_sky: wgpu::RenderPipeline,
     p_ui: wgpu::RenderPipeline,
+    p_blur: wgpu::RenderPipeline,
+    p_pano: wgpu::RenderPipeline,
+    post_layout: wgpu::BindGroupLayout,
+    lin_sampler: wgpu::Sampler,
+    ubuf_h: wgpu::Buffer, ubuf_v: wgpu::Buffer, ubuf_p: wgpu::Buffer,
+    pano_layout: wgpu::BindGroupLayout,
+    pano_bind: Option<wgpu::BindGroup>,
+    post: Option<Post>,
     pub sections: HashMap<(i32, i32, i32), SectionGpu>,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub enum Tex { Ui, Blocks, Entities }
+pub enum Tex { Ui, Blocks, Entities, Icons }
+
+/// What is behind a menu: nothing special, the world blurred, or the title panorama (blurred).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Backdrop { None, Blur, Panorama { yaw: f32, pitch: f32 } }
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct PostU { dir: [f32; 4], rot: [[f32; 4]; 4] }
+
+/// Scene-sized targets for the backdrop blur (A: scene, B: after the horizontal pass).
+struct Post { size: (u32, u32), a: wgpu::TextureView, b: wgpu::TextureView, read_a: wgpu::BindGroup, read_b: wgpu::BindGroup }
 
 pub struct Frame<'a> {
     pub uniforms: Uniforms,
@@ -58,8 +80,17 @@ pub struct Frame<'a> {
     pub items3d: &'a MeshData,
     /// block-breaking cracks (block atlas, alpha blended)
     pub overlay: &'a MeshData,
+    /// first-person arm (entity atlas) and held item (block atlas), drawn after the world over a
+    /// cleared depth buffer so they never clip into nearby blocks
+    pub hand_skin: &'a MeshData,
+    pub hand_items: &'a MeshData,
     /// 2D layers drawn in order, each with its texture
     pub ui_layers: &'a [(MeshData, Tex)],
+    /// the first `hud_layers` of `ui_layers` are the HUD: blurred along with the world behind menus
+    pub hud_layers: usize,
+    pub backdrop: Backdrop,
+    /// menu background blur setting 0..10 (vanilla default 5)
+    pub blur: f32,
 }
 
 fn make_depth(device: &wgpu::Device, w: u32, h: u32) -> wgpu::TextureView {
@@ -116,6 +147,9 @@ impl Gpu {
         let atlas_bind = tex_bind(&upload_tex(&device, &queue, assets.atlas.w, assets.atlas.h, &assets.atlas.rgba));
         let ui_bind = tex_bind(&upload_tex(&device, &queue, ui_atlas.1, ui_atlas.2, ui_atlas.0));
         let skin_bind = tex_bind(&upload_tex(&device, &queue, skin.1, skin.2, skin.0));
+        let icon_tex = device.create_texture(&wgpu::TextureDescriptor { label: Some("icons"), size: wgpu::Extent3d { width: 512, height: 256, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Rgba8Unorm, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[] });
+        let icon_bind = tex_bind(&icon_tex.create_view(&Default::default()));
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[&ulayout, &tlayout], push_constant_ranges: &[] });
         let vattrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Unorm8x4, 3 => Unorm8x4];
         let vlayout = wgpu::VertexBufferLayout { array_stride: std::mem::size_of::<Vertex>() as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &vattrs };
@@ -137,7 +171,29 @@ impl Gpu {
         let p_sky = mk("vs_sky", "fs_sky", None, false, false, false, &[]);
         let p_ui = mk("vs_ui", "fs_ui", Some(wgpu::BlendState::ALPHA_BLENDING), false, false, false, &[vlayout.clone()]);
         let depth = make_depth(&device, size.0.max(1), size.1.max(1));
-        Ok(Gpu { device, queue, surface, config, format, size, offscreen, depth, ubuf, ubind, atlas_bind, ui_bind, skin_bind, p_opaque, p_cutout, p_trans, p_crack, p_sky, p_ui, sections: HashMap::new() })
+        // menu backdrops (post.wgsl / pano.wgsl): fullscreen passes without depth
+        let post_entry = |dim: wgpu::TextureViewDimension| [
+            wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: dim, multisampled: false }, count: None },
+            wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None }];
+        let post_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("post"), entries: &post_entry(wgpu::TextureViewDimension::D2) });
+        let pano_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("pano"), entries: &post_entry(wgpu::TextureViewDimension::D2Array) });
+        let full = |src: &str, fs: &str, bl: &wgpu::BindGroupLayout| {
+            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(fs), source: wgpu::ShaderSource::Wgsl(src.into()) });
+            let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[bl], push_constant_ranges: &[] });
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: Some(fs), layout: Some(&pl),
+                vertex: wgpu::VertexState { module: &module, entry_point: "vs_full", buffers: &[], compilation_options: Default::default() },
+                fragment: Some(wgpu::FragmentState { module: &module, entry_point: fs, targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })], compilation_options: Default::default() }),
+                primitive: Default::default(), depth_stencil: None, multisample: Default::default(), multiview: None, cache: None })
+        };
+        let p_blur = full(include_str!("post.wgsl"), "fs_blur", &post_layout);
+        let p_pano = full(include_str!("pano.wgsl"), "fs_pano", &pano_layout);
+        let lin_sampler = device.create_sampler(&wgpu::SamplerDescriptor { mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear,
+            address_mode_u: wgpu::AddressMode::ClampToEdge, address_mode_v: wgpu::AddressMode::ClampToEdge, ..Default::default() });
+        let mkbuf = || device.create_buffer(&wgpu::BufferDescriptor { label: Some("post"), size: std::mem::size_of::<PostU>() as u64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let (ubuf_h, ubuf_v, ubuf_p) = (mkbuf(), mkbuf(), mkbuf());
+        Ok(Gpu { device, queue, surface, config, format, size, offscreen, depth, ubuf, ubind, atlas_bind, ui_bind, skin_bind, icon_tex, icon_bind, p_opaque, p_cutout, p_trans, p_crack, p_sky, p_ui,
+            p_blur, p_pano, post_layout, lin_sampler, ubuf_h, ubuf_v, ubuf_p, pano_layout, pano_bind: None, post: None, sections: HashMap::new() })
     }
 
     pub fn resize(&mut self, w: u32, h: u32) {
@@ -145,6 +201,45 @@ impl Gpu {
         self.size = (w, h);
         if let (Some(s), Some(c)) = (&self.surface, &mut self.config) { c.width = w; c.height = h; s.configure(&self.device, c); }
         self.depth = make_depth(&self.device, w, h);
+    }
+
+    /// Six equally sized RGBA faces (front, right, back, left, up, down) for the title backdrop.
+    pub fn set_panorama(&mut self, faces: &[(u32, u32, &[u8])]) {
+        let Some(&(w, h, _)) = faces.first() else { return };
+        if faces.len() != 6 || faces.iter().any(|f| f.0 != w || f.1 != h) { return; }
+        let size = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 6 };
+        let t = self.device.create_texture(&wgpu::TextureDescriptor { label: Some("panorama"), size, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[] });
+        for (i, f) in faces.iter().enumerate() {
+            self.queue.write_texture(wgpu::ImageCopyTexture { texture: &t, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: 0, z: i as u32 }, aspect: wgpu::TextureAspect::All }, f.2,
+                wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(4 * w), rows_per_image: Some(h) }, wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 });
+        }
+        let view = t.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
+        self.pano_bind = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &self.pano_layout, entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: self.ubuf_p.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&view) },
+            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.lin_sampler) }] }));
+    }
+
+    /// Put a 64x64 RGBA image into icon slot `i` (0..32); UV rect is `icon_uv(i)`.
+    pub fn set_icon(&mut self, i: usize, rgba: &[u8]) {
+        if i >= 32 || rgba.len() != 64 * 64 * 4 { return; }
+        self.queue.write_texture(wgpu::ImageCopyTexture { texture: &self.icon_tex, mip_level: 0, origin: wgpu::Origin3d { x: (i % 8) as u32 * 64, y: (i / 8) as u32 * 64, z: 0 }, aspect: wgpu::TextureAspect::All }, rgba,
+            wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(256), rows_per_image: Some(64) }, wgpu::Extent3d { width: 64, height: 64, depth_or_array_layers: 1 });
+    }
+
+    fn ensure_post(&mut self) {
+        if self.post.as_ref().map(|p| p.size == self.size).unwrap_or(false) { return; }
+        let (w, h) = (self.size.0.max(1), self.size.1.max(1));
+        let mk = || self.device.create_texture(&wgpu::TextureDescriptor { label: Some("post"), size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2, format: self.format, usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[] }).create_view(&Default::default());
+        let (a, b) = (mk(), mk());
+        let bind = |buf: &wgpu::Buffer, v: &wgpu::TextureView| self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &self.post_layout, entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(v) },
+            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.lin_sampler) }] });
+        let (read_a, read_b) = (bind(&self.ubuf_h, &a), bind(&self.ubuf_v, &b));
+        self.post = Some(Post { size: self.size, a, b, read_a, read_b });
     }
 
     fn upload(&self, m: &MeshData) -> Option<GpuMesh> {
@@ -176,11 +271,26 @@ impl Gpu {
         }
         vis.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
         let extra = self.upload(f.extra); let skinned = self.upload(f.skinned); let items3d = self.upload(f.items3d); let overlay = self.upload(f.overlay);
+        let (hand_skin, hand_items) = (self.upload(f.hand_skin), self.upload(f.hand_items));
         let layers: Vec<(Option<GpuMesh>, Tex)> = f.ui_layers.iter().map(|(m, t)| (self.upload(m), *t)).collect();
         let mut enc = self.device.create_command_encoder(&Default::default());
-        {
+        let post = if f.backdrop != Backdrop::None { self.post.as_ref() } else { None };
+        let scene: &wgpu::TextureView = post.map(|p| &p.a).unwrap_or(view);
+        let pano = matches!(f.backdrop, Backdrop::Panorama { .. }) && post.is_some();
+        if pano {
+            if let Backdrop::Panorama { yaw, pitch } = f.backdrop {
+                let rot = Mat4::from_rotation_y(-yaw.to_radians()) * Mat4::from_rotation_x(-pitch.to_radians());
+                let (w, h) = (self.size.0.max(1) as f32, self.size.1.max(1) as f32);
+                self.queue.write_buffer(&self.ubuf_p, 0, bytemuck::bytes_of(&PostU { dir: [(85f32.to_radians() / 2.0).tan(), w / h, 0.0, 0.0], rot: rot.to_cols_array_2d() }));
+            }
             let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: None,
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment { view, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store } })],
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: scene, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.05, g: 0.05, b: 0.05, a: 1.0 }), store: wgpu::StoreOp::Store } })],
+                depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None });
+            if let Some(b) = &self.pano_bind { rp.set_pipeline(&self.p_pano); rp.set_bind_group(0, b, &[]); rp.draw(0..3, 0..1); }
+        }
+        if !pano {
+            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: scene, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store } })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &self.depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }),
                 timestamp_writes: None, occlusion_query_set: None });
             rp.set_bind_group(0, &self.ubind, &[]);
@@ -197,10 +307,57 @@ impl Gpu {
             if let Some(m) = &overlay { rp.set_pipeline(&self.p_crack); draw_mesh(&mut rp, m); }
             rp.set_pipeline(&self.p_trans);
             for (_, s) in vis.iter().rev() { if let Some(m) = &s.layers[2] { draw_mesh(&mut rp, m); } }
+        }
+        if !pano {
+            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: scene, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &self.depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }),
+                timestamp_writes: None, occlusion_query_set: None });
+            rp.set_bind_group(0, &self.ubind, &[]);
+            let draw_mesh = |rp: &mut wgpu::RenderPass, m: &GpuMesh| { rp.set_vertex_buffer(0, m.vb.slice(..)); rp.set_index_buffer(m.ib.slice(..), wgpu::IndexFormat::Uint32); rp.draw_indexed(0..m.count, 0, 0..1); };
+            rp.set_pipeline(&self.p_cutout);
+            if let Some(m) = &hand_skin { rp.set_bind_group(1, &self.skin_bind, &[]); draw_mesh(&mut rp, m); }
+            if let Some(m) = &hand_items { rp.set_bind_group(1, &self.atlas_bind, &[]); draw_mesh(&mut rp, m); }
+        }
+        // the HUD belongs to the scene that gets blurred
+        let first_ui = if post.is_some() && !pano {
+            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: scene, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &self.depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }), stencil_ops: None }),
+                timestamp_writes: None, occlusion_query_set: None });
+            rp.set_bind_group(0, &self.ubind, &[]);
             rp.set_pipeline(&self.p_ui);
-            for (m, t) in &layers {
+            for (m, t) in layers.iter().take(f.hud_layers) {
                 let Some(m) = m else { continue };
-                rp.set_bind_group(1, match t { Tex::Ui => &self.ui_bind, Tex::Blocks => &self.atlas_bind, Tex::Entities => &self.skin_bind }, &[]);
+                rp.set_bind_group(1, match t { Tex::Ui => &self.ui_bind, Tex::Blocks => &self.atlas_bind, Tex::Entities => &self.skin_bind, Tex::Icons => &self.icon_bind }, &[]);
+                rp.set_vertex_buffer(0, m.vb.slice(..)); rp.set_index_buffer(m.ib.slice(..), wgpu::IndexFormat::Uint32); rp.draw_indexed(0..m.count, 0, 0..1);
+            }
+            f.hud_layers
+        } else { 0 };
+        // backdrop: blur the scene (A) horizontally into B, then vertically into the output
+        if let Some(p) = post {
+            let (w, h) = (self.size.0.max(1) as f32, self.size.1.max(1) as f32);
+            let sigma = h / 200.0 * f.blur / 5.0;
+            self.queue.write_buffer(&self.ubuf_h, 0, bytemuck::bytes_of(&PostU { dir: [1.0 / w, 0.0, sigma, 1.0], rot: Mat4::IDENTITY.to_cols_array_2d() }));
+            self.queue.write_buffer(&self.ubuf_v, 0, bytemuck::bytes_of(&PostU { dir: [0.0, 1.0 / h, sigma, 1.0], rot: Mat4::IDENTITY.to_cols_array_2d() }));
+            for (src, dst) in [(&p.read_a, &p.b), (&p.read_b, view)] {
+                let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: None,
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: dst, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store } })],
+                    depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None });
+                rp.set_pipeline(&self.p_blur); rp.set_bind_group(0, src, &[]); rp.draw(0..3, 0..1);
+            }
+        }
+        {
+            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { view, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &self.depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }), stencil_ops: None }),
+                timestamp_writes: None, occlusion_query_set: None });
+            let draw_mesh = |rp: &mut wgpu::RenderPass, m: &GpuMesh| { rp.set_vertex_buffer(0, m.vb.slice(..)); rp.set_index_buffer(m.ib.slice(..), wgpu::IndexFormat::Uint32); rp.draw_indexed(0..m.count, 0, 0..1); };
+            rp.set_bind_group(0, &self.ubind, &[]);
+            rp.set_pipeline(&self.p_ui);
+            for (m, t) in layers.iter().skip(first_ui) {
+                let Some(m) = m else { continue };
+                rp.set_bind_group(1, match t { Tex::Ui => &self.ui_bind, Tex::Blocks => &self.atlas_bind, Tex::Entities => &self.skin_bind, Tex::Icons => &self.icon_bind }, &[]);
                 draw_mesh(&mut rp, m);
             }
         }
@@ -209,6 +366,7 @@ impl Gpu {
 
     /// Render to the window surface.
     pub fn render(&mut self, f: &Frame) -> Result<()> {
+        if f.backdrop != Backdrop::None { self.ensure_post(); }
         let Some(surface) = &self.surface else { return Ok(()) };
         let tex = match surface.get_current_texture() {
             Ok(t) => t,
@@ -222,6 +380,7 @@ impl Gpu {
 
     /// Render to the offscreen target and wait for the GPU (benchmarks).
     pub fn render_offscreen(&mut self, f: &Frame) {
+        if f.backdrop != Backdrop::None { self.ensure_post(); }
         if let Some(t) = &self.offscreen { let view = t.create_view(&Default::default()); self.draw(&view, f); self.device.poll(wgpu::Maintain::Wait); }
     }
     /// Bytes of vertex + index buffers held for chunk sections.
@@ -234,6 +393,7 @@ impl Gpu {
 
     /// Render offscreen and read back the frame as tightly packed RGB.
     pub fn capture(&mut self, f: &Frame) -> Result<Vec<u8>> {
+        if f.backdrop != Backdrop::None { self.ensure_post(); }
         let (w, h) = self.size;
         let owned;
         let tex = match &self.offscreen { Some(t) => t, None => {
@@ -272,3 +432,6 @@ fn frustum_planes(vp: &Mat4) -> [glam::Vec4; 5] {
     let n = |p: glam::Vec4| p / p.truncate().length();
     [n(r[3] + r[0]), n(r[3] - r[0]), n(r[3] + r[1]), n(r[3] - r[1]), n(r[3] - r[2])]
 }
+
+/// UV rect of icon slot `i` in the icon texture (see `Gpu::set_icon`).
+pub fn icon_uv(i: usize) -> [f32; 4] { let (x, y) = ((i % 8) as f32 * 64.0, (i / 8) as f32 * 64.0); [x / 512.0, y / 256.0, (x + 64.0) / 512.0, (y + 64.0) / 256.0] }
