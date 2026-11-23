@@ -179,6 +179,10 @@ pub fn items_near(kind: Kind, bot: &Bot, r: f64) -> Result<i64> {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ContState {
     pub items: BTreeMap<usize, (String, i64)>,
+    /// potion name per slot (potion_contents), brewing stand BrewTime / Fuel
+    pub potions: BTreeMap<usize, String>,
+    pub brew: i64,
+    pub fuel: i64,
     pub lit: i64,
     pub lit_total: i64,
     pub cook: i64,
@@ -202,6 +206,8 @@ pub fn container(kind: Kind, bot: &Bot, p: [i32; 3]) -> Result<Option<ContState>
             let mut c = ContState { lit: j["lit"].as_i64().unwrap_or(0), lit_total: j["lit_total"].as_i64().unwrap_or(0), cook: j["cook"].as_i64().unwrap_or(0), cook_total: j["cook_total"].as_i64().unwrap_or(0), ..Default::default() };
             if let Some(m) = j["items"].as_object() { for (k, v) in m { c.items.insert(k.parse().unwrap_or(0), (strip(v[0].as_str().unwrap_or("")), v[1].as_i64().unwrap_or(0))); } }
             if let Some(m) = j["used"].as_object() { for (k, v) in m { c.used.insert(strip(k), v.as_i64().unwrap_or(0)); } }
+            if let Some(m) = j["potions"].as_object() { for (k, v) in m { c.potions.insert(k.parse().unwrap_or(0), v.as_str().unwrap_or("").to_string()); } }
+            c.brew = j["brew"].as_i64().unwrap_or(0); c.fuel = j["fuel"].as_i64().unwrap_or(0);
             Ok(Some(c))
         }
         Kind::Vanilla => {
@@ -214,6 +220,8 @@ pub fn container(kind: Kind, bot: &Bot, p: [i32; 3]) -> Result<Option<ContState>
                         let n = |k: &str| j[k].as_f64().unwrap_or(0.0) as i64;
                         let mut c = ContState { lit: n("lit_time_remaining"), lit_total: n("lit_total_time"), cook: n("cooking_time_spent"), cook_total: n("cooking_total_time"), ..Default::default() };
                         for it in j["Items"].as_array().into_iter().flatten() { c.items.insert(it["Slot"].as_f64().unwrap_or(0.0) as usize, (strip(it["id"].as_str().unwrap_or("")), it["count"].as_f64().unwrap_or(1.0) as i64)); }
+                        c.brew = n("BrewTime"); c.fuel = n("Fuel");
+                        for it in j["Items"].as_array().into_iter().flatten() { if let Some(p) = it["components"]["minecraft:potion_contents"]["potion"].as_str() { c.potions.insert(it["Slot"].as_f64().unwrap_or(0.0) as usize, strip(p)); } }
                         if let Some(m) = j["RecipesUsed"].as_object() { for (k, v) in m { c.used.insert(strip(k), v.as_f64().unwrap_or(0.0) as i64); } }
                         return Ok(Some(c));
                     }

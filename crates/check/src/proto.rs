@@ -77,6 +77,11 @@ pub struct Stack {
     pub damage: i32,
     /// (enchantment registry id, level)
     pub ench: Vec<(i32, i32)>,
+    /// repair_cost, custom name, potion registry id (-1 none), trim (material, pattern) holder ids (0 none)
+    pub repair: i32,
+    pub name: String,
+    pub potion: i32,
+    pub trim: (i32, i32),
 }
 
 impl Stack {
@@ -92,7 +97,7 @@ pub fn read_slot(r: &mut Reader) -> Result<Stack> {
     if count <= 0 { return Ok(Stack::default()); }
     let item = r.varint()?;
     let (add, rem) = (r.varint()?, r.varint()?);
-    let mut s = Stack { item, count, ..Default::default() };
+    let mut s = Stack { item, count, potion: -1, ..Default::default() };
     for _ in 0..add {
         let ty = r.varint()?;
         if ty == component_id("damage") { s.damage = r.varint()?; }
@@ -100,8 +105,17 @@ pub fn read_slot(r: &mut Reader) -> Result<Stack> {
             let n = r.varint()?;
             for _ in 0..n { let e = r.varint()?; let l = r.varint()?; s.ench.push((e, l)); }
         }
-        else if ty == component_id("repair_cost") || ty == component_id("max_damage") || ty == component_id("max_stack_size") { r.varint()?; }
-        else if ty == component_id("custom_name") || ty == component_id("item_name") { r.nbt()?; }
+        else if ty == component_id("repair_cost") { s.repair = r.varint()?; }
+        else if ty == component_id("max_damage") || ty == component_id("max_stack_size") { r.varint()?; }
+        else if ty == component_id("custom_name") { s.name = text_of(&r.nbt()?).plain; }
+        else if ty == component_id("item_name") { r.nbt()?; }
+        else if ty == component_id("potion_contents") {
+            if r.bool()? { s.potion = r.varint()?; }
+            if r.bool()? { r.i32()?; }
+            let n = r.varint()?; if n != 0 { bail!("potion custom effects unsupported"); }
+            if r.bool()? { r.str()?; }
+        }
+        else if ty == component_id("trim") { let m = r.varint()?; let p = r.varint()?; s.trim = (m, p); }
         else if ty == component_id("unbreakable") || ty == component_id("glider") {}
         else { bail!("unknown component type {ty} on {}", s.name()); }
     }

@@ -5,6 +5,7 @@
 //! come from public knowledge (Minecraft Wiki); see [`hardness`] and [`fuel`].
 
 mod combat;
+mod ench;
 mod fuel;
 mod hardness;
 mod loot;
@@ -15,6 +16,7 @@ pub use hardness::{hardness, requires_correct_tool};
 pub use loot::{EntityProps, LootContext};
 pub use combat::{armor_reduced, blast_resistance, difficulty_scaled, explosion_damage};
 pub use recipe::{CookKind, CraftResult, Ingredient, Recipe, Recipes};
+pub use ench::{offer_cost, EnchData, EnchDef, SmithKind, SmithRecipe};
 pub use tags::Tags;
 
 use basalt_data::{registries, BlockState};
@@ -66,6 +68,12 @@ pub struct ItemInfo {
     pub equip_slot: Option<String>,
     /// Default state of the block this item places (same name, plus a few seed/crop aliases).
     pub block: Option<u32>,
+    /// `enchantable.value` (0 = cannot be enchanted at a table).
+    pub enchantable: i32,
+    /// `repairable.items` (anvil material repair).
+    pub repairable: Option<recipe::Ingredient>,
+    /// `provides_trim_material` (name without namespace), e.g. `amethyst`.
+    pub trim_material: Option<String>,
 }
 
 pub struct GameData {
@@ -73,6 +81,7 @@ pub struct GameData {
     /// Index = item id.
     pub items: Vec<ItemInfo>,
     pub recipes: Recipes,
+    pub ench: EnchData,
     /// Loot tables by id without namespace ("blocks/stone", "entities/zombie").
     pub loot_tables: HashMap<String, Value>,
     fuels: HashMap<i32, u32>,
@@ -93,11 +102,12 @@ impl GameData {
         let mc = data_dir.join("data/minecraft");
         anyhow::ensure!(mc.is_dir(), "{} missing — run `cargo xtask extract-data`", mc.display());
         let tags = Tags::load(&mc.join("tags"))?;
-        let items = load_items(&data_dir.join("reports/minecraft/components/item"))?;
+        let items = load_items(&data_dir.join("reports/minecraft/components/item"), &tags)?;
         let loot_tables = loot::load_tables(&mc.join("loot_table"))?;
         let recipes = recipe::Recipes::load(&mc.join("recipe"), &tags)?;
         let fuels = fuel::build(&tags);
-        Ok(GameData { tags, items, recipes, loot_tables, fuels })
+        let ench = EnchData::load(&mc, &tags)?;
+        Ok(GameData { tags, items, recipes, ench, loot_tables, fuels })
     }
 
     pub fn item(&self, id: i32) -> Option<&ItemInfo> {
@@ -254,7 +264,7 @@ fn f32_of(v: &Value) -> Option<f32> {
     v.as_f64().map(|x| x as f32)
 }
 
-fn load_items(dir: &Path) -> anyhow::Result<Vec<ItemInfo>> {
+fn load_items(dir: &Path, tags: &Tags) -> anyhow::Result<Vec<ItemInfo>> {
     let aliases: HashMap<&str, &str> = [
         ("redstone", "redstone_wire"),
         ("string", "tripwire"),
@@ -340,6 +350,9 @@ fn load_items(dir: &Path) -> anyhow::Result<Vec<ItemInfo>> {
             toughness: tough,
             equip_slot: g("equippable")["slot"].as_str().map(str::to_string),
             block,
+            enchantable: g("enchantable")["value"].as_i64().unwrap_or(0) as i32,
+            trim_material: g("provides_trim_material").as_str().map(|m| m.trim_start_matches("minecraft:").to_string()),
+            repairable: g("repairable").get("items").and_then(|i| recipe::Ingredient::parse(i, tags)),
         });
     }
     Ok(out)

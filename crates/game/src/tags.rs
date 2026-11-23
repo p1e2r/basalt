@@ -52,7 +52,7 @@ impl Tags {
     }
 }
 
-fn load_kind(dir: &Path) -> anyhow::Result<HashMap<String, HashSet<String>>> {
+pub(crate) fn load_kind(dir: &Path) -> anyhow::Result<HashMap<String, HashSet<String>>> {
     let mut raw: HashMap<String, Vec<String>> = HashMap::new();
     if dir.is_dir() {
         walk(dir, dir, &mut raw)?;

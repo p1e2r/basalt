@@ -478,3 +478,26 @@ Measured from the vanilla client's own model parts / PoseStacks (exact fits; for
   the nether / 128 into the overworld; a new portal uses vanilla's PortalForcer spiral search. First run against vanilla:
   arrival x and y identical; the exit is centred across the portal (vanilla drops the across-axis offset).
 - Known gap (2026-11-24): exit-portal placement search. For the m8_portal_travel arena, vanilla built the new Nether portal at y 89 / z 38.5, Basalt at y 113 / z 43.5 Vanilla's own arrival position varies between runs on the shared world; arrival x/y/z are notes, travel time and dimension are compared.
+
+## Enchanting / anvil / grindstone / smithing / brewing (M10) — measured on vanilla 26.2 with scenarios m10_*
+- Menus (open_screen): enchantment (13, title `container.enchant`, 2 + 36 slots: item, lapis), anvil (8, `container.repair`, 3: two inputs, result), grindstone (15,
+  `container.grindstone_title`, 3), smithing (21, `container.upgrade`, 4: template, base, addition, result), brewing_stand (11, `container.brewing`, 5: bottles 0-2,
+  ingredient 3, blaze fuel 4). container_set_data right after the content: enchanting 10 props (0-2 level cost of the three buttons, 3 = seed & ~0xF (0 until the player's first
+  enchant), 4-6 clue enchantment registry id (-1 none), 7-9 clue level (-1)); anvil 1 (0 = cost, stays >= 40 with an empty result = "Too Expensive"); smithing 1 (0 = recipe
+  error); brewing 2 (0 = brew time left, 1 = fuel). Grindstone none.
+- Enchanting table: button costs are three independent rolls (base = rand(1..8) + power/2 + rand(0..power); slot0 = max(base/3,1), slot1 = base*2/3+1, slot2 = max(base, power*2); below
+  slot+1 -> 0). 15 bookshelves always offer 30 on the top button; corner positions of the 5x5 ring count; a shelf needs the block towards the table (block tags
+  enchantment_power_provider / enchantment_power_transmitter) and only two layers (table level and +1) count. Applying button i costs i+1 lapis and i+1 levels (the point total does
+  not change), requires levels >= the button cost, sets a new seed, plays block.enchantment_table.use.
+- Anvil (checked on 17 cases): cost = sum of both inputs' repair_cost + operations: material repair 1 per unit used (each unit restores max_damage/4), combining two damaged items 2 (+12% bonus),
+  each transferred enchantment `anvil_cost * level` (halved, min 1, when the right slot is an enchanted book), +1 per incompatible enchantment, rename +1. Result repair_cost =
+  max(left, right) * 2 + 1 except when the only operation was a rename (unchanged). Rename-only cost is capped at 39; cost >= 40 -> empty result, data prop still shows the cost.
+  Renaming to the empty string removes a custom name. Taking: levels -= cost, left slot removed, right slot reduced by the units used (or removed when combining).
+- Grindstone: one enchanted input -> same item without non-curse enchantments (enchanted_book -> book unless curses remain), repair_cost rebuilt as 2^curses - 1 (absent when none);
+  two same items -> combined durability, different items or plain undamaged single -> no result. Taking pays experience orbs: ceil(sum(min_cost(level))/2) + rand(that).
+- Smithing: recipes from ./data (smithing_transform / smithing_trim); trim material comes from the addition item's provides_trim_material, pattern from the recipe; same trim again -> no result.
+  Taking consumes one of each input.
+- Brewing: fuel blaze powder = 20 charges, a brew takes 400 ticks and uses one charge, converts every bottle and uses one ingredient. Recipe table (water, awkward, effect, long_, strong_,
+  corrupted, splash via gunpowder, lingering via dragon_breath) in game/station.rs, pinned by the unit test `brew_table_matches_vanilla_measurement` (9 bases x 20 ingredients measured by
+  m10_brew_table); notable: water + stone/slime_block/cobweb/breeze_rod = mundane, strong_swiftness + fermented spider eye = unchanged.
+- Stack wire components added: repair_cost (varint), custom_name (NBT text), stored_enchantments, potion_contents (bool+potion id, bool, varint 0, bool), trim (material id+1, pattern id+1).

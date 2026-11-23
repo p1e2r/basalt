@@ -125,7 +125,14 @@ Read NOTES.md for verified packet formats.
       client: sky-less dimensions (fog colour background, ambient light, dimension fog), client scenario `nether`.
       Todo: End, structures (fortress, bastion), nether mobs, portal POI files (Basalt keeps basalt-portals.json),
       portal sounds/nausea in the client, entity travel through portals, the overworld region folder is still `region/`.
-- [ ] M9 redstone  - [ ] M10 enchant/anvil/brewing/smithing/XP  - [ ] M11 villagers/raids/AI
+- [ ] M9 redstone
+- [~] M10 enchant/anvil/grindstone/smithing/brewing (server game/{station,stackx}.rs + container.rs Kind::{Enchant,Anvil,Grind,Smith,Brewing}, crates/game ench.rs data-driven
+      enchantment rules; basalt-client screens). Differential vs vanilla (2026-11-24): m10_menus, m10_enchant_table, m10_anvil_cases (17 cases, results+cost identical), m10_anvil_take,
+      m10_grindstone, m10_smithing, m10_brewing (400-tick brew, fuel 20 -> 19) all match; potion table measured by m10_brew_table (vanilla only) and pinned by a unit test.
+      Stack now carries repair cost / custom name / stored enchantments / potion / trim (stackx.rs); `/give` accepts item components (damage, repair_cost, custom_name,
+      enchantments, stored_enchantments, potion_contents). Todo: enchant result distribution statistics, anvil item-name default (rename to the item's own name), real-client
+      live test of the new screens, brewing stand persistence scenario, /setblock block-entity NBT.
+- [ ] M11 villagers/raids/AI
 - [ ] M12 bosses/endgame  - [ ] M13 commands/datapacks/advancements/scoreboards
 - [ ] M14 client polish
 - [~] M16 lossless vanilla worlds + admin files (admin done: server.properties / ops.json / whitelist.json / banned-*.json in vanilla formats, op levels from commands.json, op/deop/whitelist/ban/ban-ip/pardon/pardon-ip/banlist/kick, login refusals; no ops.json = everyone op; scenario m2_admin; level files done: vanilla overworld region path, level.dat + data/minecraft/*.dat and players/data/<uuid>.dat read and written keeping unknown tags — the official 26.2 server opens Basalt's saves (blocks, seed, player position/inventory/enchantments/XP checked), scenario m16_vanilla_files; todo: entities/ and poi/ folders, block/fluid ticks, structures in chunks)  - [ ] M17 performance  - [~] M18 tests/CI/docs/plugins

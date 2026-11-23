@@ -8,6 +8,7 @@ pub mod m3;
 pub mod m4;
 pub mod m5;
 pub mod m6;
+pub mod m10;
 pub mod m8;
 pub mod util;
 
@@ -90,4 +91,12 @@ pub static ALL: &[Spec] = &[
     spec!("M8", "m8_portal_frames", m8::portal_frames, Flat, Both, true, "obsidian frames: fire lights 2x3..21-wide frames (x/z axis, corners optional), not 22-wide or incomplete ones; flint and steel; breaking the frame removes the portal"),
     spec!("M8", "m8_portal_travel", m8::portal_travel, Flat, Both, true, "standing in a portal: survival ~80 ticks to x/8 z/8 with a new exit portal, no bounce-back while standing, return to the same portal; creative at once"),
     spec!("M8", "m8_nether_persistence", m8::nether_persistence, FlatOnDisk, BasaltOnly, false, "player + block in the nether survive a restart; nether saved in world/dimensions/minecraft/the_nether/region"),
+    spec!("M10", "m10_menus", m10::menus, Flat, Both, true, "enchanting table / anvil / grindstone / smithing / brewing stand: menu type, title, slot count, initial container_set_data"),
+    spec!("M10", "m10_enchant_table", m10::enchant_table, Flat, Both, true, "bookshelf power (gap rule, corners, layers), offered costs, applying costs levels + lapis, seed renewal"),
+    spec!("M10", "m10_anvil_cases", m10::anvil_cases, Flat, Both, true, "anvil result + displayed cost: rename, repair, combine, books, conflicts, prior-work penalty, too expensive"),
+    spec!("M10", "m10_anvil_take", m10::anvil_take, Flat, Both, true, "taking the anvil result: levels spent, material units used, not affordable"),
+    spec!("M10", "m10_grindstone", m10::grindstone_cases, Flat, Both, true, "grindstone result for single/double inputs, curses kept, books, mismatched items"),
+    spec!("M10", "m10_smithing", m10::smithing_cases, Flat, Both, true, "smithing table: netherite upgrade, armor trims, invalid combos, consuming inputs"),
+    spec!("M10", "m10_brewing", m10::brewing, Flat, Both, true, "brewing stand: window, blaze fuel 20 -> 19, 400-tick brew, awkward potions"),
+    spec!("M10", "m10_brew_table", m10::brew_table, Flat, VanillaOnly, false, "measurement tool (vanilla only): 9 bases x 20 ingredients brewed in 180 parallel stands; the server table is pinned by station.rs unit test brew_table_matches_vanilla_measurement"),
 ];

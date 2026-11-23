@@ -14,7 +14,7 @@ use winit::keyboard::KeyCode;
 const W: u32 = 854;
 const H: u32 = 480;
 
-pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer", "falling_block", "sprint", "xp_bar", "titles", "nether"];
+pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer", "falling_block", "sprint", "xp_bar", "titles", "nether", "enchanting_screen", "anvil_screen", "grindstone_screen", "smithing_screen", "brewing_screen"];
 
 enum Outcome { Pass(String), Skip(String) }
 
@@ -40,7 +40,7 @@ pub fn run(args: &Args, assets: Arc<Assets>, name: &str) -> Result<bool> {
         let t = Instant::now();
         let r = match s {
             "edge_chunks" => edge_chunks(&ctx), "inventory" => inventory(&ctx), "crafting_table" => crafting_table(&ctx), "death" => death(&ctx),
-            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "falling_block" => falling_block(&ctx), "sprint" => sprint(&ctx), "xp_bar" => xp_bar(&ctx), "titles" => titles(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx), "nether" => nether(&ctx),
+            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "falling_block" => falling_block(&ctx), "sprint" => sprint(&ctx), "xp_bar" => xp_bar(&ctx), "titles" => titles(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx), "nether" => nether(&ctx), "enchanting_screen" => enchanting_screen(&ctx), "anvil_screen" => anvil_screen(&ctx), "grindstone_screen" => grindstone_screen(&ctx), "smithing_screen" => smithing_screen(&ctx), "brewing_screen" => brewing_screen(&ctx),
             other => Err(anyhow!("unknown scenario {other} (known: {})", ALL.join(", "))),
         };
         let secs = t.elapsed().as_secs_f32();
@@ -1242,4 +1242,195 @@ fn titles(c: &Ctx) -> Result<Outcome> {
     if gold < 20 { bail!("title not drawn in gold ({gold} px)"); }
     if !wait_until(&mut g, 3.0, |g| g.title.2 < 0)? { bail!("title did not time out after times 0 20 0"); }
     Ok(Outcome::Pass(format!("title drawn ({mid} px), gone after its stay time")))
+}
+
+// ---------------------------------------------------------------- crafting stations (enchanting, anvil, grindstone, smithing, brewing)
+// These open the screen through an injected open_screen + container_set_content + container_set_data
+// (no server needed: the server side of the stations is tested by the check harness) and read the packets the
+// client queues back through a private channel.
+
+type Sent = tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>;
+
+fn stack(item: &str, n: i32) -> ItemStack { ItemStack { count: n, item: item_id(item), ..Default::default() } }
+
+/// Client with no connection showing `menu`: container contents `cs` (slot, stack), the player's xp level, and set_data props.
+fn station(c: &Ctx, short: &str, menu: &str, title: &str, cs: &[(usize, ItemStack)], props: &[(i16, i16)], level: i32) -> Result<(Game, Sent)> {
+    use crate::net::Event;
+    let mut g = c.game_at(short, None)?;
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    g.out = tx;
+    g.enchantments = ["protection", "sharpness", "unbreaking", "efficiency"].iter().map(|n| format!("minecraft:{n}")).collect();
+    g.player.gamemode = 0;
+    g.handle(Event::Experience { progress: 0.0, level, total: 0 });
+    let id = basalt_data::registry_id(basalt_data::registries::MENU, menu).ok_or_else(|| anyhow!("no menu {menu}"))?;
+    g.handle(Event::OpenScreen { window: 7, menu: id, title: title.to_string() });
+    let kind = container(&g).ok_or_else(|| anyhow!("screen did not open"))?.kind;
+    if kind == Kind::Other { bail!("menu {menu} fell back to Kind::Other"); }
+    let mut items = vec![ItemStack::default(); kind.slot_count()];
+    for (i, s) in cs { items[*i] = s.clone(); }
+    g.handle(Event::Content { window: 7, state: 1, items, carried: ItemStack::default() });
+    for &(i, v) in props { g.handle(Event::ContainerData { window: 7, id: i, value: v }); }
+    wait(&mut g, 0.3)?;
+    Ok((g, rx))
+}
+fn drain(rx: &mut Sent) -> Vec<Vec<u8>> { let mut v = Vec::new(); while let Ok(b) = rx.try_recv() { v.push(b); } v }
+fn packets_named(rx: &mut Sent, name: &str) -> Vec<Vec<u8>> {
+    drain(rx).into_iter().filter(|b| basalt_protocol::Reader::new(b).varint().map(|id| basalt_protocol::ids::play::serverbound::name(id).ends_with(name)).unwrap_or(false)).collect()
+}
+fn region_of(g: &Game, kind: Kind, x: f32, y: f32, w: f32, h: f32) -> (i32, i32, i32, i32) {
+    let (s, (ox, oy)) = (g.gui_scale(), g.container_origin(kind));
+    ((ox + x * s) as i32, (oy + y * s) as i32, (ox + (x + w) * s) as i32, (oy + (y + h) * s) as i32)
+}
+
+fn enchanting_screen(c: &Ctx) -> Result<Outcome> {
+    let kind = Kind::Enchant;
+    let cs = [(0, stack("diamond_sword", 1)), (1, stack("lapis_lazuli", 2))];
+    // reference: no offers
+    let (mut g0, _) = station(c, "en0", "enchantment", "Enchant", &cs, &[], 30)?;
+    let idle = capture(&mut g0)?; save(&g0, &idle, "enchant_idle");
+    // offers: 5 / 15 / 30 levels with clues sharpness II, unbreaking I, efficiency III; the player has 20 levels and 2 lapis
+    let props = [(0, 5), (1, 15), (2, 30), (3, 1234), (4, 1), (5, 2), (6, 3), (7, 2), (8, 1), (9, 3)];
+    let (mut g, mut rx) = station(c, "en1", "enchantment", "Enchant", &cs, &props, 20)?;
+    let img = capture(&mut g)?; save(&g, &img, "enchant_offers");
+    for i in 0..3 {
+        let (x0, y0, x1, y1) = region_of(&g, kind, 60.0, 14.0 + 19.0 * i as f32, 108.0, 19.0);
+        if diff_count(&idle, &img, x0, y0, x1, y1) < 100 { bail!("offer button {i} not drawn differently from the idle table"); }
+    }
+    // hover tooltip
+    let (x, y) = { let (a, b, d, e) = region_of(&g, kind, 60.0, 14.0, 108.0, 19.0); ((a + d) / 2, (b + e) / 2) };
+    g.mouse_move(x as f32, y as f32); step(&mut g)?;
+    let tip = capture(&mut g)?; save(&g, &tip, "enchant_tooltip");
+    if diff_count(&img, &tip, x + 8, y - 40, x + 260, y + 10) < 200 { bail!("no tooltip while hovering an offer"); }
+    // click: button 1 is affordable (15 levels... 20 >= 15, 2 lapis >= 2), button 2 is not (30 levels, 3 lapis), button 0 is
+    let _ = drain(&mut rx);
+    for i in [0usize, 1, 2] { let (a, b, d, e) = region_of(&g, kind, 60.0, 14.0 + 19.0 * i as f32, 108.0, 19.0); click_at(&mut g, ((a + d) / 2) as f32, ((b + e) / 2) as f32, 0)?; }
+    let sent: Vec<(i32, i32)> = packets_named(&mut rx, "container_button_click").iter().map(|b| { let mut r = basalt_protocol::Reader::new(b); r.varint().unwrap(); (r.varint().unwrap(), r.varint().unwrap()) }).collect();
+    if sent != vec![(7, 0), (7, 1)] { bail!("button click packets (window, button) = {sent:?}, expected [(7,0),(7,1)] (button 2 needs 30 levels and 3 lapis)"); }
+    Ok(Outcome::Pass("enchanting screen: three offer buttons with level sprites + cost, tooltip on hover, enabled buttons send container_button_click (disabled ones do not)".into()))
+}
+
+fn anvil_screen(c: &Ctx) -> Result<Outcome> {
+    let kind = Kind::Anvil;
+    let (mut g0, _) = station(c, "an0", "anvil", "Repair & Name", &[], &[], 10)?;
+    let idle = capture(&mut g0)?; save(&g0, &idle, "anvil_idle");
+    let cs = [(0, stack("diamond_sword", 1)), (1, stack("diamond", 1)), (2, stack("diamond_sword", 1))];
+    let (mut g, mut rx) = station(c, "an1", "anvil", "Repair & Name", &cs, &[(0, 7)], 10)?;
+    let img = capture(&mut g)?; save(&g, &img, "anvil_cost");
+    // the text field shows the item name, the cost line is drawn, the field is editable
+    if container(&g).unwrap().text != crate::lang::item_name(item_id("diamond_sword")) { bail!("name field = {:?}", container(&g).unwrap().text); }
+    let (x0, y0, x1, y1) = region_of(&g, kind, 100.0, 66.0, 70.0, 14.0);
+    if diff_count(&idle, &img, x0, y0, x1, y1) < 40 { bail!("cost line not drawn"); }
+    // typing renames: backspace the old name away, type a new one
+    let _ = drain(&mut rx);
+    for _ in 0..30 { tap(&mut g, KeyCode::Backspace, None)?; }
+    type_text(&mut g, "Excalibur")?;
+    if container(&g).unwrap().text != "Excalibur" { bail!("field text after typing = {:?}", container(&g).unwrap().text); }
+    let names: Vec<String> = packets_named(&mut rx, "rename_item").iter().map(|b| { let mut r = basalt_protocol::Reader::new(b); r.varint().unwrap(); r.str().unwrap() }).collect();
+    if names.last().map(|s| s.as_str()) != Some("Excalibur") || names.len() < 9 { bail!("rename_item packets: {names:?}"); }
+    // typing must not have closed the screen (E would close it when the field is not focused)
+    type_text(&mut g, "e")?;
+    tap(&mut g, KeyCode::KeyE, Some("e"))?;
+    if container(&g).is_none() { bail!("E closed the screen while typing in the name field"); }
+    let typed = capture(&mut g)?; save(&g, &typed, "anvil_typed");
+    // too expensive: the cost line changes to a message
+    g.handle(crate::net::Event::ContainerData { window: 7, id: 0, value: 45 });
+    wait(&mut g, 0.2)?;
+    let exp = capture(&mut g)?; save(&g, &exp, "anvil_expensive");
+    if diff_count(&img, &exp, x0 - 40, y0, x1, y1) < 40 { bail!("too-expensive state not drawn differently"); }
+    // not editable without an input item: keys do not type
+    let (mut g2, mut rx2) = station(c, "an2", "anvil", "Repair & Name", &[], &[], 10)?;
+    type_text(&mut g2, "abc")?;
+    if !container(&g2).unwrap().text.is_empty() || !packets_named(&mut rx2, "rename_item").is_empty() { bail!("typed into a disabled name field"); }
+    // clicking the result sends a container_click for slot 2
+    let _ = drain(&mut rx);
+    let p = slot_center(&g, kind, 2); click_at(&mut g, p.0, p.1, 0)?;
+    let clicks = packets_named(&mut rx, "container_click");
+    let slot = clicks.first().map(|b| { let mut r = basalt_protocol::Reader::new(b); r.varint().unwrap(); r.varint().unwrap(); r.varint().unwrap(); r.i16().unwrap() });
+    if slot != Some(2) { bail!("result click sent slot {slot:?}"); }
+    Ok(Outcome::Pass("anvil screen: name field (default item name, typing sends rename_item, E does not close), cost / too-expensive line, disabled field without input, result click".into()))
+}
+
+fn grindstone_screen(c: &Ctx) -> Result<Outcome> {
+    let kind = Kind::Grindstone;
+    let (mut g0, _) = station(c, "gr0", "grindstone", "Repair & Disenchant", &[], &[], 0)?;
+    let idle = capture(&mut g0)?; save(&g0, &idle, "grindstone_idle");
+    // inputs without a result: the error cross
+    let (mut ge, _) = station(c, "gr1", "grindstone", "Repair & Disenchant", &[(0, stack("diamond_sword", 1))], &[], 0)?;
+    let err = capture(&mut ge)?; save(&ge, &err, "grindstone_error");
+    let (x0, y0, x1, y1) = region_of(&ge, kind, 92.0, 31.0, 28.0, 21.0);
+    if diff_count(&idle, &err, x0, y0, x1, y1) < 100 { bail!("error sprite not drawn"); }
+    // with a result: no cross, items drawn, the result is clicked
+    let cs = [(0, stack("diamond_sword", 1)), (2, stack("diamond_sword", 1))];
+    let (mut g, mut rx) = station(c, "gr2", "grindstone", "Repair & Disenchant", &cs, &[], 0)?;
+    let img = capture(&mut g)?; save(&g, &img, "grindstone_result");
+    let ((a0, b0, a1, b1), (r0, s0, r1, s1)) = (region_of(&g, kind, 129.0, 34.0, 16.0, 16.0), (x0, y0, x1, y1));
+    if diff_count(&idle, &img, a0, b0, a1, b1) < 100 { bail!("result item not drawn"); }
+    if diff_count(&idle, &img, r0 + 2, s0 + 2, r1 - 2, s1 - 2) > 20 { bail!("error sprite drawn although there is a result"); }
+    let _ = drain(&mut rx);
+    g.key(KeyCode::ShiftLeft, true, None);
+    let p = slot_center(&g, kind, 2); click_at(&mut g, p.0, p.1, 0)?;
+    g.key(KeyCode::ShiftLeft, false, None);
+    let clicks = packets_named(&mut rx, "container_click");
+    let first = clicks.first().map(|b| { let mut r = basalt_protocol::Reader::new(b); r.varint().unwrap(); r.varint().unwrap(); r.varint().unwrap(); (r.i16().unwrap(), r.i8().unwrap(), r.varint().unwrap()) });
+    if first != Some((2, 0, 1)) { bail!("shift-click on the result sent (slot, button, mode) = {first:?}"); }
+    Ok(Outcome::Pass("grindstone screen: slots, error cross without a result, result item, shift-click sends the click for slot 2".into()))
+}
+
+fn smithing_screen(c: &Ctx) -> Result<Outcome> {
+    let kind = Kind::Smithing;
+    let (mut g0, _) = station(c, "sm0", "smithing", "Upgrade Gear", &[], &[], 0)?;
+    let idle = capture(&mut g0)?; save(&g0, &idle, "smithing_idle");
+    let cs = [(0, stack("netherite_upgrade_smithing_template", 1)), (1, stack("diamond_sword", 1)), (2, stack("netherite_ingot", 1))];
+    let (mut ge, _) = station(c, "sm1", "smithing", "Upgrade Gear", &cs, &[], 0)?;
+    let err = capture(&mut ge)?; save(&ge, &err, "smithing_error");
+    let (x0, y0, x1, y1) = region_of(&ge, kind, 65.0, 46.0, 28.0, 21.0);
+    if diff_count(&idle, &err, x0, y0, x1, y1) < 100 { bail!("error sprite not drawn"); }
+    let mut cs2 = cs.to_vec(); cs2.push((3, stack("netherite_sword", 1)));
+    let (mut g, mut rx) = station(c, "sm2", "smithing", "Upgrade Gear", &cs2, &[], 0)?;
+    let img = capture(&mut g)?; save(&g, &img, "smithing_result");
+    let (a0, b0, a1, b1) = region_of(&g, kind, 98.0, 48.0, 16.0, 16.0);
+    if diff_count(&idle, &img, a0, b0, a1, b1) < 100 { bail!("result item not drawn"); }
+    if diff_count(&err, &img, x0 + 2, y0 + 2, x1 - 2, y1 - 2) < 20 { bail!("error cross still drawn with a result"); }
+    // taking the result: left click on slot 3 (take-only, the server decides, nothing predicted)
+    let _ = drain(&mut rx);
+    let p = slot_center(&g, kind, 3); click_at(&mut g, p.0, p.1, 0)?;
+    let slot = packets_named(&mut rx, "container_click").first().map(|b| { let mut r = basalt_protocol::Reader::new(b); r.varint().unwrap(); r.varint().unwrap(); r.varint().unwrap(); r.i16().unwrap() });
+    if slot != Some(3) { bail!("result click sent slot {slot:?}"); }
+    if container(&g).unwrap().slots[3].count != 1 { bail!("result slot was changed locally"); }
+    Ok(Outcome::Pass("smithing screen: four slots (template/base/addition/result), ghost icons, error cross, result take-only click".into()))
+}
+
+fn brewing_screen(c: &Ctx) -> Result<Outcome> {
+    let kind = Kind::Brewing;
+    let cs = [(0, stack("potion", 1)), (1, stack("potion", 1)), (2, stack("potion", 1)), (3, stack("nether_wart", 1)), (4, stack("blaze_powder", 1))];
+    let (mut g0, _) = station(c, "br0", "brewing_stand", "Brewing Stand", &cs, &[], 0)?;
+    let idle = capture(&mut g0)?; save(&g0, &idle, "brewing_idle");
+    let (mut g, mut rx) = station(c, "br1", "brewing_stand", "Brewing Stand", &cs, &[(0, 300), (1, 15)], 0)?;
+    let img = capture(&mut g)?; save(&g, &img, "brewing_active");
+    let region = |x, y, w, h| region_of(&g, kind, x, y, w, h);
+    let (f0, f1, f2, f3) = region(60.0, 44.0, 18.0, 4.0);
+    let fuel = diff_count(&idle, &img, f0, f1, f2, f3);
+    if fuel < 20 { bail!("fuel bar not drawn ({fuel} px)"); }
+    let (a0, a1, a2, a3) = region(97.0, 16.0, 9.0, 28.0);
+    let arrow = diff_count(&idle, &img, a0, a1, a2, a3);
+    if arrow < 20 { bail!("brew progress arrow not drawn ({arrow} px)"); }
+    let (b0, b1, b2, b3) = region(63.0, 14.0, 12.0, 29.0);
+    if diff_count(&idle, &img, b0, b1, b2, b3) < 5 { bail!("bubbles not drawn"); }
+    // the arrow grows as the brew time counts down
+    g.handle(crate::net::Event::ContainerData { window: 7, id: 0, value: 100 });
+    wait(&mut g, 0.2)?;
+    let img2 = capture(&mut g)?; save(&g, &img2, "brewing_late");
+    let arrow2 = diff_count(&idle, &img2, a0, a1, a2, a3);
+    if arrow2 <= arrow { bail!("progress arrow did not grow: {arrow} -> {arrow2}"); }
+    // fuel 0: the bar disappears again
+    g.handle(crate::net::Event::ContainerData { window: 7, id: 1, value: 0 });
+    wait(&mut g, 0.2)?;
+    let img3 = capture(&mut g)?;
+    if diff_count(&idle, &img3, f0, f1, f2, f3) > 4 { bail!("fuel bar still drawn with no fuel"); }
+    // clicking the fuel slot with blaze powder on the cursor goes through the normal click path
+    let _ = drain(&mut rx);
+    let p = slot_center(&g, kind, 4); click_at(&mut g, p.0, p.1, 0)?;
+    let slot = packets_named(&mut rx, "container_click").first().map(|b| { let mut r = basalt_protocol::Reader::new(b); r.varint().unwrap(); r.varint().unwrap(); r.varint().unwrap(); r.i16().unwrap() });
+    if slot != Some(4) { bail!("fuel slot click sent slot {slot:?}"); }
+    Ok(Outcome::Pass(format!("brewing screen: fuel bar ({fuel} px), progress arrow {arrow}->{arrow2} px, bubbles, fuel slot click")))
 }

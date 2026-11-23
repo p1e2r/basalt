@@ -20,6 +20,8 @@ mod playerdat;
 mod portal;
 mod randomtick;
 mod spawn;
+mod stackx;
+mod station;
 mod track;
 mod xporb;
 
@@ -43,10 +45,10 @@ pub enum ToGame {
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Debug)]
-pub struct Stack { pub item: i32, pub count: i32, pub damage: i32, /// (enchantment registry id, level); level 0 = unused
-    pub ench: [(u16, u8); 3] }
+pub struct Stack { pub item: i32, pub count: i32, pub damage: i32, /// enchantments + anvil/brewing/smithing components (see stackx.rs)
+    pub ench: stackx::Ench }
 
-pub const NO_ENCH: [(u16, u8); 3] = [(0, 0); 3];
+pub use stackx::NO_ENCH;
 
 struct Player {
     eid: i32,
@@ -98,6 +100,7 @@ struct Player {
     seen_items: HashSet<i32>,
     /// container slots of the open container window (mirror of the block entity, for send_window)
     cont_items: Vec<Stack>,
+    st: station::St,
     /// furnace properties last sent to this player (container_set_data diffing)
     data_sent: [i32; 4],
     /// experience points (total)
@@ -259,7 +262,7 @@ impl Game {
     }
     fn save_player(&self, p: &Player) {
         let Some(d) = &self.dir else { return };
-        let inv: Vec<_> = p.inv.iter().enumerate().filter(|(_, s)| s.count > 0).map(|(i, s)| serde_json::json!([i, s.item, s.count, s.damage, s.ench.iter().filter(|e| e.1 > 0).map(|e| [e.0 as u32, e.1 as u32]).collect::<Vec<_>>()])).collect();
+        let inv: Vec<_> = p.inv.iter().enumerate().filter(|(_, s)| s.count > 0).map(|(i, s)| serde_json::json!([i, s.item, s.count, s.damage, s.ench.iter().filter(|e| e.1 > 0).map(|e| [e.0 as u32, e.1 as u32]).collect::<Vec<_>>(), stackx_json(&s.ench)])).collect();
         let j = serde_json::json!({ "pos": p.pos, "yaw": p.yaw, "pitch": p.pitch, "gamemode": p.gamemode, "held": p.held, "inv": inv, "flying": p.flying,
             "xp": p.xp, "xp_level": p.xp_level, "xp_progress": p.xp_progress, "health": p.health, "food": p.food, "saturation": p.saturation, "dead": p.dead, "air": p.air, "fire": p.fire_ticks,
             "effects": p.effects.iter().map(|(id, (a, t))| [*id as i64, *a as i64, *t as i64]).collect::<Vec<_>>(),
@@ -293,7 +296,8 @@ impl Game {
         for e in v["effects"].as_array().into_iter().flatten() { if let (Some(id), Some(a), Some(t)) = (e[0].as_i64(), e[1].as_i64(), e[2].as_i64()) { p.effects.insert(id as i32, (a as u8, t as i32)); } }
         for e in v["inv"].as_array().into_iter().flatten() {
             if let (Some(i), Some(item), Some(count)) = (e[0].as_u64(), e[1].as_i64(), e[2].as_i64()) { if (i as usize) < 46 { let mut ench = NO_ENCH;
-                for (k, en) in e[4].as_array().into_iter().flatten().take(3).enumerate() { ench[k] = (en[0].as_u64().unwrap_or(0) as u16, en[1].as_u64().unwrap_or(0) as u8); }
+                for (k, en) in e[4].as_array().into_iter().flatten().take(stackx::MAX_ENCH).enumerate() { ench[k] = (en[0].as_u64().unwrap_or(0) as u16, en[1].as_u64().unwrap_or(0) as u8); }
+                stackx_from_json(&mut ench, &e[5]);
                 p.inv[i as usize] = Stack { item: item as i32, count: count as i32, damage: e[3].as_i64().unwrap_or(0) as i32, ench }; } }
         }
     }
@@ -484,7 +488,7 @@ impl Game {
             last_sent_pos: ([0.0; 3], 0.0, 0.0), sneaking: false,
             dead: false, health: 20.0, food: 20, saturation: 5.0, exhaustion: 0.0, fall_start: None, hurt_cooldown: 0, regen_timer: 0,
             using: None, sprinting: false, jump_held: false, dig_start: None, delayed_dig: None, cursor: Stack::default(), craft_result: Stack::default(),
-            table_grid: [Stack::default(); 9], window: inv::Window::Inventory, next_window: 0, state_id: 0, drag: (0, Vec::new()), seen_items: HashSet::new(), cont_items: Vec::new(), data_sent: [-1; 4], xp_level: 0, xp_progress: 0.0, xp: 0,
+            table_grid: [Stack::default(); 9], window: inv::Window::Inventory, next_window: 0, state_id: 0, drag: (0, Vec::new()), seen_items: HashSet::new(), cont_items: Vec::new(), st: station::St::default(), data_sent: [-1; 4], xp_level: 0, xp_progress: 0.0, xp: 0,
             air: env::MAX_AIR, fire_ticks: 0, ticks_frozen: 0, fire_exposure: 0, effects: HashMap::new(), prev_tick_pos: [0.0; 3], seen: HashSet::new(), last_attack_tick: 0, portal_ticks: 0, portal_cooldown: 0, portal_entry: None,
         };
         self.load_player(&mut p);
@@ -623,6 +627,8 @@ impl Game {
             sb::PLAYER_COMMAND => { let _id = r.varint()?; let action = r.varint()?; if let Some(p) = self.players.get_mut(&eid) { match action { 1 => p.sprinting = true, 2 => p.sprinting = false, _ => {} } } }
             sb::PLAYER_INPUT => { let f = r.u8()?; if let Some(p) = self.players.get_mut(&eid) { p.sneaking = f & 32 != 0; p.jump_held = f & 16 != 0; p.sprinting = p.sprinting || f & 64 != 0 && f & 1 != 0; if f & 1 == 0 { p.sprinting = false; } } }
             sb::CONTAINER_CLICK => { self.container_click(eid, &mut r)?; }
+            sb::CONTAINER_BUTTON_CLICK => { let w = r.varint()?; let b = r.varint()?; if self.players.get(&eid).map(|p| p.window_id()) == Some(w) { self.station_button(eid, b); } }
+            sb::RENAME_ITEM => { let n = r.str()?; self.station_rename(eid, n); }
             sb::CONTAINER_CLOSE => { let id = r.varint()?; if self.players.get(&eid).map(|p| p.window_id()) == Some(id) { self.close_window(eid); } }
             sb::CLIENT_COMMAND => { if r.varint()? == 0 { self.respawn(eid); } }
             sb::SET_CARRIED_ITEM => { let s = r.i16()?; if let Some(p) = self.players.get_mut(&eid) { if (0..9).contains(&s) { if p.held != s as usize { p.last_attack_tick = self.tick; } p.held = s as usize; } } }
@@ -821,6 +827,14 @@ impl Game {
         if p.dead { return; }
         let clicked_name = BlockState(self.world.get_block(b[0], b[1], b[2])).name();
         if clicked_name == "crafting_table" && !p.sneaking && p.gamemode != 3 { self.open_crafting_table(eid); return; }
+        if let Some(kind) = container::Kind::station_of_block(clicked_name) {
+            if p.gamemode != 3 && !(p.sneaking && p.inv[36 + p.held].count > 0) {
+                let eye = [p.pos[0], p.pos[1] + 1.62, p.pos[2]];
+                let d2: f64 = (0..3).map(|i| { let lo = b[i] as f64; let c = eye[i].clamp(lo, lo + 1.0); (eye[i] - c).powi(2) }).sum();
+                if d2 <= 5.5 * 5.5 { self.open_station(eid, b, kind); }
+                return;
+            }
+        }
         if container::Kind::of_block(clicked_name).is_some() && p.gamemode != 3 && !(p.sneaking && p.inv[36 + p.held].count > 0) {
             // reach: distance from the eye to the block's box <= 4.5 + 1.0 (vanilla's use-on tolerance)
             let eye = [p.pos[0], p.pos[1] + 1.62, p.pos[2]];
@@ -967,13 +981,36 @@ impl Game {
 fn damage_component() -> i32 { registry_id(reg::DATA_COMPONENT_TYPE, "damage").unwrap_or(3) }
 fn ench_component() -> i32 { registry_id(reg::DATA_COMPONENT_TYPE, "enchantments").unwrap_or(13) }
 
+fn comp_id(name: &str) -> i32 { registry_id(reg::DATA_COMPONENT_TYPE, name).unwrap_or(-1) }
+
+/// Extra stack components as JSON for player files (None when there are none).
+fn stackx_json(e: &stackx::Ench) -> serde_json::Value {
+    if !e.has_extras() && !e.stored { return serde_json::Value::Null; }
+    serde_json::json!({ "r": e.repair, "n": e.name_str(), "s": e.stored, "p": e.potion, "tm": e.trim_mat, "tp": e.trim_pat })
+}
+fn stackx_from_json(e: &mut stackx::Ench, v: &serde_json::Value) {
+    if v.is_null() { return; }
+    e.repair = v["r"].as_i64().unwrap_or(0) as i32;
+    e.name = v["n"].as_str().map(stackx::intern).unwrap_or(0);
+    e.stored = v["s"].as_bool().unwrap_or(false);
+    e.potion = v["p"].as_u64().unwrap_or(0) as u8; e.trim_mat = v["tm"].as_u64().unwrap_or(0) as u8; e.trim_pat = v["tp"].as_u64().unwrap_or(0) as u8;
+}
+
 pub(crate) fn write_slot(w: &mut Writer, s: Stack) {
     if s.count <= 0 { w.varint(0); return; }
     w.varint(s.count).varint(s.item);
-    let ench: Vec<(u16, u8)> = s.ench.iter().copied().filter(|e| e.1 > 0).collect();
-    w.varint((s.damage > 0) as i32 + (!ench.is_empty()) as i32).varint(0);
+    let ench: Vec<(u16, u8)> = s.ench.list();
+    let x = &s.ench;
+    let n = (s.damage > 0) as i32 + (!ench.is_empty()) as i32 + (x.repair != 0) as i32 + (x.name != 0) as i32 + (x.potion != 0) as i32 + (x.trim_mat != 0) as i32;
+    w.varint(n).varint(0);
     if s.damage > 0 { w.varint(damage_component()).varint(s.damage); }
-    if !ench.is_empty() { w.varint(ench_component()).varint(ench.len() as i32); for (e, l) in ench { w.varint(e as i32).varint(l as i32); } }
+    if !ench.is_empty() { w.varint(if x.stored { comp_id("stored_enchantments") } else { ench_component() }).varint(ench.len() as i32); for (e, l) in ench { w.varint(e as i32).varint(l as i32); } }
+    if x.repair != 0 { w.varint(comp_id("repair_cost")).varint(x.repair); }
+    if let Some(name) = x.name_str() { w.varint(comp_id("custom_name")).nbt(&text::plain(&name)); }
+    // potion_contents: Optional<potion holder> (bool + registry id), custom colour (bool), custom effects (varint count), custom name (bool)
+    if x.potion != 0 { w.varint(comp_id("potion_contents")).bool(true).varint(x.potion as i32 - 1).bool(false).varint(0).bool(false); }
+    // trim: material holder (id + 1), pattern holder (id + 1)
+    if x.trim_mat != 0 { w.varint(comp_id("trim")).varint(x.trim_mat as i32).varint(x.trim_pat as i32); }
 }
 
 /// Creative / untrusted slot: count, item, then length-prefixed component patches (ignored).
@@ -988,7 +1025,7 @@ fn read_slot(r: &mut Reader) -> Result<Stack> {
         if ty == damage_component() { damage = Reader::new(body).varint().unwrap_or(0).max(0); }
         if ty == ench_component() {
             let mut b = Reader::new(body); let n = b.varint().unwrap_or(0);
-            for i in 0..n.clamp(0, 3) as usize { if let (Ok(e), Ok(l)) = (b.varint(), b.varint()) { ench[i] = (e as u16, l.clamp(0, 255) as u8); } }
+            for i in 0..n.clamp(0, stackx::MAX_ENCH as i32) as usize { if let (Ok(e), Ok(l)) = (b.varint(), b.varint()) { ench[i] = (e as u16, l.clamp(0, 255) as u8); } }
         }
     }
     for _ in 0..rem { r.varint()?; }

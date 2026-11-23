@@ -29,6 +29,11 @@ pub enum Kind {
     Furnace,
     Blast,
     Smoker,
+    Brewing,
+    Enchant,
+    Anvil,
+    Grind,
+    Smith,
 }
 
 impl Kind {
@@ -40,6 +45,7 @@ impl Kind {
             "furnace" => Kind::Furnace,
             "blast_furnace" => Kind::Blast,
             "smoker" => Kind::Smoker,
+            "brewing_stand" => Kind::Brewing,
             _ => return None,
         })
     }
@@ -51,13 +57,21 @@ impl Kind {
             Kind::Furnace => "furnace",
             Kind::Blast => "blast_furnace",
             Kind::Smoker => "smoker",
+            Kind::Brewing => "brewing_stand",
+            Kind::Enchant => "enchanting_table",
+            Kind::Anvil => "anvil",
+            Kind::Grind => "grindstone",
+            Kind::Smith => "smithing_table",
         }
     }
     pub fn slots(self) -> usize {
-        if self.is_furnace() {
-            3
-        } else {
-            27
+        match self {
+            Kind::Brewing => 5,
+            Kind::Enchant => 2,
+            Kind::Anvil | Kind::Grind => 3,
+            Kind::Smith => 4,
+            _ if self.is_furnace() => 3,
+            _ => 27,
         }
     }
     pub fn is_furnace(self) -> bool {
@@ -87,7 +101,18 @@ impl Kind {
             Kind::Furnace => "furnace",
             Kind::Blast => "blast_furnace",
             Kind::Smoker => "smoker",
+            Kind::Brewing => "brewing_stand",
+            Kind::Enchant => "enchantment",
+            Kind::Anvil => "anvil",
+            Kind::Grind => "grindstone",
+            Kind::Smith => "smithing",
         }
+    }
+    pub fn menu_name(self) -> &'static str {
+        self.menu(false)
+    }
+    pub fn title_key(self) -> &'static str {
+        self.title(false)
     }
     fn title(self, double: bool) -> &'static str {
         match self {
@@ -102,6 +127,11 @@ impl Kind {
             Kind::Furnace => "container.furnace",
             Kind::Blast => "container.blast_furnace",
             Kind::Smoker => "container.smoker",
+            Kind::Brewing => "container.brewing",
+            Kind::Enchant => "container.enchant",
+            Kind::Anvil => "container.repair",
+            Kind::Grind => "container.grindstone_title",
+            Kind::Smith => "container.upgrade",
         }
     }
 }
@@ -114,6 +144,10 @@ pub struct Be {
     pub lit_total: i32,
     pub cook: i32,
     pub cook_total: i32,
+    /// Brewing stand: ticks left of the current brew (400 -> 0), blaze fuel charges (0..20) and the ingredient it started with.
+    pub brew: i32,
+    pub fuel: i32,
+    pub brew_item: i32,
     /// RecipesUsed: recipe id -> times used (experience is paid out when the result is taken).
     pub used: BTreeMap<String, i32>,
     /// Players with this container open (eids).
@@ -132,6 +166,9 @@ impl Be {
             lit_total: 0,
             cook: 0,
             cook_total: 200,
+            brew: 0,
+            fuel: 0,
+            brew_item: -1,
             used: BTreeMap::new(),
             viewers: Vec::new(),
             recheck: 0,
@@ -276,7 +313,38 @@ impl Game {
             .filter_map(|e| Some((enchs.get(e.0 as usize)?.clone(), Tag::Int(e.1 as i32))))
             .collect();
         if !e.is_empty() {
-            comps.insert("minecraft:enchantments".into(), Tag::Compound(e));
+            let key = if s.ench.stored {
+                "minecraft:stored_enchantments"
+            } else {
+                "minecraft:enchantments"
+            };
+            comps.insert(key.into(), Tag::Compound(e));
+        }
+        if s.ench.repair != 0 {
+            comps.insert("minecraft:repair_cost".into(), Tag::Int(s.ench.repair));
+        }
+        if let Some(n) = s.ench.name_str() {
+            comps.insert("minecraft:custom_name".into(), Tag::String(n));
+        }
+        if s.ench.potion != 0 {
+            if let Some(p) = reg::POTION.get(s.ench.potion as usize - 1) {
+                let mut pc = Compound::new();
+                pc.insert("potion".into(), Tag::String(format!("minecraft:{p}")));
+                comps.insert("minecraft:potion_contents".into(), Tag::Compound(pc));
+            }
+        }
+        if s.ench.trim_mat != 0 {
+            let m = self.sh.registries.entries("minecraft:trim_material");
+            let p = self.sh.registries.entries("minecraft:trim_pattern");
+            if let (Some(m), Some(p)) = (
+                m.get(s.ench.trim_mat as usize - 1),
+                p.get(s.ench.trim_pat as usize - 1),
+            ) {
+                let mut tc = Compound::new();
+                tc.insert("material".into(), Tag::String(m.clone()));
+                tc.insert("pattern".into(), Tag::String(p.clone()));
+                comps.insert("minecraft:trim".into(), Tag::Compound(tc));
+            }
         }
         if !comps.is_empty() {
             c.insert("components".into(), Tag::Compound(comps));
@@ -300,11 +368,50 @@ impl Game {
             if let Some(d) = c.get("minecraft:damage").and_then(|d| d.as_i64()) {
                 damage = d as i32;
             }
-            if let Some(e) = c.get("minecraft:enchantments") {
+            if let Some(r) = c.get("minecraft:repair_cost").and_then(|d| d.as_i64()) {
+                ench.repair = r as i32;
+            }
+            if let Some(n) = c.get("minecraft:custom_name").and_then(|n| n.as_str()) {
+                ench.name = super::stackx::intern(n);
+            }
+            if let Some(p) = c
+                .get("minecraft:potion_contents")
+                .and_then(|p| p.get("potion"))
+                .and_then(|p| p.as_str())
+            {
+                if let Some(i) = reg::POTION
+                    .iter()
+                    .position(|x| *x == p.trim_start_matches("minecraft:"))
+                {
+                    ench.potion = i as u8 + 1;
+                }
+            }
+            if let Some(t) = c.get("minecraft:trim") {
+                let m = self.sh.registries.entries("minecraft:trim_material");
+                let p = self.sh.registries.entries("minecraft:trim_pattern");
+                let find = |l: &[String], k: &str| {
+                    t.get(k)
+                        .and_then(|v| v.as_str())
+                        .and_then(|n| l.iter().position(|x| x == n))
+                };
+                if let (Some(a), Some(b)) = (find(m, "material"), find(p, "pattern")) {
+                    ench.trim_mat = a as u8 + 1;
+                    ench.trim_pat = b as u8 + 1;
+                }
+            }
+            let stored = c.get("minecraft:stored_enchantments");
+            if stored.is_some() {
+                ench.stored = true;
+            }
+            if let Some(e) = c
+                .get("minecraft:enchantments")
+                .filter(|e| e.get("levels").is_some() || e.as_compound().is_some_and(|c| !c.is_empty()))
+                .or(stored)
+            {
                 let levels = e.get("levels").unwrap_or(e);
                 let enchs = self.sh.registries.entries("minecraft:enchantment");
                 if let Tag::Compound(m) = levels {
-                    for (k, (name, lvl)) in m.iter().take(3).enumerate() {
+                    for (k, (name, lvl)) in m.iter().take(super::stackx::MAX_ENCH).enumerate() {
                         if let (Some(id), Some(l)) =
                             (enchs.iter().position(|e| e == name), lvl.as_i64())
                         {
@@ -337,6 +444,8 @@ impl Game {
             "cooking_time_spent",
             "cooking_total_time",
             "RecipesUsed",
+            "BrewTime",
+            "Fuel",
             "keepPacked",
         ] {
             extra.remove(k);
@@ -360,6 +469,8 @@ impl Game {
         be.lit_total = n("lit_total_time").unwrap_or(0);
         be.cook = n("cooking_time_spent").unwrap_or(0);
         be.cook_total = n("cooking_total_time").unwrap_or(200);
+        be.brew = n("BrewTime").unwrap_or(0);
+        be.fuel = n("Fuel").unwrap_or(0);
         if let Some(Tag::Compound(u)) = t.get("RecipesUsed") {
             for (k, v) in u {
                 if let Some(v) = v.as_i64() {
@@ -392,6 +503,10 @@ impl Game {
                     .collect(),
             ),
         );
+        if be.kind == Kind::Brewing {
+            c.insert("BrewTime".into(), Tag::Short(be.brew as i16));
+            c.insert("Fuel".into(), Tag::Byte(be.fuel as i8));
+        }
         if be.kind.is_furnace() {
             c.insert("lit_time_remaining".into(), Tag::Short(be.lit as i16));
             c.insert("lit_total_time".into(), Tag::Short(be.lit_total as i16));
@@ -723,7 +838,7 @@ impl Game {
         if let Some(p) = self.players.get_mut(&eid) {
             Self::send_window(p);
         }
-        if kind.is_furnace() {
+        if kind.is_furnace() || kind == Kind::Brewing {
             self.send_furnace_data(eid);
         }
         if kind.is_chest() {
@@ -749,6 +864,10 @@ impl Game {
 
     /// A player's container window is going away (closed, left, container destroyed).
     pub(super) fn cont_closed(&mut self, eid: i32, cw: Cw) {
+        if cw.kind.is_station() {
+            self.station_closed(eid, cw);
+            return;
+        }
         let mut emptied = true;
         for i in 0..cw.halves as usize {
             if let Some(b) = self.bes.get_mut(&cw.pos[i]) {
@@ -819,6 +938,12 @@ impl Game {
         let Some(Window::Cont(cw)) = self.players.get(&eid).map(|p| p.window) else {
             return;
         };
+        if cw.kind.is_station() {
+            if let Some(p) = self.players.get_mut(&eid) {
+                p.cont_items = p.st.items.clone();
+            }
+            return;
+        }
         let mut items = Vec::with_capacity(cw.n_cont());
         for h in 0..cw.halves as usize {
             match self.bes.get(&cw.pos[h]) {
@@ -863,6 +988,9 @@ impl Game {
 
     pub(super) fn win_get(&self, eid: i32, cw: &Cw, i: usize) -> Stack {
         let n = cw.n_cont();
+        if i < n && cw.kind.is_station() {
+            return self.players.get(&eid).and_then(|p| p.st.items.get(i).copied()).unwrap_or_default();
+        }
         if i < n {
             return self.win_slot(cw, i);
         }
@@ -882,7 +1010,13 @@ impl Game {
     pub(super) fn win_set(&mut self, eid: i32, cw: &Cw, i: usize, s: Stack) {
         let s = if s.count <= 0 { Stack::default() } else { s };
         let (n, per) = (cw.n_cont(), cw.kind.slots());
-        if i < n {
+        if i < n && cw.kind.is_station() {
+            if let Some(p) = self.players.get_mut(&eid) {
+                if let Some(t) = p.st.items.get_mut(i) {
+                    *t = s;
+                }
+            }
+        } else if i < n {
             let pos = cw.pos[i / per];
             let reset_cook = if cw.kind.is_furnace() && i == 0 {
                 self.bes
@@ -922,6 +1056,17 @@ impl Game {
         if i >= cw.n_cont() {
             return true;
         }
+        if cw.kind.is_station() {
+            return self.station_may_place(cw.kind, i, s);
+        }
+        if cw.kind == Kind::Brewing {
+            let name = self.item_name_of(s.item);
+            return match i {
+                0..=2 => matches!(name, "potion" | "splash_potion" | "lingering_potion" | "glass_bottle"),
+                3 => super::station::is_brew_ingredient(name),
+                _ => name == "blaze_powder",
+            };
+        }
         if !cw.kind.is_furnace() {
             return true;
         }
@@ -932,12 +1077,22 @@ impl Game {
         }
     }
 
+    fn item_name_of(&self, item: i32) -> &'static str {
+        reg::ITEM.get(item as usize).copied().unwrap_or("air")
+    }
+
     fn item_is(&self, item: i32, name: &str) -> bool {
         reg::ITEM.get(item as usize).copied() == Some(name)
     }
 
     fn win_slot_max(&self, cw: &Cw, i: usize, s: &Stack) -> i32 {
         let m = self.max_stack(s.item);
+        if cw.kind.is_station() {
+            return self.station_slot_max(cw.kind, i, s);
+        }
+        if cw.kind == Kind::Brewing && i < 3 {
+            return 1;
+        }
         if cw.kind.is_furnace() && i == 1 && self.item_is(s.item, "bucket") {
             1
         } else {
@@ -946,7 +1101,7 @@ impl Game {
     }
 
     /// Vanilla's moveItemStackTo: merge into matching stacks, then fill empty slots, over `range` (optionally reversed).
-    fn win_move_to(
+    pub(super) fn win_move_to(
         &mut self,
         eid: i32,
         cw: &Cw,
@@ -1008,7 +1163,15 @@ impl Game {
         let n = cw.total();
         let valid = slot >= 0 && (slot as usize) < n;
         let creative = self.players[&eid].gamemode == 1;
-        let result_slot = |i: usize| cw.kind.is_furnace() && i == 2;
+        let result_slot = |i: usize| cw.kind.result_slot() == Some(i);
+        if cw.kind.is_station() && valid && cw.kind.result_slot() == Some(slot as usize) && mode != 5 && mode != 6 {
+            self.station_result_click(eid, &cw, mode, button);
+            self.station_update(eid);
+            if let Some(p) = self.players.get_mut(&eid) {
+                Self::send_window(p);
+            }
+            return;
+        }
         let mut touched_result = false;
         match mode {
             0 if slot == -999 => {
@@ -1121,7 +1284,27 @@ impl Game {
                 let s = self.win_get(eid, &cw, i);
                 if s.count > 0 {
                     let nc = cw.n_cont();
-                    let left = if cw.kind.is_furnace() {
+                    let left = if cw.kind.is_station() || cw.kind == Kind::Brewing {
+                        if i < nc {
+                            self.win_move_to(eid, &cw, s, nc, n, cw.kind != Kind::Brewing || true)
+                        } else if let Some((lo, hi)) = self.station_quick_target_any(&cw, &s) {
+                            if cw.kind == Kind::Enchant && lo == 0 {
+                                // one item of the stack goes into the empty item slot
+                                if self.win_get(eid, &cw, 0).count == 0 {
+                                    self.win_set(eid, &cw, 0, Stack { count: 1, ..s });
+                                    Stack { count: s.count - 1, ..s }
+                                } else {
+                                    s
+                                }
+                            } else {
+                                self.win_move_to(eid, &cw, s, lo, hi, false)
+                            }
+                        } else if i < nc + 27 {
+                            self.win_move_to(eid, &cw, s, nc + 27, n, false)
+                        } else {
+                            self.win_move_to(eid, &cw, s, nc, nc + 27, false)
+                        }
+                    } else if cw.kind.is_furnace() {
                         if i == 2 {
                             self.win_move_to(eid, &cw, s, nc, n, true)
                         } else if i < 2 {
@@ -1318,8 +1501,11 @@ impl Game {
             }
             _ => {}
         }
-        if touched_result {
+        if touched_result && cw.kind.is_furnace() {
             self.furnace_result_taken(eid, &cw);
+        }
+        if cw.kind.is_station() {
+            self.station_update(eid);
         }
         for h in 0..cw.halves as usize {
             self.cont_changed(cw.pos[h]);
@@ -1364,7 +1550,7 @@ impl Game {
     }
 
     /// Send the furnace properties that changed since last sent to this viewer.
-    fn send_furnace_data(&mut self, eid: i32) {
+    pub(super) fn send_furnace_data(&mut self, eid: i32) {
         let Some(p) = self.players.get(&eid) else {
             return;
         };
@@ -1372,9 +1558,14 @@ impl Game {
         let Some(b) = self.bes.get(&cw.pos[0]) else {
             return;
         };
-        let vals = [b.lit, b.lit_total, b.cook, b.cook_total];
+        let vals = if b.kind == Kind::Brewing {
+            [b.brew, b.fuel, 0, 0]
+        } else {
+            [b.lit, b.lit_total, b.cook, b.cook_total]
+        };
+        let nvals = if b.kind == Kind::Brewing { 2 } else { 4 };
         let p = self.players.get_mut(&eid).unwrap();
-        for (k, &v) in vals.iter().enumerate() {
+        for (k, &v) in vals.iter().enumerate().take(nvals) {
             if p.data_sent[k] != v {
                 p.data_sent[k] = v;
                 let mut w = Writer::with_id(cb::CONTAINER_SET_DATA);
@@ -1533,6 +1724,15 @@ impl Game {
             .collect();
         for p in furnaces {
             self.tick_furnace(p);
+        }
+        let stands: Vec<[i32; 3]> = self
+            .bes
+            .iter()
+            .filter(|(_, b)| b.kind == Kind::Brewing)
+            .map(|(p, _)| *p)
+            .collect();
+        for p in stands {
+            self.tick_brewing(p);
         }
         let open: Vec<[i32; 3]> = self
             .bes

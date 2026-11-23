@@ -213,6 +213,8 @@ pub struct Game {
     hp: f32, pub food: i32,
     /// experience bar progress 0..1 and level (set_experience)
     pub xp: (f32, i32),
+    /// enchantment registry names in the server's synced order (clue ids in the enchanting screen)
+    pub enchantments: Vec<String>,
     /// title / subtitle with ticks since shown and fade in/stay/out; action bar text + ticks left
     pub title: (String, String, i32, [i32; 3]), pub actionbar: (String, i32),
     hotbar: [ItemStack; 9], held: u8,
@@ -309,7 +311,7 @@ impl Game {
         let mut g = Game {
             gpu, assets, rules, ui, entity_atlas, biomes, dim_types: Vec::new(), dim: None, world: World::new(-64, 384), player: Player::new(), mesher,
             dirty: HashMap::new(), in_flight: HashSet::new(), events: rx, out: otx, entities: HashMap::new(), player_names: HashMap::new(), my_eid: 0, name: o.name,
-            chat: Vec::new(), chat_input: None, cmd_tree: None, sug: Sug::default(), hp: 20.0, food: 20, xp: (0.0, 0), title: (String::new(), String::new(), -1, [10, 70, 20]), actionbar: (String::new(), 0), hotbar: Default::default(), held: 0, inventory: vec![ItemStack::default(); 46], inv_state: 0, carried: ItemStack::default(), day_time: 6000,
+            chat: Vec::new(), chat_input: None, cmd_tree: None, sug: Sug::default(), hp: 20.0, food: 20, xp: (0.0, 0), enchantments: Vec::new(), title: (String::new(), String::new(), -1, [10, 70, 20]), actionbar: (String::new(), 0), hotbar: Default::default(), held: 0, inventory: vec![ItemStack::default(); 46], inv_state: 0, carried: ItemStack::default(), day_time: 6000,
             spawned: false, loaded_sent: false, connected: false, keys: HashSet::new(), mouse: [false; 2], mouse_pos: (0.0, 0.0), slider_drag: None, last_tick: Instant::now(),
             last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, sprint_sent: false, sprinting: false, sprint_trigger: 0, fwd_was: false, sprint_key_was: false, sprint_latch: false, jump_tick: None, particles: Default::default(), equip: (1.0, 1.0), equip_for: -1, shown_item: -1, attack_ticks: 100, walk_dist: (0.0, 0.0), view_bob: (0.0, 0.0), self_hurt: 0, held_name: (String::new(), 0), splash: String::new(), menu_t0: Instant::now(), pings: HashMap::new(), ping_chan: mpsc::channel(), icon_slots: HashMap::new(), ping_rounds: 0, worlds: Vec::new(), integrated: None, sp_world: None, step_dist: 0.0,
             last_place: Instant::now(), debug: false, disconnected: None, death_msg: None, respawn_at: None, auto_respawn: o.auto_respawn,
@@ -384,7 +386,8 @@ impl Game {
 
     fn handle(&mut self, ev: Event) {
         match ev {
-            Event::Registries { biomes, dimension_types } => {
+            Event::Registries { biomes, dimension_types, enchantments } => {
+                self.enchantments = enchantments;
                 *self.biomes.lock().unwrap() = Arc::new(self.assets.biomes(&biomes));
                 self.dim_types = dimension_types;
             }
@@ -475,9 +478,9 @@ impl Game {
                 let ps = kind.player_start();
                 for i in 0..36 { if ps + i < slots.len() { slots[ps + i] = self.inventory[9 + i].clone(); } }
                 self.chat_input = None; self.mouse = [false; 2];
-                self.screen = Some(Screen::Container(container::Open { window, kind, title, slots, state: 0, drag: None, last_click: None, hover: None, props: [0; 4] }));
+                self.screen = Some(Screen::Container(container::Open { window, kind, title, slots, state: 0, drag: None, last_click: None, hover: None, props: [0; 10], text: String::new(), text_item: -1 }));
             }
-            Event::ContainerData { window, id, value } => { if let Some(Screen::Container(c)) = &mut self.screen { if c.window == window && (0..4).contains(&id) { c.props[id as usize] = value; } } }
+            Event::ContainerData { window, id, value } => { if let Some(Screen::Container(c)) = &mut self.screen { if c.window == window && (0..10).contains(&id) { c.props[id as usize] = value; } } }
             Event::CloseScreen(w) => { if self.open_container().map(|c| c.window == w).unwrap_or(false) { self.screen = None; self.carried = ItemStack::default(); } }
             Event::AddEntity { id, uuid, kind, pos, vel, yaw, pitch, head_yaw, data } => { let mut e = entity::Entity::new(id, uuid, kind, pos, vel, yaw, pitch, head_yaw); e.data = data; self.entities.insert(id, e); }
             Event::MoveEntity { id, delta, rot, on_ground } => { if let Some(e) = self.entities.get_mut(&id) { let p = [e.server_pos[0] + delta[0], e.server_pos[1] + delta[1], e.server_pos[2] + delta[2]]; e.move_to(p, rot); e.on_ground = on_ground; } }
@@ -984,7 +987,7 @@ impl Game {
         }
         if code == KeyCode::F11 { self.cfg.fullscreen = !self.cfg.fullscreen; self.cfg.save(); self.fullscreen_changed = true; return; }
         match &self.screen {
-            Some(Screen::Container(_)) => { self.container_key(code); return; }
+            Some(Screen::Container(_)) => { self.container_key(code, text); return; }
             Some(_) => { self.menu_key(code, text); return; }
             None => {}
         }
@@ -1466,6 +1469,7 @@ impl Game {
 
     /// Advance simulation to `now`; returns interpolation alpha.
     fn update(&mut self) -> f64 {
+        self.sync_anvil_text();
         self.poll_integrated();
         self.pump();
         let mut n = 0;
