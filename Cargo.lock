@@ -211,6 +211,7 @@ dependencies = [
  "basalt-game",
  "basalt-nbt",
  "basalt-protocol",
+ "basalt-world",
  "bytemuck",
  "env_logger",
  "glam",
