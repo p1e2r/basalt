@@ -547,12 +547,73 @@ server jar (tools/structure-world.sh, cached in vanilla/structures/) and `/locat
   vanilla sample: 0 of 12 located huts of seed 42 face south). Four oak-log legs (1,1) (6,1) (1,5) (6,5) go down from y-1
   while the block is air or water. Hut interior air only inside the walls; the rest of the box keeps terrain/vegetation.
   Blocks 97.7-100 % (rest: mushrooms/grass decoration drift). Witch and cat entities not spawned.
-- Not modelled: procedural structures (mineshafts, strongholds, monuments, desert/jungle temples, mansions: placement only, no
-  pieces), the encapsulate (trial chambers) and bury (trail ruins, strongholds) adaptations, ocean-ruin clusters and warm
-  ruins' integrity, ruined-portal processors (netherrack, lava, moss), the capped processor, block entities (chest loot)
-  and template entities (villagers, golems), ancient-city sculk. Unexplained: 4 of 29 seed-12345 mineshaft starts that
-  vanilla rejects (lush caves / frozen peaks, biome passes), desert pyramids that vanilla rejects on hilly ground (only "a
-  corner below sea level rejects" is modelled).
+- Not modelled: procedural structures (strongholds, monuments, mansions: placement only, no pieces), the encapsulate
+  (trial chambers) and bury (trail ruins, strongholds) adaptations, ocean-ruin clusters and warm ruins' integrity,
+  ruined-portal processors (netherrack, lava, moss), the capped processor, block entities (chest loot) and template
+  entities (villagers, golems), ancient-city sculk. Unexplained: 4 of 29 seed-12345 mineshaft starts that vanilla rejects
+  (lush caves / frozen peaks, biome passes), 1 of 31 desert pyramid candidates (seed 12345 chunk -234,-281: corners above
+  sea level, but the middle of one edge is under water; only "a corner at or below sea level rejects" is modelled, 30/31).
+
+### Desert pyramids and jungle temples (M3c, 2026-11-24) — crates/worldgen/src/structure/temple.rs
+Measured on 9 desert pyramids (seeds 12345 / 42) and 12 jungle temples (seeds 12345 / 42 / 1) at Basalt's placement
+positions, generated with `tools/structure-sites.sh` (one server, several small force-loaded squares; cached in
+vanilla/structures/<seed>_temples), plus 22 more desert candidates (vanilla/structures/<seed>_deserts) for the rejection rule.
+- Start: orientation `nextInt(4)` over (north, east, south, west) = saved `O` (2, 3, 0, 1) like the swamp hut (21/21); box at
+  the chunk corner, desert 21 x 15 x 21, jungle 12 x 10 x 15 (x and z swapped for `O` 1 / 3).
+- Desert `HPos` = minimum WORLD_SURFACE_WG over the footprint (9/9). The saved box usually starts at `HPos`, but 3 of 9 sit
+  1-2 lower (BB y = HPos - 1 / - 2: -86,-110 and 196,148 of seed 42 by 1, 243,147 by 2); no rule found (start random,
+  placement random draws 0..11 per chunk, footprint/halo minima all tried), so Basalt uses `HPos`. The layout reaches 14
+  below the box (the hidden TNT room) and is placed relative to the box floor.
+- Jungle floor = floor(mean MOTION_BLOCKING_NO_LEAVES over the box) at placement time (11/12; the start-time WG mean gives
+  10/12, WORLD_SURFACE 4/12): the temple lies in one chunk, the height is taken when that chunk is decorated.
+- Layouts: per cell the majority block of all instances (normalised into one frame) where at least two instances differ from
+  Basalt's no-structure terrain (stone/dirt/leaves/vegetation dropped as terrain), states from the `O` = 3 instances; local
+  frame = the world frame of `O` 0; `O` 2 = z flipped, 3 = transposed, 1 = transposed + x flipped (the same as the floors'
+  draw order, below). Desert suspicious sand (random positions, ~1 in 3 of the sand floor cells) is placed as sand; chests
+  without loot.
+- Jungle cobblestone / mossy cobblestone: drawn from the placement random (features::R seeded for the structure's
+  surface_structures slot) with `nextFloat() < 0.4` = cobblestone. Draw order fitted on all 12 temples (each random cell's
+  draw index is consistent with all of them): 13 boxes in local coordinates filled y, x, z with one draw per cell (the
+  first is the whole 12 x 5 x 15 base, later air cells draw too), then 127 single cells with their own draw index (tables
+  JUNGLE_BOXES / JUNGLE_DRAWS). Cells that are always plain cobblestone or always mossy are fixed blocks.
+- Block parity inside the vanilla boxes (examples/structures compare, all instances in-sample): desert 98.4-99.9 % (the 3
+  sunk boxes 72-82 %), jungle 86-98 % (one temple whose floor is 1 off: 57 %). Vanilla's per-temple loot, the jungle
+  temple's vines and the desert's suspicious sand positions are not reproduced.
+
+### Mineshafts (M3c, 2026-11-24) — crates/worldgen/src/structure/mineshaft.rs
+Fitted on the 53 mineshafts saved in the 64 x 64-chunk vanilla worlds of seeds 12345 / 42 / 1 and 10 mesa mineshafts
+(vanilla/structures/<seed>_mesa, seeds 12345 / 42 / 2, + 2 normal ones there): all 65 generate piece-for-piece identical (8274 pieces: type, box,
+`O`/`D`, `Num`, rails `hr`, spider `sc`, two floors `tf`, depth `GD`, saved order = creation order, depth first). Rules (start
+random = large-feature random after the frequency `nextDouble`):
+- Room: w = 8 + nextInt(6), h = 5 + nextInt(6), d = 8 + nextInt(6) at (chunk*16 + 2, 50, chunk*16 + 2). Sides N, S, W, E:
+  k = 0; loop { k += nextInt(len); if k + 3 > len break; y = y0 + nextInt(h - 4) + 1; child at offset k (N: (x0+k, y, z0-1)
+  ...); entrance = the child's x/y (or z/y) extent through the 2-block wall; k += 4 }. (nextInt of a power of two uses the
+  high bits: matters for w = 8, h - 4 = 2 / 4.)
+- Child (depth d): none if d > 9 or more than 80 blocks (x or z) from the room corner; t = nextInt(100): >= 80 crossing
+  (two floors = nextInt(4) == 0, box 5 x 3|7 x 5 around the entry), >= 70 stairs (3 x 8 x 9, y - 5..y + 2), else corridor
+  (sections = nextInt(3) + 2, shortened while the box intersects an existing piece, none at 0; then rails = nextInt(3) == 0,
+  spider = !rails && nextInt(23) == 0). Pieces may not intersect any earlier piece.
+- Corridor children: j = nextInt(4), y = y0 + nextInt(3) - 1; j <= 1 straight on, 2 / 3 = turn left / right (N: west /
+  east at z0; S: at z1 - 3; W: north / south at x0; E: at x1 - 3). Then, if depth < 8, side slots at far-end offsets 3, 8,
+  13 (up to len - 4): a = nextInt(5): 0 = west/north side, 1 = east/south side, child depth + 2 at y0.
+- Crossing children: N, S, W, E minus the side it was entered from, at y0; if two floors: N, W, E, S (all four) with
+  `nextBool()` each at y0 + 4. Stairs: one child straight on at the bottom.
+- Vertical: normal = top j = (ymax - ymin + 2) + minY(-64); if j < sea - 10: j += nextInt(sea - 10 - j); move by j - ymax
+  (53/53). Mesa: vanilla bottoms 55..87 / tops 79..113 (10 samples); no rule on the start random, the room or the surface
+  height fitted, Basalt draws the bottom uniformly from 55..87 (statistical).
+- Placement (measured per cell in the piece frames, 1015 placed corridors): a piece is left out of a chunk when its box holds
+  water or lava inside that chunk (a corridor carved in one chunk and missing in the next), or when the biome at the centre
+  of its box part in the chunk is in `#mineshaft_blocking` (deep dark: whole areas of vanilla mineshafts are missing,
+  12345 -32,10). Interiors become cave_air (natural air too). Corridors: supports at offsets 2 + 5i (fences, connected to
+  the solid wall beside them, + planks; only where the ceiling above both sides is solid; 16 % of vanilla's such spots have
+  none, the middle plank ~75 %), planks under the floor where it is air (bridges), rails along the middle (70 % in rail
+  corridors), cobwebs under the ceiling at the sides (4-9 %), spider corridors ~55 % cobwebs + a spawner. Crossings: the
+  "+" shape per floor, the middle 3 x 3 open between two floors, plank pillars at the four inner corners. Stairs: landings
+  (5..7 / 0..2) with a 3-high diagonal. Rooms: 3 layers above the floor fully open, an ellipsoid dome above (87 % of the dome
+  cells), entrances cut. Mesa: dark oak. Not reproduced: the per-block random elements' draw order (cobwebs, rails, the
+  ~13 % of ceiling cells vanilla leaves solid), torches, hanging chains, chest minecarts (entities), spawner block entity.
+- Block parity in the vanilla piece boxes (examples/structures compare, ONLY=mineshaft, first 120 chunks): seed 12345
+  90.1 %, 42 88.5 %, 1 89.2 % (terrain alone 27-31 %); mesa 15.8 / 49.7 % (the y is not reproduced).
 
 ### Terrain adaptation (M3c, 2026-11-24) — fitted empirically, crates/worldgen/src/structure/adapt.rs
 Method: the same seed/site generated twice by the official server jar (tools/structure-world.sh, `NO_STRUCTURES=1` =

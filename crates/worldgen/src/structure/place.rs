@@ -548,6 +548,12 @@ fn place_piece(g: &Generator, s: &Structures, p: &Piece, reg: &mut Region, clip:
             }
         }
         PieceKind::SwampHut { origin, o } => place_swamp_hut(reg, clip, *origin, *o),
+        PieceKind::Mineshaft { piece, mesa } => {
+            super::mineshaft::place(reg, clip, piece, *mesa, &s.mineshaft_blocking, r)
+        }
+        PieceKind::Temple { jungle, origin, o } => {
+            super::temple::place_temple(reg, clip, *jungle, *origin, *o, r)
+        }
         PieceKind::Chest { pos, .. } => {
             let chest = BlockState::parse("chest[facing=north,type=single,waterlogged=false]")
                 .map(|b| b.0 as u16)

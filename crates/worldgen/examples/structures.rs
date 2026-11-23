@@ -246,6 +246,168 @@ fn main() -> Result<()> {
                 }
             }
         }
+        "json" => {
+            // json REGION R ID: the saved starts of ID in the square as JSON lines (all NBT fields)
+            fn j(t: &Tag) -> serde_json::Value {
+                use serde_json::Value as V;
+                match t {
+                    Tag::Byte(v) => V::from(*v),
+                    Tag::Short(v) => V::from(*v),
+                    Tag::Int(v) => V::from(*v),
+                    Tag::Long(v) => V::from(*v),
+                    Tag::Float(v) => V::from(*v),
+                    Tag::Double(v) => V::from(*v),
+                    Tag::String(s) => V::from(s.clone()),
+                    Tag::ByteArray(a) => V::from(a.clone()),
+                    Tag::IntArray(a) => V::from(a.clone()),
+                    Tag::LongArray(a) => V::from(a.clone()),
+                    Tag::List(l) => V::Array(l.iter().map(j).collect()),
+                    Tag::Compound(c) => {
+                        V::Object(c.iter().map(|(k, v)| (k.clone(), j(v))).collect())
+                    }
+                    Tag::End => V::Null,
+                }
+            }
+            let (ox, oz) = center();
+            for cx in ox - r..ox + r {
+                for cz in oz - r..oz + r {
+                    let Some(root) = read_nbt(dir, cx, cz)? else {
+                        continue;
+                    };
+                    let Some(Tag::Compound(starts)) =
+                        root.get("structures").and_then(|s| s.get("starts"))
+                    else {
+                        continue;
+                    };
+                    for (id, s) in starts {
+                        if id.trim_start_matches("minecraft:") == args[4] {
+                            let mut v = j(s);
+                            v["cx"] = cx.into();
+                            v["cz"] = cz.into();
+                            println!("{v}");
+                        }
+                    }
+                }
+            }
+        }
+        "refs" => {
+            // refs REGION R CX,CZ: the structure references saved in chunk CX,CZ (+ status)
+            let v: Vec<i32> = args[4].split(',').map(|x| x.parse().unwrap()).collect();
+            if let Some(root) = read_nbt(dir, v[0], v[1])? {
+                println!("status {:?}", root.get("Status"));
+                if let Some(Tag::Compound(rf)) =
+                    root.get("structures").and_then(|s| s.get("References"))
+                {
+                    for (k, t) in rf {
+                        println!("{k}: {:?}", t);
+                    }
+                }
+            }
+        }
+        "scan" => {
+            // scan ID R SEED (dir argument = id): Basalt's starts of ID in the placement regions
+            // within R regions of the origin, nearest first ("cx cz block-x block-z")
+            use basalt_worldgen::structure::Placement;
+            let g = basalt_worldgen::Generator::new(args[4].parse()?);
+            let s = g.structures().unwrap();
+            let def = *s.by_name.get(args[2].as_str()).expect("structure id");
+            let set = s.set_of(def).expect("set");
+            let Placement::Spread(sp) = &s.sets[set].placement else {
+                bail!("not a spread placement")
+            };
+            let mut out = Vec::new();
+            for rx in -r..r {
+                for rz in -r..r {
+                    let (cx, cz) = basalt_worldgen::structure::spread_potential(
+                        g.seed,
+                        sp,
+                        rx * sp.spacing,
+                        rz * sp.spacing,
+                    );
+                    if !g.is_structure_chunk(set, cx, cz) {
+                        continue;
+                    }
+                    if let Some(st) = g.select_start(set, cx, cz, false) {
+                        if st.def == def {
+                            out.push((cx * cx + cz * cz, cx, cz));
+                        }
+                    }
+                }
+            }
+            out.sort();
+            for (_, cx, cz) in out {
+                println!("{cx} {cz} {} {}", cx * 16, cz * 16);
+            }
+        }
+        "bblocks" => {
+            // bblocks SEED X0,Y0,Z0,X1,Y1,Z1 (dir argument = seed): Basalt's blocks in the box
+            // ("x y z state" lines like `blocks`); env BASALT_NO_STRUCTURES for bare terrain
+            let g = basalt_worldgen::Generator::new(args[2].parse()?);
+            let v: Vec<i32> = args[3].split(',').map(|x| x.parse().unwrap()).collect();
+            for cx in (v[0] >> 4)..=(v[3] >> 4) {
+                for cz in (v[2] >> 4)..=(v[5] >> 4) {
+                    let b = g.generate_chunk(cx, cz);
+                    for x in v[0].max(cx * 16)..=v[3].min(cx * 16 + 15) {
+                        for z in v[2].max(cz * 16)..=v[5].min(cz * 16 + 15) {
+                            for y in v[1]..=v[4] {
+                                let s = b.get((x & 15) as usize, y, (z & 15) as usize);
+                                println!(
+                                    "{x} {y} {z} {}",
+                                    basalt_data::BlockState(s as u32).to_string()
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        "placerand" => {
+            // placerand SEED ID CX,CZ N (dir argument = seed): the placement random of structure
+            // ID while decorating chunk CX,CZ (as place_structures seeds it): N raw 31-bit draws
+            // shown as fractions
+            use basalt_worldgen::random::{set_decoration_seed, set_feature_seed, Rng};
+            let seed: i64 = args[2].parse()?;
+            let g = basalt_worldgen::Generator::new(seed);
+            let s = g.structures().unwrap();
+            let def = *s.by_name.get(args[3].as_str()).expect("id");
+            let step = s.defs[def].step;
+            let idx = s.defs.iter().take(def).filter(|d| d.step == step).count();
+            let v: Vec<i32> = args[4].split(',').map(|x| x.parse().unwrap()).collect();
+            let mut r = basalt_worldgen::features::R::new(0);
+            let deco = set_decoration_seed(&mut r, seed, v[0] * 16, v[1] * 16);
+            set_feature_seed(&mut r, deco, idx as i32, step as i32);
+            let n: usize = args[5].parse()?;
+            let fl = std::env::var("FLOAT").is_ok();
+            let f: Vec<String> = (0..n)
+                .map(|_| {
+                    if fl {
+                        format!("{:.4}", r.next_float())
+                    } else {
+                        format!(
+                            "{:.3}",
+                            r.next_int_bounded(1 << 30) as f64 / (1u64 << 30) as f64
+                        )
+                    }
+                })
+                .collect();
+            println!("step {step} idx {idx}: {}", f.join(" "));
+        }
+        "footprint" => {
+            // footprint SEED X0,Z0,W,D (dir argument = seed): WORLD_SURFACE_WG first free y over
+            // the area as a JSON grid [z][x], then OCEAN_FLOOR_WG
+            let g = basalt_worldgen::Generator::new(args[2].parse()?);
+            let v: Vec<i32> = args[3].split(',').map(|x| x.parse().unwrap()).collect();
+            for of in [false, true] {
+                let grid: Vec<Vec<i32>> = (0..v[3])
+                    .map(|z| {
+                        (0..v[2])
+                            .map(|x| g.first_free(v[0] + x, v[1] + z, of))
+                            .collect()
+                    })
+                    .collect();
+                println!("{}", serde_json::json!(grid));
+            }
+        }
         "wsheight" => {
             // wsheight SEED X,Z... (dir argument = seed): WORLD_SURFACE_WG / OCEAN_FLOOR_WG first free y
             let g = basalt_worldgen::Generator::new(args[2].parse()?);
