@@ -1,0 +1,19 @@
+[package]
+name = "basalt-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Clean-room Minecraft Java 26.2 server"
+
+[dependencies]
+anyhow.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+serde_json.workspace = true
+log.workspace = true
+env_logger.workspace = true
+md-5.workspace = true
+basalt-protocol = { path = "../protocol" }
+basalt-nbt = { path = "../nbt" }
+basalt-data = { path = "../data" }
+basalt-world = { path = "../world" }

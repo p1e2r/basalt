@@ -16,14 +16,30 @@ Read NOTES.md for verified packet formats.
   Headless test mode: `basalt-client --screenshot out.png --wait 10 [--cmd 'tp @s 0 100 0']
   [--chat msg] [--look yaw,pitch] [--walk secs] [--click l|r]`; env BASALT_NOFOG / BASALT_NOCULL
   / BASALT_DIAG for debugging.
-- Not started: crates/world (chunk storage + Anvil), crates/server, crates/worldgen.
+- crates/world: **done.** Paletted containers, chunk network encode, heightmaps, sky/block light
+  (BFS, incremental, matches vanilla's stored light exactly on real chunks), Anvil region
+  read/write (vanilla 26.2 worlds keep regions in world/dimensions/minecraft/overworld/region).
+  Block light/opacity props are an approximate table (props.rs).
+- crates/server: **milestone 2 done.** `basalt-server [--port 25565] [--world DIR | --memory]
+  [--gamemode creative] [--view N] [--compression N]`. Status ping, offline login, configuration
+  (29 synced registries + 15 tag registries built from ./data), join sequence, chunk streaming
+  with batch acks, movement, break/place (orientation for logs/stairs/slabs/doors/torches…),
+  chat, commands (/gamemode /tp /give /time /say /list /spawn /save), tab list, player
+  entities, keepalive, world + player persistence. Flat generator until worldgen is wired in.
+  Verified: real 26.2 client joins, renders, sees a second (basalt-client) player, chat,
+  placed blocks; restart keeps blocks/inventory/position. `tools/server-smoke.sh` runs the
+  two-client smoke test.
+- Not started: crates/worldgen (subagent working on it in a worktree).
 
 ### Task list
 - [x] M1 client builds, joins vanilla, renders chunks
-- [ ] M2 crates/world: sections/paletted containers, light, Anvil region read/write
-- [ ] M2 crates/server: login/config/play, chunk streaming, movement, break/place, chat, multiplayer
-- [ ] M2 verify with real 26.2 client (user's launcher) + basalt-client against our server
-- [ ] M3 crates/worldgen vs vanilla seed 12345
+- [x] M2 crates/world: sections/paletted containers, light, Anvil region read/write
+- [x] M2 crates/server: login/config/play, chunk streaming, movement, break/place, chat, multiplayer
+- [x] M2 verify with real 26.2 client (tools/run-vanilla-client.py) + basalt-client
+- [ ] M3 crates/worldgen vs vanilla seed 12345, then plug into server (replace gen::Flat)
+- Server gaps: survival drops go straight to inventory (no item entities), no container_click /
+  crafting, no mobs, no fluids/redstone ticking, no online-mode auth. Real-client walking/
+  breaking driven by a human not yet verified (only bot-driven).
 - Known client gaps: no entity models (boxes only), survival dig time not hardness-based,
   no inventory screen, no sounds, edge chunks without loaded neighbours are not meshed.
 

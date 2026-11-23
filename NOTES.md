@@ -42,6 +42,8 @@ real server/client over the wire.
   for: instrument timeline potion damage_type item worldgen/biome fluid banner_pattern dialog
   game_event painting_variant enchantment entity_type point_of_interest_type block.
 - Vanilla waits for chunk_batch_received before sending more chunks.
+- login_finished: uuid, str name, varint nProps (0), then 16 more bytes (per-connection id, UUID-shaped; the real
+  client hangs without them; random v4 accepted).
 - Serverbound play (accepted by vanilla 26.2, verified with basalt-client):
   accept_teleportation varint id; move_player_pos f64 xyz + u8 flags (1 onGround, 2 hCollision);
   move_player_pos_rot f64 xyz f32 yaw pitch u8 flags; move_player_rot f32 f32 u8; status_only u8;

@@ -219,6 +219,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "basalt-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "basalt-data",
+ "basalt-nbt",
+ "basalt-protocol",
+ "basalt-world",
+ "env_logger",
+ "log",
+ "md-5",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "basalt-world"
 version = "0.1.0"
 dependencies = [
