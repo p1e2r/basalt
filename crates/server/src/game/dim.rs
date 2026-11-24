@@ -93,6 +93,7 @@ pub(super) struct DimState {
     pub items: HashMap<i32, items::ItemEntity>,
     pub mobs: HashMap<i32, mob::Mob>,
     pub arrows: HashMap<i32, arrow::Arrow>,
+    pub projs: HashMap<i32, proj::Proj>,
     pub fallers: HashMap<i32, falling::Faller>,
     pub gravity_checks: Vec<(u64, [i32; 3])>,
     pub orbs: HashMap<i32, xporb::Orb>,
@@ -110,6 +111,7 @@ impl DimState {
             items: HashMap::new(),
             mobs: HashMap::new(),
             arrows: HashMap::new(),
+            projs: HashMap::new(),
             fallers: HashMap::new(),
             gravity_checks: Vec::new(),
             orbs: HashMap::new(),
@@ -127,6 +129,7 @@ impl Game {
         std::mem::swap(&mut self.items, &mut s.items);
         std::mem::swap(&mut self.mobs, &mut s.mobs);
         std::mem::swap(&mut self.arrows, &mut s.arrows);
+        std::mem::swap(&mut self.projs, &mut s.projs);
         std::mem::swap(&mut self.fallers, &mut s.fallers);
         std::mem::swap(&mut self.gravity_checks, &mut s.gravity_checks);
         std::mem::swap(&mut self.orbs, &mut s.orbs);

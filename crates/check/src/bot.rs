@@ -48,6 +48,8 @@ pub struct Entity {
     pub flags: u8,
     pub health: Option<f32>,
     pub meta: HashMap<u8, Meta>,
+    /// add_entity data field (projectiles: the owner's entity id)
+    pub data: i32,
 }
 
 /// An explode packet: centre, radius, affected block count, knockback sent to us.
@@ -141,6 +143,13 @@ pub struct State {
     ticks_since_pos: u32,
     last_input: u8,
     pub seq: i32,
+    /// Raw clientbound packets kept for measuring: (time, packet id, body) for ids in `raw_ids` (probe tooling).
+    pub raw_ids: Vec<i32>,
+    /// cooldown packets: (time, group, ticks); level_event: (time, event, block position, data); every damage_event: (time, entity, type, cause entity+1, direct entity+1)
+    pub cooldowns: Vec<(Instant, String, i32)>,
+    pub level_events: Vec<(Instant, i32, [i32; 3], i32)>,
+    pub damage_events: Vec<(Instant, i32, String, i32, i32)>,
+    pub raw: Vec<(Instant, i32, Vec<u8>)>,
 }
 
 impl State {
@@ -230,7 +239,7 @@ impl Bot {
             effects: HashMap::new(), inv: vec![Stack::default(); 46], cursor: Stack::default(), held: 0, state_id: 0, cont_log: Vec::new(), screen: None, container: Vec::new(),
             chat: Vec::new(), entities: HashMap::new(), players: HashMap::new(), world: World::default(), teleports: Vec::new(), plog: Vec::new(), boss_log: Vec::new(),
             counts: HashMap::new(), ticks: 0, disconnected: None, damage: Vec::new(), health_log: Vec::new(), taken: Vec::new(), explosions: Vec::new(), op_level: 0, entity_events: Vec::new(), registries: HashMap::new(), block_updates: 0, screen_title: String::new(), props: HashMap::new(), prop_log: Vec::new(), block_events: Vec::new(), sounds: Vec::new(), entity_sounds: Vec::new(), sound_detail: Vec::new(), xp_total: 0, xp_level: 0, removed: Vec::new(), difficulty: None,
-            out: otx, last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input: 0, seq: 0,
+            out: otx, last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input: 0, seq: 0, raw_ids: Vec::new(), raw: Vec::new(), cooldowns: Vec::new(), level_events: Vec::new(), damage_events: Vec::new(),
         }));
         let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
         let (st2, addr2, name2) = (st.clone(), addr.to_string(), name.to_string());
@@ -525,6 +534,7 @@ async fn run(addr: &str, name: &str, view: i8, st: Arc<Mutex<State>>, out: &mut 
                         _ => {
                             let mut s = st.lock().unwrap();
                             s.bump(f.id);
+                            if s.raw_ids.contains(&f.id) { s.raw.push((Instant::now(), f.id, f.data.to_vec())); }
                             if let Err(e) = handle(&mut s, f.id, &f.data) { log::debug!("{name}: decode {}: {e:#}", cb::name(f.id)); }
                         }
                     }
@@ -569,6 +579,8 @@ fn handle(s: &mut State, id: i32, data: &[u8]) -> Result<()> {
         }
         // sounds attached to an entity (hurt, fall...): same log, the event id as for SOUND
         cb::SOUND_ENTITY => { let id = r.varint()?; if id > 0 { s.sounds.push((Instant::now(), id - 1)); s.entity_sounds.push((Instant::now(), id - 1)); } }
+        cb::COOLDOWN => { let g = r.str()?; let t = r.varint()?; s.cooldowns.push((Instant::now(), g, t)); }
+        cb::LEVEL_EVENT => { let ev = r.i32()?; let (x, y, z) = r.position()?; let d = r.i32()?; s.level_events.push((Instant::now(), ev, [x, y, z], d)); }
         cb::CHANGE_DIFFICULTY => { s.difficulty = Some(r.u8()?); }
         cb::BOSS_EVENT => {
             let u = r.uuid()?;
@@ -699,11 +711,11 @@ fn handle(s: &mut State, id: i32, data: &[u8]) -> Result<()> {
             s.plog.push(PacketLog { at: Instant::now(), id, eid: e });
         }
         cb::DAMAGE_EVENT => {
-            let e = r.varint()?; let ty = r.varint()?;
-            if e == s.eid {
-                let n = s.registries.get("minecraft:damage_type").and_then(|v| v.get(ty as usize)).cloned().unwrap_or_else(|| ty.to_string());
-                s.damage.push((Instant::now(), n.trim_start_matches("minecraft:").to_string()));
-            }
+            let e = r.varint()?; let ty = r.varint()?; let cause = r.varint().unwrap_or(0); let direct = r.varint().unwrap_or(0);
+            let n = s.registries.get("minecraft:damage_type").and_then(|v| v.get(ty as usize)).cloned().unwrap_or_else(|| ty.to_string());
+            let n = n.trim_start_matches("minecraft:").to_string();
+            s.damage_events.push((Instant::now(), e, n.clone(), cause, direct));
+            if e == s.eid { s.damage.push((Instant::now(), n)); }
         }
         cb::PLAYER_INFO_UPDATE => {
             let actions = r.u8()?; let n = r.varint()?;
@@ -727,7 +739,8 @@ fn handle(s: &mut State, id: i32, data: &[u8]) -> Result<()> {
             let pos = [r.f64()?, r.f64()?, r.f64()?];
             let vel = proto::read_lpvec3(&mut r)?;
             let kind = basalt_data::registries::ENTITY_TYPE.get(kind as usize).copied().unwrap_or("?");
-            s.entities.insert(e, Entity { uuid, kind, pos, spawn_pos: pos, spawn_vel: vel, vel, item: None, on_ground: false, added: Instant::now(), flags: 0, health: None, meta: HashMap::new() });
+            let (_, _, _) = (r.u8()?, r.u8()?, r.u8()?); let data = r.varint().unwrap_or(0);
+            s.entities.insert(e, Entity { uuid, kind, pos, spawn_pos: pos, spawn_vel: vel, vel, item: None, on_ground: false, added: Instant::now(), flags: 0, health: None, meta: HashMap::new(), data });
             s.plog.push(PacketLog { at: Instant::now(), id, eid: e });
         }
         cb::MOVE_ENTITY_POS | cb::MOVE_ENTITY_POS_ROT => {

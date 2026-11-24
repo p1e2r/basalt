@@ -76,6 +76,12 @@ fn main() {
                 for c in it.by_ref() {
                     if let Some(t) = c.strip_prefix("wait:") { bot.wait_ticks(t.parse().unwrap_or(20)); continue; }
                     if let Some(a) = c.strip_prefix("action:") { let v: Vec<i32> = a.split(',').filter_map(|x| x.parse().ok()).collect(); bot.player_action(v[0], [v.get(1).copied().unwrap_or(0), v.get(2).copied().unwrap_or(0), v.get(3).copied().unwrap_or(0)], 0); continue; }
+                    if let Some(a) = c.strip_prefix("raw:") { let ids: Vec<i32> = (0..400).filter(|i| a.split(',').any(|x| basalt_protocol::ids::play::clientbound::name(*i).trim_start_matches("minecraft:") == x.trim())).collect(); bot.st().raw_ids = ids; continue; }
+                    if let Some(a) = c.strip_prefix("look:") { let v: Vec<f32> = a.split(',').filter_map(|x| x.parse().ok()).collect(); bot.look(v[0], v[1]); continue; }
+                    if c == "pos" { let s = bot.st(); println!("raw-pos {:?} yaw {} pitch {} ticks {}", s.body.pos, s.body.yaw, s.body.pitch, s.ticks); continue; }
+                    if c == "use" { bot.use_item(); continue; }
+                    if c == "release" { bot.release_use(); continue; }
+                    if c == "dumpraw" { let s = bot.st(); let t0 = s.raw.first().map(|r| r.0); for (t, id, d) in &s.raw { println!("raw +{}ms {} {}", t0.map(|t0| (*t - t0).as_millis()).unwrap_or(0), basalt_protocol::ids::play::clientbound::name(*id).trim_start_matches("minecraft:"), d.iter().map(|b| format!("{b:02x}")).collect::<String>()); } continue; }
                     if let Some(a) = c.strip_prefix("held:") { bot.set_held(a.parse().unwrap_or(0)); continue; }
                     if let Some(a) = c.strip_prefix("tp:") { let v: Vec<f64> = a.split(',').filter_map(|x| x.parse().ok()).collect(); if let Err(e) = bot.tp([v[0], v[1], v[2]]) { println!("tp: {e}"); } continue; }
                     for l in bot.cmd_reply(&c).unwrap_or_default() { println!("reply: {:?} {:?} {:?}", l.plain, l.key, l.args); }
