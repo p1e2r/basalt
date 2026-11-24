@@ -71,6 +71,48 @@ impl Particles {
         });
     }
 
+    fn spawn_uv(&mut self, uv: [f32; 4], pos: [f64; 3], vel: [f64; 3], tint: [u8; 3], life: u32, size: f32) {
+        if self.list.len() >= MAX {
+            self.list.remove(0);
+        }
+        self.list.push(Particle { pos, prev: pos, vel, age: 0, life, size, uv, tint, on_ground: false });
+    }
+
+    /// Item break burst (a snowball or egg hitting something): small chips of the item sprite.
+    pub fn item_break(&mut self, a: &Assets, item: i32, pos: [f64; 3], n: usize) {
+        let Some(t) = a.icon_uv(item) else { return };
+        if self.seed == 0 {
+            self.seed = 0x9E37_79B9_7F4A_7C15;
+        }
+        for _ in 0..n {
+            let (fu, fv) = (self.rand() as f32 * 0.75, self.rand() as f32 * 0.75);
+            let (du, dv) = (t[2] - t[0], t[3] - t[1]);
+            let uv = [t[0] + fu * du, t[1] + fv * dv, t[0] + (fu + 0.25) * du, t[1] + (fv + 0.25) * dv];
+            let vel = [(self.rand() - 0.5) * 0.2, self.rand() * 0.2, (self.rand() - 0.5) * 0.2];
+            let life = (4.0 / (self.rand() * 0.9 + 0.1)) as u32;
+            let size = (0.1 * (self.rand() * 0.5 + 0.5)) as f32;
+            self.spawn_uv(uv, pos, vel, [255, 255, 255], life, size);
+        }
+    }
+
+    /// Potion / experience bottle shatter (level event 2002 / 2007): coloured specks rising from the impact.
+    pub fn splash(&mut self, a: &Assets, argb: u32, b: [i32; 3]) {
+        let Some(t) = a.tex_uv("block/white_concrete") else { return };
+        if self.seed == 0 {
+            self.seed = 0x9E37_79B9_7F4A_7C15;
+        }
+        let tint = [(argb >> 16 & 255) as u8, (argb >> 8 & 255) as u8, (argb & 255) as u8];
+        let c = [b[0] as f64 + 0.5, b[1] as f64 + 0.3, b[2] as f64 + 0.5];
+        let uv = [t[0], t[1], t[0] + (t[2] - t[0]) * 0.25, t[1] + (t[3] - t[1]) * 0.25];
+        for _ in 0..40 {
+            let ang = self.rand() * std::f64::consts::TAU;
+            let sp = self.rand() * 0.15;
+            let vel = [ang.cos() * sp, 0.05 + self.rand() * 0.15, ang.sin() * sp];
+            let life = 10 + (self.rand() * 20.0) as u32;
+            self.spawn_uv(uv, c, vel, tint, life, 0.12);
+        }
+    }
+
     /// A broken block: a 4x4x4 burst spread through the block, flying outwards from its centre.
     pub fn block_break(&mut self, a: &Assets, state: u16, b: [i32; 3], tint: [u8; 3]) {
         if state == 0 {

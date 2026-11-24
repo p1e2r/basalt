@@ -33,7 +33,11 @@ pub fn dims(kind: i32) -> (f32, f32, [u8; 4]) {
     }
 }
 
-pub fn is_living(kind: i32) -> bool { !matches!(type_name(kind), "item" | "arrow" | "spectral_arrow" | "experience_orb" | "") }
+/// Thrown items drawn as camera-facing item sprites (vanilla's ThrownItemRenderer) and their gravity.
+pub fn is_thrown(name: &str) -> bool { matches!(name, "snowball" | "egg" | "ender_pearl" | "experience_bottle" | "splash_potion" | "lingering_potion" | "wind_charge" | "trident") }
+fn thrown_gravity(name: &str) -> f64 { match name { "experience_bottle" => 0.07, "splash_potion" | "lingering_potion" | "trident" => 0.05, "wind_charge" => 0.0, _ => 0.03 } }
+
+pub fn is_living(kind: i32) -> bool { !matches!(type_name(kind), "item" | "arrow" | "spectral_arrow" | "experience_orb" | "area_effect_cloud" | "") && !is_thrown(type_name(kind)) }
 
 #[derive(Clone)]
 pub struct Entity {
@@ -99,7 +103,7 @@ impl Entity {
             match (*idx, v) {
                 (0, Meta::Byte(b)) => self.flags = *b,
                 (6, Meta::Int(p)) => self.pose = *p,
-                (8, Meta::Item(it)) if name == "item" => self.item = Some(it.clone()),
+                (8, Meta::Item(it)) if name == "item" || is_thrown(name) => self.item = Some(it.clone()),
                 (8, Meta::Int(v)) if name == "experience_orb" => self.data = *v,
                 (9, Meta::Float(h)) => { self.health = Some(*h); if *h <= 0.0 && self.death == 0 { self.death = 1; } }
                 (15, Meta::Byte(b)) => self.mob_flags = *b,
@@ -114,6 +118,17 @@ impl Entity {
     pub fn tick(&mut self) {
         self.prev = self.pos; self.prev_head_yaw = self.head_yaw; self.prev_body_yaw = self.body_yaw; self.prev_pitch = self.pitch;
         self.prev_limb_amt = self.limb_amt; self.prev_limb_pos = self.limb_pos;
+        let tn = type_name(self.kind);
+        if self.steps == 0 && is_thrown(tn) && tn != "trident" {
+            // flies on its own between the server's 10-tick syncs (measured order: gravity, drag, then move)
+            let drag = 0.99;
+            self.vel[1] = (self.vel[1] - thrown_gravity(tn)) * drag;
+            self.vel[0] *= drag; self.vel[2] *= drag;
+            for i in 0..3 { self.pos[i] += self.vel[i]; }
+            let h = (self.vel[0] * self.vel[0] + self.vel[2] * self.vel[2]).sqrt();
+            self.yaw = self.vel[0].atan2(self.vel[2]).to_degrees() as f32; self.pitch = self.vel[1].atan2(h).to_degrees() as f32;
+            self.target_yaw = self.yaw; self.target_pitch = self.pitch;
+        }
         if self.steps == 0 && type_name(self.kind) == "falling_block" {
             // falls on its own between the server's position syncs (gravity 0.04, drag 0.98, like the server)
             self.vel[1] -= 0.04;
@@ -731,6 +746,25 @@ pub fn build_orb(atlas: &EntityAtlas, e: &Entity, alpha: f32, yaw: f32, pitch: f
     let uvs = [[uv[0], uv[1]], [uv[0], uv[3]], [uv[2], uv[3]], [uv[2], uv[1]]];
     let b = out.verts.len() as u32;
     for i in 0..4 { out.verts.push(Vertex { pos: pts[i].to_array(), uv: uvs[i], color: col, light: [light[0].max(200), light[1].max(200), 0, 0] }); }
+    out.idx.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3, b, b + 2, b + 1, b, b + 3, b + 2]);
+}
+
+/// A thrown item: the item's sprite as a camera-facing quad, half a block wide (vanilla's ground display scale).
+pub fn build_thrown(a: &Assets, e: &Entity, name: &str, alpha: f32, yaw: f32, pitch: f32, light: [u8; 2], out: &mut MeshData) {
+    let item = e.item.as_ref().map(|i| i.item).or_else(|| basalt_data::registry_id(basalt_data::registries::ITEM, name));
+    let Some(item) = item else { return };
+    let Some(uv) = a.icon_uv(item) else { return };
+    let p = e.render_pos(alpha);
+    let c = Vec3::new(p[0] as f32, p[1] as f32 + 0.125, p[2] as f32);
+    let (y, pt) = (yaw.to_radians(), pitch.to_radians());
+    let right = Vec3::new(-y.cos(), 0.0, -y.sin());
+    let fwd = Vec3::new(-y.sin() * pt.cos(), -pt.sin(), y.cos() * pt.cos());
+    let up = right.cross(fwd).normalize();
+    let (rr, uu) = (right * 0.25, up * 0.25);
+    let pts = [c - rr + uu, c - rr - uu, c + rr - uu, c + rr + uu];
+    let uvs = [[uv[0], uv[1]], [uv[0], uv[3]], [uv[2], uv[3]], [uv[2], uv[1]]];
+    let b = out.verts.len() as u32;
+    for i in 0..4 { out.verts.push(Vertex { pos: pts[i].to_array(), uv: uvs[i], color: [255, 255, 255, 255], light: [light[0], light[1], 0, 0] }); }
     out.idx.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3, b, b + 2, b + 1, b, b + 3, b + 2]);
 }
 

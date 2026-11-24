@@ -770,3 +770,9 @@ Measured over the wire with a 24x14 walled pen, grass on x 0..14 and a flush-sur
 - Chicken slow fall: vanilla terminal speed 0.113 blocks/tick, 40 blocks in 17.1 s; Basalt identical (gravity then y *= 0.6 while falling).
 - Path cost (path.rs `WATER_COST`) is 8 per water node; stroll/panic targets (`random_spot`) must be dry land (`can_swim: false`).
 - Natural spawning: grass block, light max(sky, block) >= 9, groups of 4 for all four kinds (weights sheep 12, pig 10, chicken 10, cow 8).
+
+## Throwables / projectile weapons (2026-11-24, measured on vanilla 26.2 over the wire)
+Rules are documented in the module headers: crates/server/src/game/{proj,potion,potions,bow,wind}.rs. Differential scenarios (group Items, all match vanilla):
+throw_basics, throw_eggs, throw_pearl, throw_xp_bottle, throw_hit_mob, throw_splash, throw_lingering, bow_shoot, trident_throw, wind_charge.
+Projectile tick order: v.y=(v.y-g)*0.99, v.xz*=0.99, then move; gravity .03 snowball/egg/pearl, .07 xp bottle, .05 potions/trident/arrow, 0 wind charge.
+Probe tooling: `basalt-check --probe ADDR NAME raw:add_entity,... use look:0,90 release mark:X dumpraw`.

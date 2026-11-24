@@ -135,6 +135,8 @@ Next steps for a fresh session, in order:
 5. Remaining plan: M3c woodland mansions, M8 End + exit-portal build rule, M9 redstone (Fable after Thu 26 Nov 6 pm WIB), fluids/block ticks, M11-M14.
 6. Disk: keep ~/Downloads/rustcraft under 20 GB with `cargo xtask clean-disk`; enable the shared worktree build folder (.claude/worktrees/.cargo/config.toml.off -> config.toml) only when no agent is running.
 
+- Throwables (2026-11-24): use_item for snowball, egg, ender pearl, xp bottle, splash/lingering potions (+ area effect cloud), wind charge, player bow, trident throw/pickup done and diffed vs vanilla (scenarios throw_*, bow_shoot, trident_throw, wind_charge). basalt-client: item-sprite billboards, own flight prediction, break/splash particles, sends use_item for throwables (PARTIAL: client scenario not written, untested in a real window, trident drawn as a sprite). Remaining: crossbow, trident Loyalty/Riptide/Channeling, endermite from pearls, egg chicken variants (blue/brown egg), wind charge damage on entity hit, tipped/spectral arrows, bow Infinity/Power, potion effects on mobs, buckets, flint and steel, bonemeal, shears, hoe/shovel/axe, fishing rod, client scenario for projectiles.
+
 ### Task list
 - [x] M1 client builds, joins vanilla, renders chunks
 - [x] M2 crates/world: sections/paletted containers, light, Anvil region read/write

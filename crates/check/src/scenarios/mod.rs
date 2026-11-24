@@ -12,6 +12,7 @@ pub mod m5_animals;
 pub mod m6;
 pub mod m10;
 pub mod m8;
+pub mod throw;
 pub mod util;
 
 macro_rules! spec {
@@ -91,6 +92,16 @@ pub static ALL: &[Spec] = &[
     spec!("Env", "env_berry_bush", env::berry_bush, Flat, Both, true, "moving through a grown berry bush hurts"),
     spec!("Env", "env_magma", env::magma, Flat, Both, true, "magma hurts unless sneaking"),
     spec!("Env", "env_void", env::void, Flat, Both, true, "below the world: 4 damage per 10 ticks until death"),
+    spec!("Items", "throw_basics", throw::throw_basics, Flat, Both, true, "snowball + egg: spawn offset/velocity/owner/item metadata, throw sound, consumption, break event"),
+    spec!("Items", "throw_eggs", throw::throw_eggs, Flat, Both, true, "eggs hatch baby chickens 1/8 of the time"),
+    spec!("Items", "throw_pearl", throw::throw_pearl, Flat, Both, true, "ender pearl: teleport to the impact point, 5 damage, 20-tick cooldown packets, sounds"),
+    spec!("Items", "throw_xp_bottle", throw::throw_xp_bottle, Flat, Both, true, "experience bottle: level_event 2002, 3-11 xp in orbs"),
+    spec!("Items", "throw_hit_mob", throw::throw_hit_mob, Flat, Both, true, "snowball hitting a cow: thrown damage event, 0 damage, knockback, hurt sound"),
+    spec!("Items", "throw_splash", throw::throw_splash, Flat, Both, true, "splash potions: colour event, direct hit full strength, distance scaling, instant harming, water"),
+    spec!("Items", "throw_lingering", throw::throw_lingering, Flat, Both, true, "lingering potion: area effect cloud, quarter-duration effects every 20 ticks, shrinking radius"),
+    spec!("Items", "bow_shoot", throw::bow_shoot, Flat, Both, true, "bow: draw time -> arrow speed/crit, consumption, tap does nothing, pickup of stuck arrows"),
+    spec!("Items", "trident_throw", throw::trident_throw, Flat, Both, true, "trident: 10-tick draw, speed 2.5, leaves the inventory, pickup"),
+    spec!("Items", "wind_charge", throw::wind_charge, Flat, Both, true, "wind charge: burst above the floor, explode packet radius + knockback, 10-tick cooldown"),
     spec!("Items", "items_tracking", m4::item_tracking, Flat, Both, true, "item add_entity carries velocity; update cadence; position matches server"),
     // appended last: a scenario's arena is placed by its index, so inserting earlier would move the others
     spec!("M2", "m2_command_forms", m1::command_forms, Flat, Both, false, "Brigadier parsing: tp/time/gamemode/enchant/help/effect/setblock forms accepted or rejected with vanilla's keys; /kill kills creative players"),

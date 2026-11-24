@@ -531,7 +531,13 @@ impl Game {
                 if id == self.my_eid && self.self_hurt == 0 { let p = self.player.pos; self.sounds.play("entity.player.hurt", Some(p), 1.0, 1.0); }
                 if id == self.my_eid { self.self_hurt = 10; } else if let Some(e) = self.entities.get_mut(&id) { e.hurt = 10; }
             }
-            Event::EntityEvent { id, status } => { if let Some(e) = self.entities.get_mut(&id) { match status { 3 => { if e.death == 0 { e.death = 1; } } 2 => e.hurt = 10, _ => {} } } }
+            Event::EntityEvent { id, status } => {
+                if status == 3 {
+                    // snowball / egg broke: item-break chips at its last position
+                    let broke = self.entities.get(&id).filter(|e| matches!(entity::type_name(e.kind), "snowball" | "egg")).map(|e| (e.pos, e.item.as_ref().map(|i| i.item)));
+                    if let Some((p, Some(item))) = broke { self.particles.item_break(&self.assets, item, [p[0], p[1] + 0.1, p[2]], 8); }
+                }
+                if let Some(e) = self.entities.get_mut(&id) { match status { 3 => { if e.death == 0 && entity::is_living(e.kind) { e.death = 1; } } 2 => e.hurt = 10, _ => {} } } }
             Event::TakeItem { item, collector, count } => {
                 // the item flies into the collector over 3 ticks (a copy: the server removes the entity
                 // right after this packet), with the pickup sound at the item
@@ -556,6 +562,11 @@ impl Game {
                     self.block_sound(data as u16, "break", [pos[0] as f64 + 0.5, pos[1] as f64 + 0.5, pos[2] as f64 + 0.5]);
                     let tint = self.particle_tint(data as u16, pos);
                     self.particles.block_break(&self.assets, data as u16, pos, tint);
+                }
+                if event == 2002 || event == 2007 {
+                    let c = [pos[0] as f64 + 0.5, pos[1] as f64 + 0.5, pos[2] as f64 + 0.5];
+                    self.sounds.play("entity.splash_potion.break", Some(c), 1.0, 0.9 + (self.ticks % 10) as f32 * 0.01);
+                    self.particles.splash(&self.assets, data as u32, pos);
                 }
             }
             Event::PlayerName { uuid, name } => { self.player_names.insert(uuid, name); }
@@ -1003,8 +1014,20 @@ impl Game {
         }
     }
 
+    /// Items whose use is a plain use_item (thrown, drawn): the vanilla client sends use_item after the
+    /// block use passes, so with these in hand we send it straight away.
+    fn held_is_usable(&self) -> bool {
+        let h = &self.hotbar[self.held as usize];
+        h.count > 0 && matches!(basalt_data::registries::ITEM.get(h.item as usize).copied(), Some("snowball" | "egg" | "blue_egg" | "brown_egg" | "ender_pearl" | "experience_bottle" | "splash_potion" | "lingering_potion" | "wind_charge" | "bow" | "trident" | "crossbow"))
+    }
+
     fn use_item(&mut self) {
         self.last_place = Instant::now();
+        if self.held_is_usable() {
+            self.seq += 1; let mut w = Writer::with_id(sb::USE_ITEM); w.varint(0).varint(self.seq).f32(self.player.yaw).f32(self.player.pitch); send(&self.out, w);
+            self.swing_arm();
+            return;
+        }
         let Some(h) = self.target() else {
             self.seq += 1; let mut w = Writer::with_id(sb::USE_ITEM); w.varint(0).varint(self.seq).f32(self.player.yaw).f32(self.player.pitch); send(&self.out, w); return;
         };
@@ -1223,7 +1246,7 @@ impl Game {
                 // attacking the air swings too and resets the attack strength (vanilla client, oracle "fp" recorder)
                 if self.screen.is_none() && self.target().is_none() { self.swing_arm(); self.attack_ticks = 0; }
                 self.mouse[0] = true; } } else { self.mouse[0] = false; } }
-            1 => { self.mouse[1] = pressed; if pressed { self.use_item(); } }
+            1 => { self.mouse[1] = pressed; if pressed { self.use_item(); } else if self.held_is_usable() { self.player_action(5, [0, 0, 0], 0); } }
             _ => {}
         }
     }
@@ -1539,6 +1562,8 @@ impl Game {
                     let name = entity::type_name(e.kind);
                     if name == "item" { entity::build_item(&self.assets, e, a, light, &mut fd.items3d); continue; }
                     if name == "falling_block" { entity::build_falling_block(&self.assets, e, a, light, &mut fd.items3d); continue; }
+                    if name == "area_effect_cloud" { continue; }
+                    if entity::is_thrown(name) { entity::build_thrown(&self.assets, e, name, a, self.player.yaw, self.player.pitch, light, &mut fd.items3d); continue; }
                     if name == "experience_orb" { entity::build_orb(&self.entity_atlas, e, a, self.player.yaw, self.player.pitch, light, &mut fd.skinned); continue; }
                     if !entity::build_model(&self.entity_atlas, e, a, light, &mut fd.skinned) {
                         let (bw, bh, color) = entity::dims(e.kind);

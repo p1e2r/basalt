@@ -18,6 +18,10 @@ pub struct Arrow {
     pub in_ground: Option<[i32; 3]>,
     pub life: u32,
     pub crit: bool,
+    /// entity type: "arrow" or "trident"
+    pub kind: &'static str,
+    /// what picking it up gives (players' arrows and tridents); None = not collectable
+    pub item: Option<super::Stack>,
 }
 
 impl Arrow {
@@ -28,7 +32,7 @@ impl Arrow {
     pub fn spawn_packets(&self) -> Vec<Writer> {
         let (yaw, pitch) = self.rot();
         let mut a = Writer::with_id(cb::ADD_ENTITY);
-        a.varint(self.eid).uuid(self.uuid).varint(registry_id(reg::ENTITY_TYPE, "arrow").unwrap_or(0)).f64(self.pos[0]).f64(self.pos[1]).f64(self.pos[2]);
+        a.varint(self.eid).uuid(self.uuid).varint(registry_id(reg::ENTITY_TYPE, self.kind).unwrap_or(0)).f64(self.pos[0]).f64(self.pos[1]).f64(self.pos[2]);
         write_lpvec3(&mut a, if self.in_ground.is_some() { [0.0; 3] } else { self.vel });
         a.u8(angle(pitch)).u8(angle(yaw)).u8(0).varint(self.owner.unwrap_or(0));
         let mut v = vec![Writer::with_id(cb::BUNDLE_DELIMITER), a];
@@ -61,13 +65,20 @@ impl Game {
     /// Shoot an arrow from `from` towards `dir` (normalised inside) at `speed` blocks/tick with
     /// gaussian `inaccuracy` like a bow.
     pub(super) fn shoot_arrow(&mut self, owner: i32, from: [f64; 3], dir: [f64; 3], speed: f64, inaccuracy: f64, damage: f64) {
+        self.shoot_projectile(owner, from, dir, speed, inaccuracy, damage, "arrow", false, None);
+    }
+
+    /// Arrow-like projectile (arrow / trident) fired by `owner`; returns its entity id.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn shoot_projectile(&mut self, owner: i32, from: [f64; 3], dir: [f64; 3], speed: f64, inaccuracy: f64, damage: f64, kind: &'static str, crit: bool, item: Option<super::Stack>) -> i32 {
         let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-9);
         let mut v = [dir[0] / len, dir[1] / len, dir[2] / len];
         for c in v.iter_mut() { let g: f64 = self.rng.sample(rand_distr_normal()); *c += g * 0.0075 * inaccuracy; }
         let v = [v[0] * speed, v[1] * speed, v[2] * speed];
         let eid = self.sh.next_eid.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.arrows.insert(eid, Arrow { eid, uuid: Uuid::new_v4(), pos: from, vel: v, owner: Some(owner), base_damage: damage, in_ground: None, life: 0, crit: false });
+        self.arrows.insert(eid, Arrow { eid, uuid: Uuid::new_v4(), pos: from, vel: v, owner: Some(owner), base_damage: damage, in_ground: None, life: 0, crit, kind, item });
         self.sync_viewers_for(eid);
+        eid
     }
 
     pub(super) fn tick_arrows(&mut self) {
@@ -80,6 +91,20 @@ impl Game {
                 // stuck: fall out if the block is gone, despawn after a minute
                 if !basalt_world::props::props(self.world.get_block(b[0], b[1], b[2])).blocks_motion() { a.in_ground = None; a.vel = [0.0; 3]; a.life = 0; }
                 if a.life > 1200 { self.untrack(id); continue; }
+                if let Some(item) = a.item {
+                    let near = self.players.values().find(|pl| !pl.dead && pl.gamemode != 3 && (pl.pos[0] - a.pos[0]).abs() < 1.0 && (pl.pos[2] - a.pos[2]).abs() < 1.0 && a.pos[1] > pl.pos[1] - 0.5 && a.pos[1] < pl.pos[1] + 2.3).map(|pl| (pl.eid, pl.gamemode));
+                    if let Some((pe, gm)) = near {
+                        let ok = gm == 1 || self.give_stack(pe, item) == 0;
+                        if ok {
+                            let mut w = Writer::with_id(cb::TAKE_ITEM_ENTITY); w.varint(id).varint(pe).varint(1);
+                            self.broadcast(None, || Writer { buf: w.buf.clone() });
+                            let pv = 1.0 + self.rng.gen_range(-0.2..0.2);
+                            self.play_sound("entity.item.pickup", 7, a.pos, 0.2, pv);
+                            self.untrack(id);
+                            continue;
+                        }
+                    }
+                }
                 self.arrows.insert(id, a); continue;
             }
             if a.life > 1200 || a.pos[1] < basalt_world::MIN_Y as f64 - 64.0 { self.untrack(id); continue; }
@@ -112,7 +137,7 @@ impl Game {
                 if let Some(t) = seg_aabb(p, d, bb, 0.3) { if t <= limit && ent_hit.map(|h| t < h.0).unwrap_or(true) { ent_hit = Some((t, pl.eid, true)); } }
             }
             if let Some((_, target, is_player)) = ent_hit {
-                let mut dmg = (len * a.base_damage).ceil();
+                let mut dmg = if a.kind == "trident" { 8.0 } else { (len * a.base_damage).ceil() };
                 if a.crit { dmg += self.rng.gen_range(0.0..dmg / 2.0 + 2.0).floor(); }
                 let owner_name = a.owner.and_then(|o| self.mobs.get(&o).map(|m| m.kind.display().to_string()).or_else(|| self.players.get(&o).map(|p| p.name.clone())));
                 let push = { let h = (d[0] * d[0] + d[2] * d[2]).sqrt().max(1e-6); [d[0] / h * 0.6, d[2] / h * 0.6] };
@@ -121,10 +146,17 @@ impl Game {
                     // arrows shot by mobs scale with difficulty (easy: min(d/2+1, d)); a player's own arrows don't
                     let from_mob = a.owner.map(|o| self.mobs.contains_key(&o)).unwrap_or(false);
                     let dmg = if from_mob { basalt_game::difficulty_scaled(dmg as f32, self.difficulty) as f64 } else { dmg };
-                    self.hurt_by(target, dmg as f32, "arrow", DamageSource { cause: a.owner, direct: Some(id), killer: owner_name, hurt_yaw: Some(yaw) });
+                    self.hurt_by(target, dmg as f32, a.kind, DamageSource { cause: a.owner, direct: Some(id), killer: owner_name, hurt_yaw: Some(yaw) });
                     self.knock_player(target, [push[0], 0.1, push[1]]);
                 } else {
-                    self.damage_mob(target, dmg as f32, "arrow", a.owner, Some(id), Some([-push[0], -push[1]]));
+                    self.damage_mob(target, dmg as f32, a.kind, a.owner, Some(id), Some([-push[0], -push[1]]));
+                }
+                if a.kind == "trident" {
+                    // bounces off the target and falls (measured: it ends up lying on the ground, collectable)
+                    self.play_sound("item.trident.hit", 7, p, 1.0, 1.0);
+                    a.vel = [d[0] * -0.01, d[1] * -0.1, d[2] * -0.01];
+                    self.arrows.insert(id, a);
+                    continue;
                 }
                 self.play_sound("entity.arrow.hit", 7, p, 1.0, 1.1);
                 self.untrack(id);
@@ -137,7 +169,7 @@ impl Game {
                 let mut w = Writer::with_id(cb::ENTITY_POSITION_SYNC);
                 w.varint(id).f64(a.pos[0]).f64(a.pos[1]).f64(a.pos[2]).f64(0.0).f64(0.0).f64(0.0).f32(yaw).f32(pitch).bool(false);
                 self.send_to_viewers(id, &w);
-                let mut m = Writer::with_id(cb::SET_ENTITY_DATA); m.varint(id).u8(10).varint(8).bool(true).u8(0xff);
+                let mut m = Writer::with_id(cb::SET_ENTITY_DATA); m.varint(id); if a.crit { m.u8(8).varint(0).u8(0); } m.u8(10).varint(8).bool(true).u8(0xff); a.crit = false;
                 self.send_to_viewers(id, &m);
                 a.vel = [0.0; 3];
                 self.play_sound("entity.arrow.hit", 7, a.pos, 1.0, 1.2);

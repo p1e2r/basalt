@@ -1,6 +1,11 @@
 //! Game thread: owns the world and all players; runs at 20 TPS.
 mod ai;
 mod arrow;
+mod proj;
+mod wind;
+mod bow;
+mod potion;
+mod potions;
 mod breed;
 mod cmd;
 mod combat;
@@ -129,6 +134,10 @@ struct Player {
     portal_ticks: i32,
     portal_cooldown: i32,
     portal_entry: Option<[i32; 3]>,
+    /// item cooldown groups ("ender_pearl") -> game tick they end
+    cooldowns: HashMap<String, u64>,
+    /// bow / trident draw in progress: (inventory slot, start tick)
+    draw: Option<(usize, u64)>,
 }
 
 impl Player {
@@ -158,6 +167,8 @@ pub struct Game {
     items: HashMap<i32, items::ItemEntity>,
     mobs: HashMap<i32, mob::Mob>,
     arrows: HashMap<i32, arrow::Arrow>,
+    /// thrown snowballs / eggs / pearls / bottles / potions / wind charges
+    projs: HashMap<i32, proj::Proj>,
     /// falling_block entities and pending gravity checks (due tick, block)
     fallers: HashMap<i32, falling::Faller>,
     gravity_checks: Vec<(u64, [i32; 3])>,
@@ -227,7 +238,7 @@ impl Game {
         let player_type = registry_id(reg::ENTITY_TYPE, "player").unwrap_or(0);
         let data = sh.data.clone();
         let sh_difficulty = sh.cfg.difficulty;
-        let mut g = Game { sh, world: s.world, gen: s.gen, players: s.players, tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir, data, commands_body: None, weather: Weather::default(), items: s.items, mobs: s.mobs, arrows: s.arrows, fallers: s.fallers, gravity_checks: s.gravity_checks, random_tick_speed: 3, scoreboard: Default::default(), bossbars: Default::default(), default_gamemode: 0, difficulty: sh_difficulty, orbs: s.orbs, bes: s.bes, path_budget: 0, no_spawning: false, rng: rand::rngs::StdRng::from_entropy(), cur: dim::OVERWORLD, parked: states, cmd_dim: None, portals: s.portals, portal_quiet: false };
+        let mut g = Game { sh, world: s.world, gen: s.gen, players: s.players, tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir, data, commands_body: None, weather: Weather::default(), items: s.items, mobs: s.mobs, arrows: s.arrows, projs: s.projs, fallers: s.fallers, gravity_checks: s.gravity_checks, random_tick_speed: 3, scoreboard: Default::default(), bossbars: Default::default(), default_gamemode: 0, difficulty: sh_difficulty, orbs: s.orbs, bes: s.bes, path_budget: 0, no_spawning: false, rng: rand::rngs::StdRng::from_entropy(), cur: dim::OVERWORLD, parked: states, cmd_dim: None, portals: s.portals, portal_quiet: false };
         g.no_spawning = g.sh.cfg.no_spawning;
         g.default_gamemode = g.sh.cfg.gamemode;
         g.commands_body = crate::commands::build_packet(&g.sh.cfg.data_dir, crate::commands::IMPLEMENTED);
@@ -521,7 +532,7 @@ impl Game {
             dead: false, health: 20.0, food: 20, saturation: 5.0, exhaustion: 0.0, fall_start: None, hurt_cooldown: 0, regen_timer: 0,
             using: None, sprinting: false, jump_held: false, dig_start: None, delayed_dig: None, cursor: Stack::default(), craft_result: Stack::default(),
             table_grid: [Stack::default(); 9], window: inv::Window::Inventory, next_window: 0, state_id: 0, drag: (0, Vec::new()), seen_items: HashSet::new(), cont_items: Vec::new(), ender: vec![Stack::default(); 27], st: station::St::default(), data_sent: [-1; 4], xp_level: 0, xp_progress: 0.0, xp: 0,
-            air: env::MAX_AIR, fire_ticks: 0, ticks_frozen: 0, fire_exposure: 0, effects: HashMap::new(), prev_tick_pos: [0.0; 3], seen: HashSet::new(), last_attack_tick: 0, portal_ticks: 0, portal_cooldown: 0, portal_entry: None,
+            air: env::MAX_AIR, fire_ticks: 0, ticks_frozen: 0, fire_exposure: 0, effects: HashMap::new(), prev_tick_pos: [0.0; 3], seen: HashSet::new(), last_attack_tick: 0, portal_ticks: 0, portal_cooldown: 0, portal_entry: None, cooldowns: HashMap::new(), draw: None,
         };
         self.load_player(&mut p);
         let d = self.saved_dim(p.uuid);
@@ -687,7 +698,7 @@ impl Game {
                 if hand == 0 { self.place(eid, [x, y, z], face.clamp(0, 5) as usize, cursor); }
                 if let Some(p) = self.players.get(&eid) { let mut w = Writer::with_id(cb::BLOCK_CHANGED_ACK); w.varint(seq); p.send(w); }
             }
-            sb::USE_ITEM => { let hand = r.varint()?; let seq = r.varint()?; self.start_using(eid, hand); if let Some(p) = self.players.get(&eid) { let mut w = Writer::with_id(cb::BLOCK_CHANGED_ACK); w.varint(seq); p.send(w); } }
+            sb::USE_ITEM => { let hand = r.varint()?; let seq = r.varint()?; let (yaw, pitch) = (r.f32().unwrap_or(0.0), r.f32().unwrap_or(0.0)); if !self.try_throw(eid, hand, yaw, pitch) && !self.try_draw(eid, hand) { self.start_using(eid, hand); } if let Some(p) = self.players.get(&eid) { let mut w = Writer::with_id(cb::BLOCK_CHANGED_ACK); w.varint(seq); p.send(w); } }
             sb::CHAT => {
                 let msg = r.str()?;
                 if msg.len() > 256 || msg.chars().any(|c| c.is_control()) { return Err(anyhow!("illegal chat")); }
@@ -734,7 +745,7 @@ impl Game {
                 self.throw_item(eid, Stack { item: s.item, count: n, damage: 0, ench: NO_ENCH }, false);
                 return;
             }
-            5 => { if let Some(p) = self.players.get_mut(&eid) { p.using = None; } return; }
+            5 => { if let Some(p) = self.players.get_mut(&eid) { p.using = None; } self.release_draw(eid); return; }
             6 => { // swap main/off hand
                 if let Some(p) = self.players.get_mut(&eid) { let slot = 36 + p.held; p.inv.swap(slot, 45); Self::send_window(p); }
                 return;
@@ -949,6 +960,8 @@ impl Game {
         self.tick_items();
         self.tick_mobs();
         self.tick_arrows();
+        self.tick_projs();
+        self.tick_cooldowns();
         self.tick_falling();
         self.tick_orbs();
         self.tick_random();
