@@ -1,6 +1,7 @@
 //! `cargo xtask <task>`: the cross-platform replacement for the bash/swift scripts under tools/.
 //! The old tools/*.sh are thin wrappers around these subcommands.
 mod check_all;
+mod clean_disk;
 mod extract_data;
 mod pr_ready;
 mod smoke;
@@ -17,7 +18,8 @@ tasks:
   pr-ready [--client] [--all] [--no-vanilla] [--update-baselines] [--base REF]
   check-all [--quick] [--no-vanilla] [--real-client] [--client [--update-baseline]] [--ci] [--fuzz] [--fuzz-long]
   window-screenshot [OUT.png]  capture only the Minecraft window (macOS/Windows/Linux)
-  window-bounds                print the Minecraft window bounds: x y w h";
+  window-bounds                print the Minecraft window bounds: x y w h
+  clean-disk [--aggressive] [--dry-run]  sweep build folders, finished worktrees, old harness outputs";
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
@@ -35,6 +37,7 @@ fn main() -> Result<()> {
         "check-all" => check_all::run(&rest)?,
         "window-screenshot" => window::screenshot(&rest)?,
         "window-bounds" => window::bounds()?,
+        "clean-disk" => clean_disk::run(&rest)?,
         "-h" | "--help" | "help" => {
             println!("{USAGE}");
             0

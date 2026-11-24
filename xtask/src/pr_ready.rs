@@ -453,5 +453,7 @@ pub fn run(args: &[String]) -> Result<i32> {
     }
     println!();
     println!("pr_ready: {}", if fail { "FAIL" } else { "PASS" });
+    // keep target/check from growing: the newest 3 runs per harness stay
+    crate::clean_disk::prune_check_outputs();
     Ok(fail as i32)
 }

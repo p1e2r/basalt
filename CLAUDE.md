@@ -234,7 +234,16 @@ The old `tools/*.sh` scripts are thin wrappers around the same tasks, so existin
    - `cargo xtask window-screenshot out.png` / `window-bounds`: capture ONLY the Minecraft window
      (macOS: swiftc-compiled tools/mc-window-*.swift; Windows: PowerShell + PrintWindow; Linux/X11: xdotool +
      ImageMagick `import` or `xwd`; title prefix `Minecraft`, override `MC_WINDOW_TITLE`).
-6. CI: .github/workflows/build.yml builds release binaries (server, client, probe, check) on windows-latest
+6. Disk (keep ~/Downloads/rustcraft under 20 GB; user's rule 2026-11-24): `cargo xtask clean-disk [--aggressive] [--dry-run]`
+   removes finished agent worktrees (no unmerged commits, nothing changed in 30 min, no process inside; branches stay),
+   sweeps build folders (target/, target-play/) with cargo-sweep (2 days; aggressive: 0 days + incremental caches), keeps
+   the newest 3 runs per harness in target/check (also pruned at the end of every pr-ready) and drops motion frame dumps.
+   It never touches vanilla/ or data/ (jars, oracle dumps, parity worlds: expensive to regenerate) or a running agent.
+   Agent worktrees share one build folder: .claude/worktrees/.cargo/config.toml (untracked) sets build.target-dir to the
+   main checkout's target/. In a new worktree, `ln -s ../../../target target` so the harness finds target/release.
+   Caveat: worktrees building different code at the same time overwrite each other's binaries in the shared folder —
+   build and test one at a time, or point BASALT_SERVER (and --client) at copies of your own binaries.
+7. CI: .github/workflows/build.yml builds release binaries (server, client, probe, check) on windows-latest
    (x86_64-pc-windows-msvc), macos-14 (aarch64-apple-darwin) and ubuntu-latest, runs `cargo test --workspace`
    and uploads the binaries; check.yml runs the harness on Linux. Both generate ./data with `cargo xtask extract-data`.
    Linux needs only pkg-config + libx11/libxkbcommon dev headers (winit/wgpu dlopen at runtime) and
