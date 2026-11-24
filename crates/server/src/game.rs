@@ -2,6 +2,7 @@
 mod ai;
 mod arrow;
 mod proj;
+mod wind;
 mod bow;
 mod potion;
 mod potions;

@@ -120,6 +120,8 @@ pub struct Proj {
     sent_vel: [f64; 3],
     /// where it hit (block face / entity box intersection)
     pub hit_pos: [f64; 3],
+    /// outward normal of the block face that was hit (zero for entity hits)
+    pub hit_normal: [f64; 3],
     pub cloud: Option<super::potion::Cloud>,
 }
 
@@ -136,6 +138,7 @@ impl Proj {
             age: 0,
             sent_vel: [0.0; 3],
             hit_pos: pos,
+            hit_normal: [0.0; 3],
             cloud: None,
         }
     }
@@ -284,6 +287,7 @@ impl Game {
                 age: 0,
                 sent_vel: vel,
                 hit_pos: pos,
+                hit_normal: [0.0; 3],
                 cloud: None,
             },
         );
@@ -411,6 +415,14 @@ impl Game {
                     p[1] + d[1] * t_hit,
                     p[2] + d[2] * t_hit,
                 ];
+                if ent_hit.is_none() || block_hit.map(|b| b < t_hit + 1e-9).unwrap_or(false) {
+                    for k in 0..3 {
+                        if d[k].abs() > 1e-9 && (a.hit_pos[k] - a.hit_pos[k].round()).abs() < 1e-6 {
+                            a.hit_normal[k] = -d[k].signum();
+                            break;
+                        }
+                    }
+                }
                 self.projectile_hit(a, hit_ent);
                 continue;
             }
@@ -520,13 +532,24 @@ impl Game {
                     || Writer { buf: w.buf.clone() },
                 );
                 let xp = 3 + self.rng.gen_range(0..5) + self.rng.gen_range(0..5);
-                self.spawn_xp(a.hit_pos, xp);
+                self.spawn_xp(
+                    [
+                        a.hit_pos[0] + a.hit_normal[0] * 0.25,
+                        a.hit_pos[1] + a.hit_normal[1] * 0.25,
+                        a.hit_pos[2] + a.hit_normal[2] * 0.25,
+                    ],
+                    xp,
+                );
             }
             PKind::Splash | PKind::Lingering => {
                 self.untrack(id);
                 self.potion_burst(&a, hit);
             }
-            PKind::Wind | PKind::Cloud => {
+            PKind::Wind => {
+                self.untrack(id);
+                self.wind_burst(&a);
+            }
+            PKind::Cloud => {
                 self.untrack(id);
             }
         }

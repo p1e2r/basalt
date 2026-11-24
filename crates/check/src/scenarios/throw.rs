@@ -372,6 +372,21 @@ pub fn throw_xp_bottle(ctx: &mut Ctx) -> Result<()> {
         (3..=11).contains(&gained) as u8 as f64,
         0.0,
     );
+    // thrown straight down: the orbs appear 0.25 above the floor
+    let t1 = throw(&bot, "experience_bottle", 90.0)?;
+    bot.wait_until(Duration::from_secs(4), |s| {
+        s.entities
+            .values()
+            .chain(s.removed.iter())
+            .any(|e| e.kind == "experience_orb" && e.added >= t1)
+    });
+    ctx.metric(
+        "bottle_orb_dy_floor",
+        spawned(&bot, "experience_orb", t1)
+            .map(|e| e.spawn_pos[1] - Y as f64)
+            .unwrap_or(-9.0),
+        0.1,
+    );
     ctx.metric(
         "bottle_left",
         bot.st().count("experience_bottle") as f64,
@@ -793,5 +808,61 @@ pub fn trident_throw(ctx: &mut Ctx) -> Result<()> {
         bot.wait_ticks(10);
     }
     ctx.metric("trident_picked_up", bot.st().count("trident") as f64, 0.0);
+    Ok(())
+}
+
+/// Wind charge: thrown at the floor it bursts 0.25 above it (explode packet: radius, knockback on the thrower),
+/// 10-tick cooldown, no gravity.
+pub fn wind_charge(ctx: &mut Ctx) -> Result<()> {
+    let (bot, _o) = box_arena(ctx, 10, "survival")?;
+    give(&bot, "wind_charge", 6)?;
+    let me = bot.st().pos();
+    for (tag, pitch) in [("down", 90.0f32), ("slant", 60.0)] {
+        bot.tp(me)?;
+        bot.wait_on_ground(Duration::from_secs(3));
+        bot.wait_ticks(25);
+        let n0 = bot.st().explosions.len();
+        let t0 = throw(&bot, "wind_charge", pitch)?;
+        let ok = bot.wait_until(Duration::from_secs(3), |s| s.explosions.len() > n0);
+        ctx.check(ok, format!("{tag}: no explode packet"));
+        if let Some(x) = bot.st().explosions.get(n0).cloned() {
+            ctx.metric(&format!("wind_{tag}_dy"), x.pos[1] - me[1], 0.06);
+            ctx.metric(&format!("wind_{tag}_dz"), x.pos[2] - me[2], 0.15);
+            ctx.metric(&format!("wind_{tag}_radius"), x.radius as f64, 0.001);
+            let kb = x.knockback.unwrap_or([0.0; 3]);
+            ctx.metric(&format!("wind_{tag}_kb_y"), kb[1], 0.06);
+            ctx.metric(&format!("wind_{tag}_kb_z"), kb[2], 0.06);
+        }
+        let cd: Vec<i32> = bot
+            .st()
+            .cooldowns
+            .iter()
+            .filter(|c| c.0 >= t0 && c.1 == "minecraft:wind_charge")
+            .map(|c| c.2)
+            .collect();
+        ctx.metric(
+            &format!("wind_{tag}_cooldown_start"),
+            cd.first().copied().unwrap_or(-1) as f64,
+            0.0,
+        );
+        ctx.metric(
+            &format!("wind_{tag}_sound_burst"),
+            sounds_since(&bot, t0)
+                .iter()
+                .any(|s| s.0 == "entity.wind_charge.wind_burst") as u8 as f64,
+            0.0,
+        );
+    }
+    // thrown during the cooldown: nothing happens
+    let left = bot.st().count("wind_charge");
+    bot.use_item();
+    bot.wait_ticks(2);
+    bot.use_item();
+    bot.wait_ticks(3);
+    ctx.metric(
+        "wind_used_during_cooldown",
+        (left - bot.st().count("wind_charge")) as f64,
+        0.0,
+    );
     Ok(())
 }

@@ -94,6 +94,7 @@ pub static ALL: &[Spec] = &[
     spec!("Items", "throw_lingering", throw::throw_lingering, Flat, Both, true, "lingering potion: area effect cloud, quarter-duration effects every 20 ticks, shrinking radius"),
     spec!("Items", "bow_shoot", throw::bow_shoot, Flat, Both, true, "bow: draw time -> arrow speed/crit, consumption, tap does nothing, pickup of stuck arrows"),
     spec!("Items", "trident_throw", throw::trident_throw, Flat, Both, true, "trident: 10-tick draw, speed 2.5, leaves the inventory, pickup"),
+    spec!("Items", "wind_charge", throw::wind_charge, Flat, Both, true, "wind charge: burst above the floor, explode packet radius + knockback, 10-tick cooldown"),
     spec!("Items", "items_tracking", m4::item_tracking, Flat, Both, true, "item add_entity carries velocity; update cadence; position matches server"),
     // appended last: a scenario's arena is placed by its index, so inserting earlier would move the others
     spec!("M2", "m2_command_forms", m1::command_forms, Flat, Both, false, "Brigadier parsing: tp/time/gamemode/enchant/help/effect/setblock forms accepted or rejected with vanilla's keys; /kill kills creative players"),
