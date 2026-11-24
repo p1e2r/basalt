@@ -86,7 +86,7 @@ pub fn all() -> Vec<Entry> {
     v.push(Entry { id: "client_mesh".into(), kind: HKind::Script, group: "client".into(), paths: client_paths, desc: "block-meshing parity of basalt-client vs the vanilla client oracle".into() });
     // scripted vanilla-client input via the oracle control channel (crates/check/src/client/{input_diff,click_oracle}.rs)
     for (id, desc) in [("client_input", "serverbound packet parity of basalt-client vs the real vanilla client for a scripted input sequence"),
-        ("client_dig", "empty-hand digging (survival stone/dirt, creative) on the real client vs basalt-client, on Basalt and vanilla servers"), ("client_clicks", "container clicks of the real vanilla client (prediction + packets) vs the Basalt server's answers")] {
+        ("client_dig", "empty-hand digging (survival stone/dirt, creative) on the real client vs basalt-client, on Basalt and vanilla servers"), ("client_clicks", "container clicks of the real vanilla client (prediction + packets) vs the Basalt server's answers"), ("client_water", "player water movement (fall in, swim up, sprint-swim, ledge exit) of the real client vs basalt-client, per-tick positions")] {
         let mut p: Vec<String> = crate::client::INPUT_AFFECTED.iter().map(|s| s.to_string()).collect();
         p.extend(["crates/check/src/client/{input_diff,click_oracle,oracle,mod}.rs", "crates/check/src/fuzz/clicks.rs", "tools/oracle-mod/**", "crates/check/Cargo.toml", "crates/protocol/**", "crates/data/**", "crates/world/**", "crates/server/Cargo.toml", "Cargo.lock"].map(String::from));
         v.push(Entry { id: id.into(), kind: HKind::Script, group: "client".into(), paths: p, desc: desc.into() });

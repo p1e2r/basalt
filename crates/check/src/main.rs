@@ -27,6 +27,10 @@ fn main() {
         let a: Vec<String> = std::env::args().skip(2).collect();
         std::process::exit(basalt_check::client::input_diff::main(&a));
     }
+    if std::env::args().nth(1).as_deref() == Some("client-water") {
+        let a: Vec<String> = std::env::args().skip(2).collect();
+        std::process::exit(basalt_check::client::water::main(&a));
+    }
     if std::env::args().nth(1).as_deref() == Some("client-anim") {
         let a: Vec<String> = std::env::args().skip(2).collect();
         std::process::exit(basalt_check::client::anim_diff::main(&a));

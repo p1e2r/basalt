@@ -691,14 +691,14 @@ impl Game {
         if toggle && key && !self.sprint_key_was { self.sprint_latch = !self.sprint_latch; }
         let wants_key = if toggle { self.sprint_latch } else { key };
         let creative = self.player.gamemode == 1 || self.player.gamemode == 3 || self.player.flying;
-        let can = fwd && !sneak && (self.food > 6 || creative) && !self.using_item() && !self.player.h_collide && !self.player.in_water;
+        let can = fwd && !sneak && (self.food > 6 || creative) && !self.using_item() && !self.player.h_collide && (!self.player.in_water || self.player.eyes_in_water);
         if self.sprint_trigger > 0 { self.sprint_trigger -= 1; }
         if !self.sprinting {
             let pressed = fwd && !self.fwd_was;
             if pressed && self.sprint_trigger > 0 && can { self.sprinting = true; }
             else if pressed { self.sprint_trigger = 7; }
             if wants_key && can { self.sprinting = true; }
-        } else if !fwd || (self.food <= 6 && !creative) || self.using_item() || self.player.h_collide || self.player.in_water {
+        } else if !fwd || (self.food <= 6 && !creative) || self.using_item() || self.player.h_collide || (self.player.in_water && !self.player.eyes_in_water) {
             // (sneaking does not end a sprint in 26.2: the real client keeps sending sprint until forward is released)
             self.sprinting = false;
         }

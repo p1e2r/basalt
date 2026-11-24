@@ -15,6 +15,8 @@ pub struct Player {
     pub flying: bool,
     pub gamemode: u8,
     pub in_water: bool,
+    /// eyes under water: sprinting there is swimming
+    pub eyes_in_water: bool,
     pub prev_pos: [f64; 3],
     pub sneaking: bool,
 }
@@ -82,7 +84,7 @@ pub fn move_box(a: &Assets, w: &World, bb: Aabb, d: [f64; 3]) -> [f64; 3] {
 }
 
 impl Player {
-    pub fn new() -> Self { Player { pos: [0.0, 100.0, 0.0], vel: [0.0; 3], yaw: 0.0, pitch: 0.0, on_ground: false, h_collide: false, flying: false, gamemode: 0, in_water: false, prev_pos: [0.0, 100.0, 0.0], sneaking: false } }
+    pub fn new() -> Self { Player { pos: [0.0, 100.0, 0.0], vel: [0.0; 3], yaw: 0.0, pitch: 0.0, on_ground: false, h_collide: false, flying: false, gamemode: 0, in_water: false, eyes_in_water: false, prev_pos: [0.0, 100.0, 0.0], sneaking: false } }
     pub fn eye_height(&self) -> f64 { if self.sneaking { 1.27 } else { 1.62 } }
     pub fn aabb(&self) -> Aabb { let h = WIDTH / 2.0; [self.pos[0] - h, self.pos[1], self.pos[2] - h, self.pos[0] + h, self.pos[1] + HEIGHT, self.pos[2] + h] }
 
@@ -111,6 +113,24 @@ impl Player {
         if hit_h && m[1] > d[1] + 1e-9 && d[1] <= 0.0 { self.on_ground = true; self.vel[1] = 0.0; }
     }
 
+    /// In a fluid when the feet at height `fy` are below a fluid surface in the body's column: a fluid
+    /// block's surface is its top when fluid is above it, else (8 - level) / 9 of the block (still
+    /// water 8/9) — the real client switches to air physics exactly when the feet pass that height
+    /// (client-water swim_up trace, 2026-11-24).
+    fn in_fluid_at(&self, a: &Assets, w: &World, fy: f64) -> bool {
+        let (bx, bz) = (self.pos[0].floor() as i32, self.pos[2].floor() as i32);
+        (fy.floor() as i32..=(fy + 1.8).floor() as i32).any(|by| {
+            let st = w.get(bx, by, bz);
+            if a.info(st).fluid == 0 { return false; }
+            let above = w.get(bx, by + 1, bz);
+            let h = if a.info(above).fluid != 0 { 1.0 } else {
+                let lvl = basalt_data::BlockState(st as u32).get("level").and_then(|v| v.parse::<i32>().ok()).unwrap_or(0);
+                (8 - if lvl >= 8 { 0 } else { lvl }) as f64 / 9.0
+            };
+            fy < by as f64 + h
+        })
+    }
+
     /// One 50 ms physics tick.
     pub fn tick(&mut self, a: &Assets, w: &World, input: Input) {
         self.prev_pos = self.pos;
@@ -118,7 +138,12 @@ impl Player {
         // don't fall into unloaded chunks
         if !w.loaded(self.pos[0].floor() as i32, self.pos[2].floor() as i32) { self.vel = [0.0; 3]; return; }
         let feet = w.get(self.pos[0].floor() as i32, (self.pos[1] + 0.4).floor() as i32, self.pos[2].floor() as i32);
-        self.in_water = a.info(feet).fluid != 0;
+        // in water while the feet are below a fluid surface in the body's column: a fluid block's
+        // surface is its top when fluid is above it, else (8 - level) / 9 of the block (still water
+        // 8/9) — the real client switches to air physics exactly when the feet pass that height
+        // (client-water swim_up trace, 2026-11-24)
+        self.in_water = self.in_fluid_at(a, w, self.pos[1]);
+        if !self.in_water { self.eyes_in_water = false; }
         let (mut f, mut s) = (input.forward as f64, input.strafe as f64);
         let len = (f * f + s * s).sqrt(); if len > 1.0 { f /= len; s /= len; }
         f *= 0.98; s *= 0.98;
@@ -136,11 +161,39 @@ impl Player {
             return;
         }
         if self.in_water {
+            // fitted to the real 26.2 client's per-tick positions (basalt-check client-water,
+            // 2026-11-24): drag 0.8 (sprint-swimming 0.9 horizontally), sinking settles at -0.025/tick
+            // (v*0.8 - 0.005), Space adds 0.04 (rising settles at 0.175/tick); sprint-swimming keeps
+            // its depth when looking level (vertical x0.75, snapped to 0 below 0.003)
+            let eyes = w.get(self.pos[0].floor() as i32, (self.pos[1] + 1.62).floor() as i32, self.pos[2].floor() as i32);
+            self.eyes_in_water = a.info(eyes).fluid != 0;
+            let swimming = sprint && self.eyes_in_water;
             if input.jump { self.vel[1] += 0.04; }
             accel_dir(0.02, &mut self.vel);
             let v = self.vel; self.do_move(a, w, v);
-            self.vel[0] *= 0.8; self.vel[2] *= 0.8; self.vel[1] = self.vel[1] * 0.8 - 0.02;
-            if self.h_collide && input.forward > 0.0 { self.vel[1] = 0.3; }
+            let drag = if swimming { 0.9 } else { 0.8 };
+            self.vel[0] *= drag; self.vel[2] *= drag;
+            if swimming {
+                self.vel[1] *= 0.75;
+                if self.vel[1].abs() < 0.003 { self.vel[1] = 0.0; }
+            } else {
+                self.vel[1] = self.vel[1] * 0.8 - 0.005;
+            }
+                // climbing out at a ledge: only once the body moved up by its speed + 0.6 would be clear of
+            // the fluid (fitted: client-water ledge_exit — the real client keeps swimming up a wall)
+            // the test box: moved horizontally by the velocity and, from last tick's height, up by the
+            // velocity + 0.6; it must touch neither blocks (the wall) nor fluid
+            if self.h_collide && input.forward > 0.0 {
+                let y1 = self.prev_pos[1] + self.vel[1] + 0.6;
+                let h = WIDTH / 2.0;
+                // horizontally the movement it tried (the collision zeroed the velocity), so the box
+                // pushes into the wall until the body is high enough
+                let bb = [self.pos[0] + v[0] - h, y1, self.pos[2] + v[2] - h, self.pos[0] + v[0] + h, y1 + HEIGHT, self.pos[2] + v[2] + h];
+                let mut boxes = Vec::new();
+                collect(a, w, &bb, &mut boxes);
+                let blocked = boxes.iter().any(|b| bb[0] < b[3] && bb[3] > b[0] && bb[1] < b[4] && bb[4] > b[1] && bb[2] < b[5] && bb[5] > b[2]);
+                if !blocked && !self.in_fluid_at(a, w, y1) { self.vel[1] = 0.3; }
+            }
             return;
         }
         if input.jump && self.on_ground {

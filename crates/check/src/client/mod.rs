@@ -9,6 +9,7 @@ pub mod click_oracle;
 pub mod coverage;
 pub mod imgcmp;
 pub mod input_diff;
+pub mod water;
 pub mod mesh_diff;
 pub mod oracle;
 pub mod perf;
