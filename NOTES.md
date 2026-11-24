@@ -734,8 +734,8 @@ and dy), whose shape gave the closed forms below, then their 4 parameters by log
 ## Land animals and water (M5, 2026-11-24) — scenarios m5_animals_avoid_water / m5_animal_float / m5_chicken_fall
 Measured over the wire with a 24x14 walled pen, grass on x 0..14 and a flush-surface lake 10x14x3 beside it, 4 cows, pigs, sheep and chickens each
 (PersistenceRequired, tag-killed afterwards), 150 s, one position sample per animal per second:
-- Vanilla: 2.4 % of animal-samples in the lake (cow 27, pig 18, sheep 12, chicken 0 of 600 each), 0/16 in the water at the end. So vanilla animals avoid
-  water but do occasionally step in (water costs extra, not forbidden).
+- Vanilla: 2.4 % and 12.1 % of animal-samples in the lake in two runs (second run cow 65, pig 29, sheep 58, chicken 138 of 600 each), 0-1/16 in the water at the
+  end. So vanilla animals avoid water but do step in now and then (water costs extra, not forbidden); the scenario tolerance is 12 points.
 - Basalt before: 61.9 % of samples in the lake, 11/16 at the end (wander targets accepted water cells). After: 0.0 %, 0/16.
 - Dropped in the lake (2 of each kind): vanilla animals ride the surface (mean depth 0.37 blocks) and only 4-5 of 8 reach the shore within 50 s (they do
   not actively seek land); Basalt's float goal (ai.rs, `float_target`) swims them to the nearest dry standable spot within 12 blocks (8/8 in 25 s).
