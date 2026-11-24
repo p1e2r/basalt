@@ -29,6 +29,7 @@ use uuid::Uuid;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PKind {
+    Cloud,
     Snowball,
     Egg,
     Pearl,
@@ -60,6 +61,7 @@ impl PKind {
             PKind::Splash => "splash_potion",
             PKind::Lingering => "lingering_potion",
             PKind::Wind => "wind_charge",
+            PKind::Cloud => "area_effect_cloud",
         }
     }
     fn speed(self) -> f64 {
@@ -93,6 +95,7 @@ impl PKind {
             PKind::Splash => ("entity.splash_potion.throw", 7),
             PKind::Lingering => ("entity.lingering_potion.throw", 6),
             PKind::Wind => ("entity.wind_charge.throw", 6),
+            PKind::Cloud => ("", 0),
         }
     }
     /// (cooldown group item, ticks)
@@ -115,9 +118,27 @@ pub struct Proj {
     pub item: Stack,
     pub age: u32,
     sent_vel: [f64; 3],
+    /// where it hit (block face / entity box intersection)
+    pub hit_pos: [f64; 3],
+    pub cloud: Option<super::potion::Cloud>,
 }
 
 impl Proj {
+    pub fn new_cloud(eid: i32, pos: [f64; 3], owner: i32, item: Stack) -> Proj {
+        Proj {
+            eid,
+            uuid: Uuid::new_v4(),
+            kind: PKind::Cloud,
+            pos,
+            vel: [0.0; 3],
+            owner,
+            item,
+            age: 0,
+            sent_vel: [0.0; 3],
+            hit_pos: pos,
+            cloud: None,
+        }
+    }
     pub fn rot(&self) -> (f32, f32) {
         let h = (self.vel[0] * self.vel[0] + self.vel[2] * self.vel[2]).sqrt();
         (
@@ -142,7 +163,9 @@ impl Proj {
         write_lpvec3(&mut a, self.vel);
         a.u8(angle(pitch)).u8(angle(yaw)).u8(0).varint(self.owner);
         let mut v = vec![Writer::with_id(cb::BUNDLE_DELIMITER), a];
-        if self.kind != PKind::Wind {
+        if let (PKind::Cloud, Some(c)) = (self.kind, &self.cloud) {
+            v.push(c.spawn_data(self.eid));
+        } else if self.kind != PKind::Wind {
             let mut d = Writer::with_id(cb::SET_ENTITY_DATA);
             d.varint(self.eid).u8(8).varint(7);
             write_slot(
@@ -260,6 +283,8 @@ impl Game {
                 item,
                 age: 0,
                 sent_vel: vel,
+                hit_pos: pos,
+                cloud: None,
             },
         );
         self.sync_viewers_for(peid);
@@ -294,6 +319,10 @@ impl Game {
             let Some(mut a) = self.projs.remove(&id) else {
                 continue;
             };
+            if a.kind == PKind::Cloud {
+                self.tick_cloud(a);
+                continue;
+            }
             if self
                 .world
                 .chunk(
@@ -376,6 +405,12 @@ impl Game {
             }
             if ent_hit.is_some() || block_hit.is_some() {
                 let hit_ent = ent_hit.map(|h| (h.1, h.2));
+                let t_hit = ent_hit.map(|h| h.0).unwrap_or(1.0).min(limit);
+                a.hit_pos = [
+                    p[0] + d[0] * t_hit,
+                    p[1] + d[1] * t_hit,
+                    p[2] + d[2] * t_hit,
+                ];
                 self.projectile_hit(a, hit_ent);
                 continue;
             }
@@ -442,7 +477,7 @@ impl Game {
                     let n = if self.rng.gen_range(0..32) == 0 { 4 } else { 1 };
                     let (yaw, _) = a.rot();
                     for _ in 0..n {
-                        self.spawn_mob(MobKind::Chicken, pos, yaw, |m| {
+                        self.spawn_mob(MobKind::Chicken, a.hit_pos, yaw, |m| {
                             m.baby = true;
                             m.grow = 0;
                         });
@@ -485,13 +520,13 @@ impl Game {
                     || Writer { buf: w.buf.clone() },
                 );
                 let xp = 3 + self.rng.gen_range(0..5) + self.rng.gen_range(0..5);
-                self.spawn_xp(pos, xp);
+                self.spawn_xp(a.hit_pos, xp);
             }
             PKind::Splash | PKind::Lingering => {
                 self.untrack(id);
                 self.potion_burst(&a, hit);
             }
-            PKind::Wind => {
+            PKind::Wind | PKind::Cloud => {
                 self.untrack(id);
             }
         }
@@ -538,9 +573,6 @@ impl Game {
         let pitch = 1.0 + self.rng.gen_range(-0.2..0.2);
         self.play_sound(&kind.sound("hurt"), kind.sound_category(), pos, 1.0, pitch);
     }
-
-    /// Splash / lingering potion landing (effects are added in a later step).
-    fn potion_burst(&mut self, _a: &Proj, _hit: Option<(i32, bool)>) {}
 }
 
 impl Player {

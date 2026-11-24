@@ -490,3 +490,173 @@ pub fn throw_hit_mob(ctx: &mut Ctx) -> Result<()> {
     bot.wait_ticks(25);
     Ok(())
 }
+
+fn potion_cmd(name: &str, kind: &str) -> String {
+    format!("give @s minecraft:{kind}[potion_contents={{potion:\"minecraft:{name}\"}}]")
+}
+
+fn throw_potion(bot: &Bot, kind: &str, name: &str, pitch: f32) -> Result<Instant> {
+    bot.cmd_reply(&potion_cmd(name, kind))?;
+    bot.wait_until(Duration::from_secs(3), |s| s.count(kind) > 0);
+    throw(bot, kind, pitch)
+}
+
+/// Splash potions: direct hit = full strength, near miss = scaled by distance, instant harming, water.
+pub fn throw_splash(ctx: &mut Ctx) -> Result<()> {
+    let (bot, _o) = box_arena(ctx, 10, "survival")?;
+    for (tag, pot, pitch) in [
+        ("near", "swiftness", 60.0f32),
+        ("direct", "swiftness", 90.0),
+        ("far", "regeneration", 30.0),
+    ] {
+        bot.cmd_reply("effect clear @s")?;
+        bot.wait_ticks(4);
+        let t0 = throw_potion(&bot, "splash_potion", pot, pitch)?;
+        let ok = bot.wait_until(Duration::from_secs(5), |s| {
+            s.level_events
+                .iter()
+                .any(|l| l.0 >= t0 && (l.1 == 2002 || l.1 == 2007))
+        });
+        ctx.check(ok, format!("{tag}: no splash level_event"));
+        bot.wait_ticks(6);
+        let ev = bot
+            .st()
+            .level_events
+            .iter()
+            .find(|l| l.0 >= t0 && l.1 == 2002)
+            .cloned();
+        ctx.metric(
+            &format!("splash_{tag}_event_data"),
+            ev.map(|l| l.3 as f64).unwrap_or(0.0),
+            0.0,
+        );
+        let fx: Vec<(String, i32, i32)> = bot
+            .st()
+            .effect_log
+            .iter()
+            .filter(|e| e.0 >= t0)
+            .map(|e| (e.1.clone(), e.2, e.3))
+            .collect();
+        ctx.note(format!("{tag}: effects {fx:?}"));
+        ctx.metric(&format!("splash_{tag}_effect_count"), fx.len() as f64, 0.0);
+        ctx.metric(
+            &format!("splash_{tag}_duration"),
+            fx.first().map(|e| e.2 as f64).unwrap_or(0.0),
+            120.0,
+        );
+        let snd = sounds_since(&bot, t0);
+        let thr = snd.iter().find(|s| s.0 == "entity.splash_potion.throw");
+        ctx.metric(
+            &format!("splash_{tag}_throw_cat"),
+            thr.map(|s| s.1 as f64).unwrap_or(-1.0),
+            0.0,
+        );
+    }
+    // strong harming directly on the thrower: 12 damage
+    bot.cmd_reply("effect clear @s")?;
+    let t0 = throw_potion(&bot, "splash_potion", "strong_harming", 90.0)?;
+    bot.wait_until(Duration::from_secs(5), |s| {
+        s.level_events.iter().any(|l| l.0 >= t0 && l.1 == 2007)
+    });
+    bot.wait_ticks(5);
+    let lost = 20.0 - bot.st().health;
+    ctx.metric("harming_direct_damage", lost as f64, 0.01);
+    let dk = damage_kinds(&bot, t0);
+    ctx.note(format!("harming damage kinds {dk:?}"));
+    ctx.metric(
+        "harming_damage_kind_magic",
+        dk.contains(&"indirect_magic".to_string()) as u8 as f64,
+        0.0,
+    );
+    ctx.metric(
+        "harming_event_2007",
+        bot.st()
+            .level_events
+            .iter()
+            .any(|l| l.0 >= t0 && l.1 == 2007) as u8 as f64,
+        0.0,
+    );
+    // water bottle: no effects
+    bot.cmd_reply("effect clear @s")?;
+    let n0 = bot.st().effect_log.len();
+    let _t0 = throw_potion(&bot, "splash_potion", "water", 90.0)?;
+    bot.wait_ticks(10);
+    ctx.metric(
+        "water_effects",
+        (bot.st().effect_log.len() - n0) as f64,
+        0.0,
+    );
+    Ok(())
+}
+
+/// Lingering potion: area effect cloud at the hit position, effects at a quarter duration every 20 ticks,
+/// shrinking radius.
+pub fn throw_lingering(ctx: &mut Ctx) -> Result<()> {
+    let (bot, _o) = box_arena(ctx, 10, "survival")?;
+    bot.cmd_reply("effect clear @s")?;
+    let me = bot.st().pos();
+    let t0 = throw_potion(&bot, "lingering_potion", "swiftness", 60.0)?;
+    let ok = bot.wait_until(Duration::from_secs(4), |s| {
+        s.entities
+            .values()
+            .any(|e| e.kind == "area_effect_cloud" && e.added >= t0)
+    });
+    ctx.check(ok, "no area_effect_cloud");
+    let cloud = spawned(&bot, "area_effect_cloud", t0);
+    if let Some(c) = &cloud {
+        ctx.metric("cloud_dz", c.spawn_pos[2] - me[2], 0.4);
+        ctx.metric("cloud_dy", c.spawn_pos[1] - me[1], 0.3);
+    }
+    let ev = bot
+        .st()
+        .level_events
+        .iter()
+        .find(|l| l.0 >= t0 && l.1 == 2002)
+        .cloned();
+    ctx.metric(
+        "lingering_event_data",
+        ev.map(|l| l.3 as f64).unwrap_or(0.0),
+        0.0,
+    );
+    // walk into the cloud and stay: effects arrive with a quarter of the duration, re-applied every 20 ticks
+    if let Some(c) = &cloud {
+        bot.tp([c.spawn_pos[0], c.spawn_pos[1], c.spawn_pos[2]])?;
+    }
+    bot.wait_ticks(70);
+    let fx: Vec<(String, i32, i32)> = bot
+        .st()
+        .effect_log
+        .iter()
+        .filter(|e| e.0 >= t0)
+        .map(|e| (e.1.clone(), e.2, e.3))
+        .collect();
+    ctx.note(format!("cloud effects {fx:?}"));
+    ctx.metric(
+        "cloud_first_duration",
+        fx.first().map(|e| e.2 as f64).unwrap_or(0.0),
+        5.0,
+    );
+    ctx.metric(
+        "cloud_reapplications_ge_2",
+        (fx.len() >= 2) as u8 as f64,
+        0.0,
+    );
+    // radius metadata shrinks
+    let r = cloud.as_ref().and_then(|c| {
+        bot.st()
+            .entities
+            .values()
+            .find(|e| e.uuid == c.uuid)
+            .and_then(|e| match e.meta.get(&8) {
+                Some(Meta::Float(f)) => Some(*f),
+                _ => None,
+            })
+    });
+    ctx.note(format!("cloud radius now {r:?}"));
+    ctx.metric(
+        "cloud_radius_shrunk",
+        r.map(|r| (r < 3.0 && r > 0.4) as u8 as f64).unwrap_or(-1.0),
+        0.0,
+    );
+    Ok(())
+}

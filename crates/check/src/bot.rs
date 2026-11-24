@@ -147,6 +147,8 @@ pub struct State {
     pub raw_ids: Vec<i32>,
     /// cooldown packets: (time, group, ticks); level_event: (time, event, block position, data); every damage_event: (time, entity, type, cause entity+1, direct entity+1)
     pub cooldowns: Vec<(Instant, String, i32)>,
+    /// every update_mob_effect for ourselves: (time, effect, amplifier, duration)
+    pub effect_log: Vec<(Instant, String, i32, i32)>,
     pub level_events: Vec<(Instant, i32, [i32; 3], i32)>,
     pub damage_events: Vec<(Instant, i32, String, i32, i32)>,
     pub raw: Vec<(Instant, i32, Vec<u8>)>,
@@ -239,7 +241,7 @@ impl Bot {
             effects: HashMap::new(), inv: vec![Stack::default(); 46], cursor: Stack::default(), held: 0, state_id: 0, cont_log: Vec::new(), screen: None, container: Vec::new(),
             chat: Vec::new(), entities: HashMap::new(), players: HashMap::new(), world: World::default(), teleports: Vec::new(), plog: Vec::new(), boss_log: Vec::new(),
             counts: HashMap::new(), ticks: 0, disconnected: None, damage: Vec::new(), health_log: Vec::new(), taken: Vec::new(), explosions: Vec::new(), op_level: 0, entity_events: Vec::new(), registries: HashMap::new(), block_updates: 0, screen_title: String::new(), props: HashMap::new(), prop_log: Vec::new(), block_events: Vec::new(), sounds: Vec::new(), entity_sounds: Vec::new(), sound_detail: Vec::new(), xp_total: 0, xp_level: 0, removed: Vec::new(), difficulty: None,
-            out: otx, last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input: 0, seq: 0, raw_ids: Vec::new(), raw: Vec::new(), cooldowns: Vec::new(), level_events: Vec::new(), damage_events: Vec::new(),
+            out: otx, last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input: 0, seq: 0, raw_ids: Vec::new(), raw: Vec::new(), cooldowns: Vec::new(), effect_log: Vec::new(), level_events: Vec::new(), damage_events: Vec::new(),
         }));
         let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
         let (st2, addr2, name2) = (st.clone(), addr.to_string(), name.to_string());
@@ -684,7 +686,7 @@ fn handle(s: &mut State, id: i32, data: &[u8]) -> Result<()> {
         cb::CONTAINER_CLOSE => { s.screen = None; }
         cb::UPDATE_MOB_EFFECT => {
             let e = r.varint()?; let eff = r.varint()?; let amp = r.varint()?; let dur = r.varint()?;
-            if e == s.eid { let n = basalt_data::registries::MOB_EFFECT.get(eff as usize).copied().unwrap_or("?"); s.effects.insert(n.to_string(), (amp, dur)); }
+            if e == s.eid { let n = basalt_data::registries::MOB_EFFECT.get(eff as usize).copied().unwrap_or("?"); s.effects.insert(n.to_string(), (amp, dur)); s.effect_log.push((Instant::now(), n.to_string(), amp, dur)); }
         }
         cb::REMOVE_MOB_EFFECT => {
             let e = r.varint()?; let eff = r.varint()?;

@@ -90,6 +90,8 @@ pub static ALL: &[Spec] = &[
     spec!("Items", "throw_pearl", throw::throw_pearl, Flat, Both, true, "ender pearl: teleport to the impact point, 5 damage, 20-tick cooldown packets, sounds"),
     spec!("Items", "throw_xp_bottle", throw::throw_xp_bottle, Flat, Both, true, "experience bottle: level_event 2002, 3-11 xp in orbs"),
     spec!("Items", "throw_hit_mob", throw::throw_hit_mob, Flat, Both, true, "snowball hitting a cow: thrown damage event, 0 damage, knockback, hurt sound"),
+    spec!("Items", "throw_splash", throw::throw_splash, Flat, Both, true, "splash potions: colour event, direct hit full strength, distance scaling, instant harming, water"),
+    spec!("Items", "throw_lingering", throw::throw_lingering, Flat, Both, true, "lingering potion: area effect cloud, quarter-duration effects every 20 ticks, shrinking radius"),
     spec!("Items", "items_tracking", m4::item_tracking, Flat, Both, true, "item add_entity carries velocity; update cadence; position matches server"),
     // appended last: a scenario's arena is placed by its index, so inserting earlier would move the others
     spec!("M2", "m2_command_forms", m1::command_forms, Flat, Both, false, "Brigadier parsing: tp/time/gamemode/enchant/help/effect/setblock forms accepted or rejected with vanilla's keys; /kill kills creative players"),

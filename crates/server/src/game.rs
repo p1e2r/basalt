@@ -2,6 +2,8 @@
 mod ai;
 mod arrow;
 mod proj;
+mod potion;
+mod potions;
 mod breed;
 mod cmd;
 mod combat;
