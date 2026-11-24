@@ -14,7 +14,7 @@ use winit::keyboard::KeyCode;
 const W: u32 = 854;
 const H: u32 = 480;
 
-pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer", "falling_block", "sprint", "xp_bar", "titles", "nether", "enchanting_screen", "anvil_screen", "grindstone_screen", "smithing_screen", "brewing_screen", "font_widths"];
+pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer", "falling_block", "sprint", "xp_bar", "titles", "nether", "enchanting_screen", "anvil_screen", "grindstone_screen", "smithing_screen", "brewing_screen", "font_widths", "grass_overlay"];
 
 enum Outcome { Pass(String), Skip(String) }
 
@@ -40,7 +40,7 @@ pub fn run(args: &Args, assets: Arc<Assets>, name: &str) -> Result<bool> {
         let t = Instant::now();
         let r = match s {
             "edge_chunks" => edge_chunks(&ctx), "inventory" => inventory(&ctx), "crafting_table" => crafting_table(&ctx), "death" => death(&ctx),
-            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "falling_block" => falling_block(&ctx), "sprint" => sprint(&ctx), "xp_bar" => xp_bar(&ctx), "titles" => titles(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx), "nether" => nether(&ctx), "enchanting_screen" => enchanting_screen(&ctx), "anvil_screen" => anvil_screen(&ctx), "grindstone_screen" => grindstone_screen(&ctx), "smithing_screen" => smithing_screen(&ctx), "brewing_screen" => brewing_screen(&ctx), "font_widths" => font_widths(&ctx),
+            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "falling_block" => falling_block(&ctx), "sprint" => sprint(&ctx), "xp_bar" => xp_bar(&ctx), "titles" => titles(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx), "nether" => nether(&ctx), "enchanting_screen" => enchanting_screen(&ctx), "anvil_screen" => anvil_screen(&ctx), "grindstone_screen" => grindstone_screen(&ctx), "smithing_screen" => smithing_screen(&ctx), "brewing_screen" => brewing_screen(&ctx), "font_widths" => font_widths(&ctx), "grass_overlay" => grass_overlay(&ctx),
             other => Err(anyhow!("unknown scenario {other} (known: {})", ALL.join(", "))),
         };
         let secs = t.elapsed().as_secs_f32();
@@ -930,6 +930,54 @@ fn break_particles(c: &Ctx) -> Result<Outcome> {
     wait(&mut g, 2.5)?;
     if !g.particles.is_empty() { bail!("{} particles still alive after 2.5 s", g.particles.len()); }
     Ok(Outcome::Pass(format!("{dig_max} while digging, {after} on break, all gone after 2.5 s")))
+}
+
+/// Grass side flicker (z-fighting): the grass_block side overlay is a second, coplanar quad in the
+/// cutout layer over the opaque side. It must have exactly the base quad's vertex positions (the
+/// chunk shader marks the clip position @invariant so both pipelines produce the same depth, and
+/// LessEqual lets the later overlay win). Short grass / ferns must be cutout, not translucent
+/// (translucent sorting would make them flicker).
+fn grass_overlay(c: &Ctx) -> Result<Outcome> {
+    use crate::mesh::{self, QuadTrace, SectionMesh, Snapshot};
+    let a = &c.assets;
+    let biome = crate::assets::Biome { name: "scene".into(), grass: 0x91BD59, foliage: 0x77AB2F, dry_foliage: 0xA0784D, water: 0x3F76E4, sky: 0x78A7FF, fog: 0xC0D8FF };
+    let mesh_one = |state: &str| -> Result<Vec<QuadTrace>> {
+        let st = basalt_data::BlockState::parse(state).ok_or_else(|| anyhow!("unknown {state}"))?;
+        let mut blocks = Box::new([0u16; 5832]);
+        blocks[mesh::sidx(8, 8, 8)] = st.0 as u16;
+        let light = Box::new([0xF0u8; 5832]);
+        let snap = Snapshot { origin: [0, 56, 0], blocks, light, biomes: [0; 64] };
+        let mut out = SectionMesh::default();
+        let mut trace = Vec::new();
+        mesh::mesh_block(a, std::slice::from_ref(&biome), &snap, 8, 8, 8, &mut out, Some(&mut trace));
+        Ok(trace)
+    };
+    let q = mesh_one("grass_block[snowy=false]")?;
+    let overlays: Vec<&QuadTrace> = q.iter().filter(|t| t.layer == crate::assets::LAYER_CUTOUT).collect();
+    if overlays.len() != 4 { bail!("grass_block: {} cutout overlay quads, want 4 (one per side)", overlays.len()); }
+    for o in &overlays {
+        let base = q.iter().find(|b| b.layer == crate::assets::LAYER_OPAQUE && b.dir == o.dir);
+        let Some(b) = base else { bail!("grass_block: no opaque side quad under the overlay on face {}", o.dir) };
+        let mut bp: Vec<[f32; 3]> = b.verts.iter().map(|v| v.pos).collect();
+        let mut op: Vec<[f32; 3]> = o.verts.iter().map(|v| v.pos).collect();
+        bp.sort_by(|x, y| x.partial_cmp(y).unwrap());
+        op.sort_by(|x, y| x.partial_cmp(y).unwrap());
+        if bp != op { bail!("grass_block face {}: overlay vertices {op:?} differ from the side {bp:?} (z-fighting)", o.dir); }
+    }
+    let mut notes = vec!["grass_block: 4 overlay quads exactly coplanar with the sides".to_string()];
+    for plant in ["short_grass", "fern", "tall_grass[half=lower]"] {
+        let q = mesh_one(plant)?;
+        if q.iter().any(|t| t.layer == crate::assets::LAYER_TRANSLUCENT) { bail!("{plant} has translucent quads (sorting flicker)"); }
+        notes.push(format!("{plant}: {} cutout quads", q.len()));
+    }
+    for other in ["grass_block[snowy=true]", "mycelium", "podzol", "dirt_path"] {
+        let q = mesh_one(other)?;
+        let cut = q.iter().filter(|t| t.layer == crate::assets::LAYER_CUTOUT).count();
+        notes.push(format!("{other}: {} quads, {cut} cutout", q.len()));
+    }
+    let shader = include_str!("shader.wgsl");
+    if !shader.contains("@builtin(position) @invariant clip") { bail!("chunk shader position is not @invariant"); }
+    Ok(Outcome::Pass(notes.join("; ")))
 }
 
 /// Per-glyph advances like vanilla's bitmap provider (rightmost opaque column + 1, +1 spacing,

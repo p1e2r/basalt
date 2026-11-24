@@ -21,7 +21,9 @@ struct VIn {
     @location(3) light: vec4<f32>,
 };
 struct VOut {
-    @builtin(position) clip: vec4<f32>,
+    // invariant: the opaque, cutout, crack and translucent pipelines must compute bit-identical depth
+    // for coplanar quads (grass side + its overlay are in different layers), else they z-fight
+    @builtin(position) @invariant clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
     @location(2) dist: f32,

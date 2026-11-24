@@ -124,6 +124,10 @@ pub const FLAT_SETUP: &[&str] = &[
     "fill 31 -59 31 39 -53 39 air",
     "setblock 33 -53 33 glowstone",
     "setblock 37 -59 36 torch",
+    // a raised grass mound with plants on top, for the close-up on grass sides (z-fighting check)
+    "fill -12 -60 -6 -10 -59 -5 grass_block",
+    "setblock -12 -58 -6 short_grass",
+    "setblock -11 -58 -6 fern",
 ];
 
 pub fn scenes() -> Vec<Scene> {
@@ -174,6 +178,16 @@ pub fn scenes() -> Vec<Scene> {
             20.0,
             -35.0,
             "midnight, looking up (moon, stars)",
+        ),
+        s(
+            "grass_sides",
+            World::Flat,
+            Kind::View,
+            6000,
+            [-8.5, -60.0, -3.5],
+            120.0,
+            12.0,
+            "close up on grass block sides at a grazing angle (side overlay must not z-fight), plants on top",
         ),
         s(
             "underwater",
