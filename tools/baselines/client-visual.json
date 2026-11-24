@@ -1,56 +1,56 @@
 {
   "cave_room": {
     "max_tile_hist": 1.0,
-    "mean_hist": 0.986,
-    "mean_ssim": 0.516,
-    "min_tile_ssim": 0.395
+    "mean_hist": 1.0,
+    "mean_ssim": 0.528,
+    "min_tile_ssim": 0.407
   },
   "flat_night": {
     "max_tile_hist": 1.0,
-    "mean_hist": 0.963,
-    "mean_ssim": 0.169,
+    "mean_hist": 0.983,
+    "mean_ssim": 0.168,
     "min_tile_ssim": 0.012
   },
   "flat_noon": {
-    "max_tile_hist": 0.796,
-    "mean_hist": 0.383,
-    "mean_ssim": 0.888,
-    "min_tile_ssim": 0.732
+    "max_tile_hist": 0.797,
+    "mean_hist": 0.403,
+    "mean_ssim": 0.895,
+    "min_tile_ssim": 0.734
   },
   "flat_sunset": {
     "max_tile_hist": 1.0,
     "mean_hist": 1.0,
-    "mean_ssim": 0.554,
-    "min_tile_ssim": 0.327
+    "mean_ssim": 0.548,
+    "min_tile_ssim": 0.324
   },
   "grass_sides": {
     "max_tile_hist": 0.648,
-    "mean_hist": 0.25,
-    "mean_ssim": 0.852,
+    "mean_hist": 0.251,
+    "mean_ssim": 0.851,
     "min_tile_ssim": 0.5
   },
   "inventory": {
-    "max_tile_hist": 0.6,
-    "mean_hist": 0.146,
+    "max_tile_hist": 0.58,
+    "mean_hist": 0.163,
     "mean_ssim": 0.869,
     "min_tile_ssim": 0.59
   },
   "terrain_spawn": {
     "max_tile_hist": 1.0,
-    "mean_hist": 0.59,
-    "mean_ssim": 0.742,
-    "min_tile_ssim": 0.426
+    "mean_hist": 0.612,
+    "mean_ssim": 0.736,
+    "min_tile_ssim": 0.434
   },
   "title": {
-    "max_tile_hist": 0.418,
-    "mean_hist": 0.156,
-    "mean_ssim": 0.789,
-    "min_tile_ssim": 0.398
+    "max_tile_hist": 0.448,
+    "mean_hist": 0.168,
+    "mean_ssim": 0.783,
+    "min_tile_ssim": 0.349
   },
   "underwater": {
-    "max_tile_hist": 0.953,
-    "mean_hist": 0.613,
-    "mean_ssim": 0.766,
-    "min_tile_ssim": 0.265
+    "max_tile_hist": 0.948,
+    "mean_hist": 0.639,
+    "mean_ssim": 0.746,
+    "min_tile_ssim": 0.257
   }
 }

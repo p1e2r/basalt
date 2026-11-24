@@ -98,6 +98,20 @@ fn make_depth(device: &wgpu::Device, w: u32, h: u32) -> wgpu::TextureView {
         dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Depth32Float, usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[] }).create_view(&Default::default())
 }
 
+/// The block atlas with vanilla's default 4 mipmap levels (box filtered, see assets::mip_chain).
+fn upload_mipped(device: &wgpu::Device, queue: &wgpu::Queue, w: u32, h: u32, rgba: &[u8]) -> wgpu::TextureView {
+    let mips = crate::assets::mip_chain(w, h, rgba, 4);
+    let size = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
+    let t = device.create_texture(&wgpu::TextureDescriptor { label: Some("block atlas"), size, mip_level_count: 1 + mips.len() as u32, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[] });
+    let levels = std::iter::once((w, h, rgba)).chain(mips.iter().map(|(a, b, c)| (*a, *b, c.as_slice())));
+    for (lvl, (lw, lh, data)) in levels.enumerate() {
+        queue.write_texture(wgpu::ImageCopyTexture { texture: &t, mip_level: lvl as u32, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All }, data,
+            wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(4 * lw), rows_per_image: Some(lh) }, wgpu::Extent3d { width: lw, height: lh, depth_or_array_layers: 1 });
+    }
+    t.create_view(&Default::default())
+}
+
 fn upload_tex(device: &wgpu::Device, queue: &wgpu::Queue, w: u32, h: u32, rgba: &[u8]) -> wgpu::TextureView {
     let size = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
     let t = device.create_texture(&wgpu::TextureDescriptor { label: None, size, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
@@ -144,7 +158,11 @@ impl Gpu {
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor { mag_filter: wgpu::FilterMode::Nearest, min_filter: wgpu::FilterMode::Nearest, ..Default::default() });
         let tex_bind = |view: &wgpu::TextureView| device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &tlayout, entries: &[
             wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) }, wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) }] });
-        let atlas_bind = tex_bind(&upload_tex(&device, &queue, assets.atlas.w, assets.atlas.h, &assets.atlas.rgba));
+        // blocks: nearest texels, linear between mip levels (no shimmer on distant grass)
+        let mip_sampler = device.create_sampler(&wgpu::SamplerDescriptor { mag_filter: wgpu::FilterMode::Nearest, min_filter: wgpu::FilterMode::Nearest, mipmap_filter: wgpu::FilterMode::Linear, ..Default::default() });
+        let atlas_view = upload_mipped(&device, &queue, assets.atlas.w, assets.atlas.h, &assets.atlas.rgba);
+        let atlas_bind = device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &tlayout, entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&atlas_view) }, wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&mip_sampler) }] });
         let ui_bind = tex_bind(&upload_tex(&device, &queue, ui_atlas.1, ui_atlas.2, ui_atlas.0));
         let skin_bind = tex_bind(&upload_tex(&device, &queue, skin.1, skin.2, skin.0));
         let icon_tex = device.create_texture(&wgpu::TextureDescriptor { label: Some("icons"), size: wgpu::Extent3d { width: 512, height: 256, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1,

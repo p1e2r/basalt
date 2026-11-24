@@ -31,6 +31,9 @@ const CMP: (usize, usize) = (384, 216);
 pub struct Opts {
     pub oracle_dir: PathBuf,
     pub ctl_port: u16,
+    /// also record ~2 s of frames from both clients while walking forward and turning (flicker,
+    /// shimmer): work/<scene>/motion-vanilla, work/<scene>/motion-basalt
+    pub motion: bool,
     pub client: PathBuf,
     pub jar: PathBuf,
     pub out: PathBuf,
@@ -42,6 +45,7 @@ pub struct Opts {
 pub fn parse_args(args: &[String]) -> Result<Opts> {
     let mut o = Opts {
         oracle_dir: "vanilla/oracle-visual".into(),
+        motion: false,
         ctl_port: oracle::ctl_port(),
         client: super::client_bin(),
         jar: basalt_paths::client_jar(),
@@ -59,6 +63,7 @@ pub fn parse_args(args: &[String]) -> Result<Opts> {
         };
         match a.as_str() {
             "--oracle-dir" => o.oracle_dir = v()?.into(),
+            "--motion" => o.motion = true,
             "--ctl-port" => o.ctl_port = v()?.parse()?,
             "--client" => o.client = v()?.into(),
             "--jar" => o.jar = v()?.into(),
@@ -375,6 +380,21 @@ fn capture_window(pid: Option<u32>, out: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Walk forward while turning 2.5 degrees a tick for 40 ticks, with frames recorded to `dir`.
+fn motion_ops(dir: &Path) -> Vec<Value> {
+    let mut v = vec![
+        json!({"op": "frames", "dir": dir.to_string_lossy(), "fps": 20}),
+        json!({"op": "move", "forward": true}),
+    ];
+    for _ in 0..40 {
+        v.push(json!({"op": "look", "yaw": 2.5, "relative": true}));
+        v.push(json!({"op": "wait", "ticks": 1}));
+    }
+    v.push(json!({"op": "move", "forward": false}));
+    v.push(json!({"op": "frames"}));
+    v
+}
+
 fn run_ctl(ctl: &mut Ctl, ops: &[Value], what: &str) -> Result<()> {
     let res = ctl.run(ops, Duration::from_secs(90))?;
     for (i, r) in res.iter().enumerate() {
@@ -636,6 +656,13 @@ pub fn run(o: &Opts) -> Result<usize> {
             let img = raw.crop_top(title_bar(&raw, o.win));
             size.get_or_insert((img.w, img.h));
             vcaps.push((s, img));
+            if o.motion && s.kind == Kind::View {
+                let d = std::fs::canonicalize(&work)?
+                    .join(s.name)
+                    .join("motion-vanilla");
+                let _ = std::fs::remove_dir_all(&d);
+                run_ctl(&mut ctl, &motion_ops(&d), s.name)?;
+            }
             run_ctl(&mut ctl, &scene_cleanup(s), s.name)?;
         }
         if srv.is_some() {
@@ -656,6 +683,13 @@ pub fn run(o: &Opts) -> Result<usize> {
             }
             ops.extend(scene_ops(s, &[], false));
             ops.push(json!({"op": "screenshot", "file": shot.to_string_lossy(), "settle": 10}));
+            if o.motion && s.kind == Kind::View {
+                let d = std::fs::canonicalize(&work)?
+                    .join(s.name)
+                    .join("motion-basalt");
+                let _ = std::fs::remove_dir_all(&d);
+                ops.extend(motion_ops(&d));
+            }
             run_basalt(o, &ops, &addr, &work, s.name)?;
             let b = Img::load(&shot)
                 .with_context(|| format!("basalt-client produced no {}", shot.display()))?;

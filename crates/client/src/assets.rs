@@ -134,6 +134,39 @@ fn font_pages(jar: &Jar) -> Vec<FontPage> {
 
 pub struct Atlas { pub w: u32, pub h: u32, pub rgba: Vec<u8>, pub rects: HashMap<String, (Rect, u8)> }
 
+/// Mip levels below level 0 (each half the size): 2x2 box filter, colour weighted by alpha so
+/// transparent texels don't darken cutout edges; alpha is the maximum of the four, so cutout shapes
+/// keep their coverage (with an average, thin cutout parts such as the grass side overlay's strip
+/// fell under the 0.5 test at levels 3-4, which face edges sample — measured in client_visual
+/// grass_sides, 2026-11-24).
+pub fn mip_chain(w: u32, h: u32, rgba: &[u8], levels: u32) -> Vec<(u32, u32, Vec<u8>)> {
+    let mut out = Vec::new();
+    let (mut cw, mut ch, mut cur) = (w, h, rgba.to_vec());
+    for _ in 0..levels {
+        if cw < 2 || ch < 2 { break; }
+        let (nw, nh) = (cw / 2, ch / 2);
+        let mut next = vec![0u8; (nw * nh * 4) as usize];
+        for y in 0..nh { for x in 0..nw {
+            let mut acc = [0u32; 4];
+            let mut amax = 0u8;
+            let mut rgb_plain = [0u32; 3];
+            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let i = (((y * 2 + dy) * cw + x * 2 + dx) * 4) as usize;
+                let a = cur[i + 3] as u32;
+                for c in 0..3 { acc[c] += cur[i + c] as u32 * a; rgb_plain[c] += cur[i + c] as u32; }
+                acc[3] += a;
+                amax = amax.max(cur[i + 3]);
+            }
+            let o = ((y * nw + x) * 4) as usize;
+            for c in 0..3 { next[o + c] = acc[c].checked_div(acc[3]).unwrap_or(rgb_plain[c] / 4) as u8; }
+            next[o + 3] = amax;
+        } }
+        out.push((nw, nh, next.clone()));
+        cur = next; cw = nw; ch = nh;
+    }
+    out
+}
+
 #[derive(Clone, Debug)]
 pub struct Biome { pub name: String, pub grass: u32, pub foliage: u32, pub dry_foliage: u32, pub water: u32, pub sky: u32, pub fog: u32 }
 
@@ -421,15 +454,17 @@ fn build_atlas(jar: &Jar) -> Atlas {
     imgs.push(("missing".into(), Image { w: 16, h: 16, rgba: miss }));
     imgs.push(("white".into(), Image { w: 16, h: 16, rgba: vec![255; 16 * 16 * 4] }));
     imgs.sort_by(|a, b| b.1.h.cmp(&a.1.h).then(a.0.cmp(&b.0)));
-    let w = 2048u32; let pad = 2u32;
+    // tiles on a 16-px grid without padding (like vanilla's atlas), so the 4 mip levels reduce each
+    // 16x16 tile to whole pixels and never bleed into a neighbour
+    let w = 2048u32; let al = |v: u32| v.div_ceil(16) * 16;
     let (mut x, mut y, mut row_h) = (0u32, 0u32, 0u32);
     let mut placed = Vec::new();
     for (name, img) in &imgs {
-        if x + img.w + pad > w { x = 0; y += row_h + pad; row_h = 0; }
-        placed.push((name.clone(), Rect { x: x + pad / 2, y: y + pad / 2, w: img.w, h: img.h }));
-        x += img.w + pad; row_h = row_h.max(img.h);
+        if x + al(img.w) > w { x = 0; y += row_h; row_h = 0; }
+        placed.push((name.clone(), Rect { x, y, w: img.w, h: img.h }));
+        x += al(img.w); row_h = row_h.max(al(img.h));
     }
-    let h = (y + row_h + pad).next_power_of_two();
+    let h = (y + row_h).next_power_of_two();
     let mut rgba = vec![0u8; (w * h * 4) as usize];
     let mut rects = HashMap::new();
     for ((name, img), (_, r)) in imgs.iter().zip(&placed) {
@@ -439,20 +474,6 @@ fn build_atlas(jar: &Jar) -> Atlas {
             let dst = ((r.y + py) * w + r.x) as usize * 4;
             rgba[dst..dst + src.len()].copy_from_slice(src);
             for p in src.chunks(4) { if p[3] < 26 { zero += 1 } else if p[3] < 230 { partial += 1 } }
-        }
-        // extend edge pixels into padding to avoid seams
-        for py in 0..img.h {
-            let row = ((r.y + py) * w) as usize * 4;
-            let l = row + r.x as usize * 4; let rr = row + (r.x + r.w - 1) as usize * 4;
-            let (lp, rp): ([u8; 4], [u8; 4]) = (rgba[l..l + 4].try_into().unwrap(), rgba[rr..rr + 4].try_into().unwrap());
-            rgba[l - 4..l].copy_from_slice(&lp); rgba[rr + 4..rr + 8].copy_from_slice(&rp);
-        }
-        for px in 0..img.w + 2 {
-            let cx = (r.x + px - 1) as usize;
-            let top = (r.y * w) as usize * 4 + cx * 4; let bot = ((r.y + r.h - 1) * w) as usize * 4 + cx * 4;
-            let (tp, bp): ([u8; 4], [u8; 4]) = (rgba[top..top + 4].try_into().unwrap(), rgba[bot..bot + 4].try_into().unwrap());
-            let up = top - (w as usize * 4); let dn = bot + (w as usize * 4);
-            rgba[up..up + 4].copy_from_slice(&tp); rgba[dn..dn + 4].copy_from_slice(&bp);
         }
         let layer = if partial * 20 > (img.w * img.h) as usize { LAYER_TRANSLUCENT } else if zero > 0 || partial > 0 { LAYER_CUTOUT } else { LAYER_OPAQUE };
         rects.insert(name.clone(), (*r, layer));
