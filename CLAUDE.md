@@ -89,6 +89,8 @@ Read NOTES.md for verified packet formats.
   (sculk vein, resin clump, glow lichen, fences/uvlock with x rotation), culling ~3.3k (sculk sensors,
   trapdoors/doors, dried ghast), shade 0.9k, lever/tripwire hook/hanging sign geometry 0.5k, bamboo variants.
 
+- Water (M7, 2026-11-24): basalt-client plays splash/underwater sounds + bubble/splash particles like the real client (basalt-check client-water now also diffs local fx; 12 cases pass; scenario water_splash). PARTIAL: client-water cases for lava, flowing-water current, swim_fwd, wade, Dolphin's Grace and Depth Strider are written (crates/check/src/client/water.rs) but never run; basalt-client has no handling for them yet (needs mob-effect tracking, boots enchant, lava/current physics); server onlooker splash not sent. See NOTES.md.
+
 ### Task list
 - [x] M1 client builds, joins vanilla, renders chunks
 - [x] M2 crates/world: sections/paletted containers, light, Anvil region read/write

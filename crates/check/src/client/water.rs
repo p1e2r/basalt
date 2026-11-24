@@ -24,7 +24,35 @@ fn setup() -> Vec<Value> {
         c("fill 2000 190 2000 2010 199 2010 stone"),
         c("fill 2010 190 2000 2014 199 2010 stone"),
         c("fill 2001 191 2001 2009 199 2009 water"),
-        json!({"op": "wait", "ticks": 20}),
+        // lava basin x 2020..2030, z 2020..2030, lava 2021..2029 x 191..199 x 2021..2029 (surface 200)
+        c("fill 2018 189 2018 2062 215 2040 air"),
+        c("fill 2020 190 2020 2030 199 2030 stone"),
+        c("fill 2021 191 2021 2029 199 2029 lava"),
+        // flowing water: floor y 190, walls z 2025 / 2029 up to y 193, source at x 2041, z 2027
+        // spreading east along y 191 (levels 1..7 at x 2042..2048)
+        c("fill 2040 190 2025 2058 190 2029 stone"),
+        c("fill 2040 191 2025 2058 193 2025 stone"),
+        c("fill 2040 191 2029 2058 193 2029 stone"),
+        c("fill 2040 191 2026 2040 193 2028 stone"),
+        c("setblock 2041 191 2027 water"),
+        json!({"op": "wait", "ticks": 60}),
+    ]
+}
+
+/// Boots with Depth Strider III on the feet (give, enchant the held stack, shift-click it on).
+fn equip_depth_strider() -> Vec<Value> {
+    let c = |t: &str| json!({"op": "command", "text": t});
+    vec![
+        c("give @s diamond_boots"),
+        json!({"op": "wait", "ticks": 8}),
+        c("enchant @s depth_strider 3"),
+        json!({"op": "wait", "ticks": 8}),
+        json!({"op": "inventory", "action": "open"}),
+        json!({"op": "wait", "ticks": 6}),
+        json!({"op": "click", "slot": 36, "button": 0, "mode": 1}),
+        json!({"op": "wait", "ticks": 6}),
+        json!({"op": "inventory", "action": "close"}),
+        json!({"op": "wait", "ticks": 6}),
     ]
 }
 
@@ -121,6 +149,69 @@ fn cases() -> Vec<(&'static str, Vec<Value>, Vec<Value>)> {
                 json!({"op": "move", "forward": false}),
                 w(10),
             ],
+        ),
+        (
+            "lava_fall",
+            vec![c("effect give @s fire_resistance 9999 0 true"), c("tp @s 2025.5 210 2025.5 0 0"), w(2)],
+            vec![w(60)],
+        ),
+        (
+            "lava_up",
+            vec![c("tp @s 2025.5 191 2025.5 0 0"), w(30)],
+            vec![
+                json!({"op": "jump", "action": "press"}),
+                w(60),
+                json!({"op": "jump", "action": "release"}),
+                w(20),
+            ],
+        ),
+        (
+            "lava_walk",
+            vec![c("tp @s 2022.5 191 2025.5 -90 0"), w(30)],
+            vec![json!({"op": "move", "forward": true}), w(30), json!({"op": "move", "forward": false}), w(20)],
+        ),
+        // standing in the flowing water of the channel: pushed along it
+        (
+            "current",
+            vec![c("effect clear @s"), c("tp @s 2044.5 191 2027.5 0 0"), w(2)],
+            vec![w(50)],
+        ),
+        (
+            "swim_fwd",
+            vec![c("tp @s 2002.5 195 2005.5 -90 0"), w(30)],
+            vec![json!({"op": "move", "forward": true}), w(25), json!({"op": "move", "forward": false}), w(15)],
+        ),
+        (
+            "wade",
+            vec![c("tp @s 2002.5 191 2005.5 -90 0"), w(30)],
+            vec![json!({"op": "move", "forward": true}), w(30), json!({"op": "move", "forward": false}), w(15)],
+        ),
+        (
+            "dolphin_sprint",
+            vec![c("effect give @s dolphins_grace 9999 0 true"), c("tp @s 2002.5 195 2005.5 -90 0"), w(30)],
+            vec![
+                json!({"op": "sprint", "action": "press"}),
+                json!({"op": "move", "forward": true}),
+                w(25),
+                json!({"op": "move", "forward": false}),
+                json!({"op": "sprint", "action": "release"}),
+                w(15),
+            ],
+        ),
+        (
+            "dolphin_fwd",
+            vec![c("tp @s 2002.5 195 2005.5 -90 0"), w(30)],
+            vec![json!({"op": "move", "forward": true}), w(25), json!({"op": "move", "forward": false}), w(15)],
+        ),
+        (
+            "wade_ds",
+            [vec![c("effect clear @s")], equip_depth_strider(), vec![c("tp @s 2002.5 191 2005.5 -90 0"), w(30)]].concat(),
+            vec![json!({"op": "move", "forward": true}), w(30), json!({"op": "move", "forward": false}), w(15)],
+        ),
+        (
+            "swim_fwd_ds",
+            vec![c("tp @s 2002.5 195 2005.5 -90 0"), w(30)],
+            vec![json!({"op": "move", "forward": true}), w(25), json!({"op": "move", "forward": false}), w(15)],
         ),
     ]
 }
