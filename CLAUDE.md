@@ -89,6 +89,8 @@ Read NOTES.md for verified packet formats.
   (sculk vein, resin clump, glow lichen, fences/uvlock with x rotation), culling ~3.3k (sculk sensors,
   trapdoors/doors, dried ghast), shade 0.9k, lever/tripwire hook/hanging sign geometry 0.5k, bamboo variants.
 
+- Throwables (2026-11-24): use_item for snowball, egg, ender pearl, xp bottle, splash/lingering potions (+ area effect cloud), wind charge, player bow, trident throw/pickup done and diffed vs vanilla (scenarios throw_*, bow_shoot, trident_throw, wind_charge). basalt-client: item-sprite billboards, own flight prediction, break/splash particles, sends use_item for throwables (PARTIAL: client scenario not written, untested in a real window, trident drawn as a sprite). Remaining: crossbow, trident Loyalty/Riptide/Channeling, endermite from pearls, egg chicken variants (blue/brown egg), wind charge damage on entity hit, tipped/spectral arrows, bow Infinity/Power, potion effects on mobs, buckets, flint and steel, bonemeal, shears, hoe/shovel/axe, fishing rod, client scenario for projectiles.
+
 ### Task list
 - [x] M1 client builds, joins vanilla, renders chunks
 - [x] M2 crates/world: sections/paletted containers, light, Anvil region read/write

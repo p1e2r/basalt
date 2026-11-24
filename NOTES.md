@@ -730,3 +730,9 @@ and dy), whose shape gave the closed forms below, then their 4 parameters by log
 - Not done: tab-list score and below_name score (basalt-client has no tab list yet; Board::slot_score(0|2, holder) has the data).
 - Client bug found on the way: the 2048x2048 UI atlas overflowed ("ui atlas full at font page 1"), dropping the ascii font
   page so every character advanced 6 px; the atlas is now 2048x4096.
+
+## Throwables / projectile weapons (2026-11-24, measured on vanilla 26.2 over the wire)
+Rules are documented in the module headers: crates/server/src/game/{proj,potion,potions,bow,wind}.rs. Differential scenarios (group Items, all match vanilla):
+throw_basics, throw_eggs, throw_pearl, throw_xp_bottle, throw_hit_mob, throw_splash, throw_lingering, bow_shoot, trident_throw, wind_charge.
+Projectile tick order: v.y=(v.y-g)*0.99, v.xz*=0.99, then move; gravity .03 snowball/egg/pearl, .07 xp bottle, .05 potions/trident/arrow, 0 wind charge.
+Probe tooling: `basalt-check --probe ADDR NAME raw:add_entity,... use look:0,90 release mark:X dumpraw`.
