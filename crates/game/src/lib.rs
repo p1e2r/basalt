@@ -12,11 +12,11 @@ mod loot;
 mod recipe;
 mod tags;
 
+pub use combat::{armor_reduced, blast_resistance, difficulty_scaled, explosion_damage};
+pub use ench::{offer_cost, EnchData, EnchDef, SmithKind, SmithRecipe};
 pub use hardness::{hardness, requires_correct_tool};
 pub use loot::{EntityProps, LootContext};
-pub use combat::{armor_reduced, blast_resistance, difficulty_scaled, explosion_damage};
 pub use recipe::{CookKind, CraftResult, Ingredient, Recipe, Recipes};
-pub use ench::{offer_cost, EnchData, EnchDef, SmithKind, SmithRecipe};
 pub use tags::Tags;
 
 use basalt_data::{registries, BlockState};
@@ -100,14 +100,25 @@ impl GameData {
     /// `data_dir` is the repo's `./data` (containing `reports/` and `data/`).
     pub fn load(data_dir: &Path) -> anyhow::Result<GameData> {
         let mc = data_dir.join("data/minecraft");
-        anyhow::ensure!(mc.is_dir(), "{} missing — run `cargo xtask extract-data`", mc.display());
+        anyhow::ensure!(
+            mc.is_dir(),
+            "{} missing — run `cargo xtask extract-data`",
+            mc.display()
+        );
         let tags = Tags::load(&mc.join("tags"))?;
         let items = load_items(&data_dir.join("reports/minecraft/components/item"), &tags)?;
         let loot_tables = loot::load_tables(&mc.join("loot_table"))?;
         let recipes = recipe::Recipes::load(&mc.join("recipe"), &tags)?;
         let fuels = fuel::build(&tags);
         let ench = EnchData::load(&mc, &tags)?;
-        Ok(GameData { tags, items, recipes, ench, loot_tables, fuels })
+        Ok(GameData {
+            tags,
+            items,
+            recipes,
+            ench,
+            loot_tables,
+            fuels,
+        })
     }
 
     pub fn item(&self, id: i32) -> Option<&ItemInfo> {
@@ -122,30 +133,48 @@ impl GameData {
     /// Rules are evaluated in order: the first matching rule with a `speed` gives the speed, the
     /// first matching rule with `correct_for_drops` gives the flag.
     pub fn tool_speed(&self, block_name: &str, held: Option<i32>) -> (f32, bool) {
-        let Some(tool) = held.and_then(|h| self.item(h)).and_then(|i| i.tool.as_ref()) else { return (1.0, false) };
+        let Some(tool) = held
+            .and_then(|h| self.item(h))
+            .and_then(|i| i.tool.as_ref())
+        else {
+            return (1.0, false);
+        };
         let mut speed = None;
         let mut correct = None;
         for r in &tool.rules {
             if speed.is_some() && correct.is_some() {
                 break;
             }
-            if ((r.speed.is_some() && speed.is_none()) || (r.correct_for_drops.is_some() && correct.is_none()))
-                && r.blocks.iter().any(|s| self.tags.block_matches(s, block_name)) {
-                    if speed.is_none() {
-                        speed = r.speed;
-                    }
-                    if correct.is_none() {
-                        correct = r.correct_for_drops;
-                    }
+            if ((r.speed.is_some() && speed.is_none())
+                || (r.correct_for_drops.is_some() && correct.is_none()))
+                && r.blocks
+                    .iter()
+                    .any(|s| self.tags.block_matches(s, block_name))
+            {
+                if speed.is_none() {
+                    speed = r.speed;
                 }
+                if correct.is_none() {
+                    correct = r.correct_for_drops;
+                }
+            }
         }
-        (speed.unwrap_or(tool.default_mining_speed), correct.unwrap_or(false))
+        (
+            speed.unwrap_or(tool.default_mining_speed),
+            correct.unwrap_or(false),
+        )
     }
 
     /// Destroy progress per tick (vanilla: speed / hardness / 30, or / 100 without the right tool), as f32 like
     /// vanilla; >= 1.0 means instant. None = unbreakable. `on_ground`: the player's server-side idea of standing
     /// on the floor (the client's flag is not trusted); `in_water`: head in water without Aqua Affinity.
-    pub fn dig_progress(&self, state: u32, held: Option<i32>, on_ground: bool, in_water: bool) -> Option<f32> {
+    pub fn dig_progress(
+        &self,
+        state: u32,
+        held: Option<i32>,
+        on_ground: bool,
+        in_water: bool,
+    ) -> Option<f32> {
         if !BlockState::is_valid(state) {
             return None;
         }
@@ -164,7 +193,11 @@ impl GameData {
         if in_water {
             speed /= 5.0;
         }
-        let div = if self.can_harvest(state, held) { 30.0 } else { 100.0 };
+        let div = if self.can_harvest(state, held) {
+            30.0
+        } else {
+            100.0
+        };
         Some(speed / h / div)
     }
 
@@ -179,13 +212,21 @@ impl GameData {
 
     /// Smallest `ticks` for which [`GameData::dig_accepts`] holds.
     pub fn dig_accept_ticks(d: f32) -> u32 {
-        (0..).find(|&n| Self::dig_accepts(d, n as u64)).unwrap_or(u32::MAX)
+        (0..)
+            .find(|&n| Self::dig_accepts(d, n as u64))
+            .unwrap_or(u32::MAX)
     }
 
     /// Ticks to break `state` with `held` (None = hand) as the client counts them: ceil(1 / progress) (the client
     /// sends the stop when its own progress reaches 1.0). Efficiency/haste are ignored. Pass
     /// `in_water = false` for players with Aqua Affinity. None = unbreakable, 0 = instant.
-    pub fn dig_ticks(&self, state: u32, held: Option<i32>, on_ground: bool, in_water: bool) -> Option<u32> {
+    pub fn dig_ticks(
+        &self,
+        state: u32,
+        held: Option<i32>,
+        on_ground: bool,
+        in_water: bool,
+    ) -> Option<u32> {
         let d = self.dig_progress(state, held, on_ground, in_water)? as f64;
         if d >= 1.0 {
             return Some(0);
@@ -206,11 +247,23 @@ impl GameData {
 
     /// Evaluate `loot_table/blocks/<name>.json` for a block broken by a player. Returns nothing
     /// when the block needs a correct tool that isn't held.
-    pub fn block_drops(&self, state: u32, held: Option<i32>, silk_touch: bool, fortune: u8, rng: &mut impl rand::Rng) -> Vec<(i32, i32)> {
+    pub fn block_drops(
+        &self,
+        state: u32,
+        held: Option<i32>,
+        silk_touch: bool,
+        fortune: u8,
+        rng: &mut impl rand::Rng,
+    ) -> Vec<(i32, i32)> {
         if !self.can_harvest(state, held) {
             return Vec::new();
         }
-        let ctx = LootContext { tool: held, silk_touch, fortune, ..Default::default() };
+        let ctx = LootContext {
+            tool: held,
+            silk_touch,
+            fortune,
+            ..Default::default()
+        };
         let table = format!("blocks/{}", BlockState(state).name());
         loot::eval_table(self, &table, &ctx, Some(BlockState(state)), rng)
     }
@@ -218,31 +271,65 @@ impl GameData {
     /// `block_drops` for a block whose table checks its vertical neighbours (tall grass): `below`/`above` are the
     /// states of the cells under and over it at the time it breaks. The caller decides whether the tool may harvest
     /// (a block that pops off its support drops its table whatever the held tool).
-    pub fn block_drops_around(&self, state: u32, held: Option<i32>, below: u32, above: u32, rng: &mut impl rand::Rng) -> Vec<(i32, i32)> {
-        let ctx = LootContext { tool: held, around: Some((below, above)), ..Default::default() };
+    pub fn block_drops_around(
+        &self,
+        state: u32,
+        held: Option<i32>,
+        below: u32,
+        above: u32,
+        rng: &mut impl rand::Rng,
+    ) -> Vec<(i32, i32)> {
+        let ctx = LootContext {
+            tool: held,
+            around: Some((below, above)),
+            ..Default::default()
+        };
         let table = format!("blocks/{}", BlockState(state).name());
         loot::eval_table(self, &table, &ctx, Some(BlockState(state)), rng)
     }
 
     /// Drops of a block that goes without a player or tool: popped off its support, `/setblock .. destroy`.
-    pub fn block_drops_popped(&self, state: u32, below: u32, above: u32, rng: &mut impl rand::Rng) -> Vec<(i32, i32)> {
-        let ctx = LootContext { around: Some((below, above)), no_entity: true, ..Default::default() };
+    pub fn block_drops_popped(
+        &self,
+        state: u32,
+        below: u32,
+        above: u32,
+        rng: &mut impl rand::Rng,
+    ) -> Vec<(i32, i32)> {
+        let ctx = LootContext {
+            around: Some((below, above)),
+            no_entity: true,
+            ..Default::default()
+        };
         let table = format!("blocks/{}", BlockState(state).name());
         loot::eval_table(self, &table, &ctx, Some(BlockState(state)), rng)
     }
 
     /// Drops of a block destroyed by an explosion of `radius` (survives_explosion / explosion_decay).
-    pub fn explosion_drops(&self, state: u32, radius: f32, rng: &mut impl rand::Rng) -> Vec<(i32, i32)> {
+    pub fn explosion_drops(
+        &self,
+        state: u32,
+        radius: f32,
+        rng: &mut impl rand::Rng,
+    ) -> Vec<(i32, i32)> {
         if !BlockState::is_valid(state) {
             return Vec::new();
         }
-        let ctx = LootContext { explosion_radius: Some(radius), ..Default::default() };
+        let ctx = LootContext {
+            explosion_radius: Some(radius),
+            ..Default::default()
+        };
         let table = format!("blocks/{}", BlockState(state).name());
         loot::eval_table(self, &table, &ctx, Some(BlockState(state)), rng)
     }
 
     /// Evaluate any loot table by id ("minecraft:entities/zombie" or "entities/zombie").
-    pub fn loot(&self, table: &str, ctx: &LootContext, rng: &mut impl rand::Rng) -> Vec<(i32, i32)> {
+    pub fn loot(
+        &self,
+        table: &str,
+        ctx: &LootContext,
+        rng: &mut impl rand::Rng,
+    ) -> Vec<(i32, i32)> {
         loot::eval_table(self, table, ctx, None, rng)
     }
 
@@ -262,8 +349,12 @@ impl GameData {
     }
 
     /// Recipe id (no namespace) of the cooking recipe for `item`, and the experience of a cooking recipe id.
-    pub fn cook_id(&self, kind: CookKind, item: i32) -> Option<&str> { self.recipes.cook_id(kind, item) }
-    pub fn cook_xp(&self, id: &str) -> Option<f32> { self.recipes.cook_xp(id) }
+    pub fn cook_id(&self, kind: CookKind, item: i32) -> Option<&str> {
+        self.recipes.cook_id(kind, item)
+    }
+    pub fn cook_xp(&self, id: &str) -> Option<f32> {
+        self.recipes.cook_xp(id)
+    }
 
     /// Stonecutter outputs for an input item: (result, count).
     pub fn stonecut(&self, item: i32) -> Vec<(i32, i32)> {
@@ -301,7 +392,11 @@ fn load_items(dir: &Path, tags: &Tags) -> anyhow::Result<Vec<ItemInfo>> {
     let mut out = Vec::with_capacity(registries::ITEM.len());
     for (id, name) in registries::ITEM.iter().enumerate() {
         let p = dir.join(format!("{name}.json"));
-        let v = if p.exists() { read_json(&p)? } else { Value::Null };
+        let v = if p.exists() {
+            read_json(&p)?
+        } else {
+            Value::Null
+        };
         let c = &v["components"];
         let g = |k: &str| &c[format!("minecraft:{k}")];
         let tool = g("tool").as_object().map(|t| Tool {
@@ -313,7 +408,10 @@ fn load_items(dir: &Path, tags: &Tags) -> anyhow::Result<Vec<ItemInfo>> {
                         .map(|r| ToolRule {
                             blocks: match &r["blocks"] {
                                 Value::String(s) => vec![s.clone()],
-                                Value::Array(a) => a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect(),
+                                Value::Array(a) => a
+                                    .iter()
+                                    .filter_map(|x| x.as_str().map(str::to_string))
+                                    .collect(),
                                 _ => vec![],
                             },
                             speed: f32_of(&r["speed"]),
@@ -322,27 +420,48 @@ fn load_items(dir: &Path, tags: &Tags) -> anyhow::Result<Vec<ItemInfo>> {
                         .collect()
                 })
                 .unwrap_or_default(),
-            default_mining_speed: t.get("default_mining_speed").and_then(f32_of).unwrap_or(1.0),
-            damage_per_block: t.get("damage_per_block").and_then(|x| x.as_i64()).unwrap_or(1) as i32,
+            default_mining_speed: t
+                .get("default_mining_speed")
+                .and_then(f32_of)
+                .unwrap_or(1.0),
+            damage_per_block: t
+                .get("damage_per_block")
+                .and_then(|x| x.as_i64())
+                .unwrap_or(1) as i32,
         });
         let food = g("food").as_object().map(|f| Food {
             nutrition: f.get("nutrition").and_then(|x| x.as_i64()).unwrap_or(0) as i32,
             saturation: f.get("saturation").and_then(f32_of).unwrap_or(0.0),
-            can_always_eat: f.get("can_always_eat").and_then(|x| x.as_bool()).unwrap_or(false),
+            can_always_eat: f
+                .get("can_always_eat")
+                .and_then(|x| x.as_bool())
+                .unwrap_or(false),
         });
         let consume_ticks = g("consumable")
             .as_object()
-            .map(|cn| (cn.get("consume_seconds").and_then(|x| x.as_f64()).unwrap_or(1.6) * 20.0).round() as u32)
+            .map(|cn| {
+                (cn.get("consume_seconds")
+                    .and_then(|x| x.as_f64())
+                    .unwrap_or(1.6)
+                    * 20.0)
+                    .round() as u32
+            })
             .unwrap_or(0);
         let (mut dmg, mut spd, mut armor, mut tough) = (1.0f32, 4.0f32, 0.0f32, 0.0f32);
         for m in g("attribute_modifiers").as_array().into_iter().flatten() {
             let amt = f32_of(&m["amount"]).unwrap_or(0.0);
-            let main = m["slot"].as_str().is_none_or(|s| s == "mainhand" || s == "hand" || s == "any");
+            let main = m["slot"]
+                .as_str()
+                .is_none_or(|s| s == "mainhand" || s == "hand" || s == "any");
             let add = m["operation"].as_str().is_none_or(|o| o == "add_value");
             if !add {
                 continue;
             }
-            match m["type"].as_str().unwrap_or("").trim_start_matches("minecraft:") {
+            match m["type"]
+                .as_str()
+                .unwrap_or("")
+                .trim_start_matches("minecraft:")
+            {
                 "attack_damage" if main => dmg += amt,
                 "attack_speed" if main => spd += amt,
                 "armor" => armor += amt,
@@ -351,7 +470,9 @@ fn load_items(dir: &Path, tags: &Tags) -> anyhow::Result<Vec<ItemInfo>> {
             }
         }
         let block_name = aliases.get(name).copied().unwrap_or(name);
-        let block = BlockState::from_name(block_name).filter(|s| !s.is_air() || *name == "air").map(|s| s.0);
+        let block = BlockState::from_name(block_name)
+            .filter(|s| !s.is_air() || *name == "air")
+            .map(|s| s.0);
         out.push(ItemInfo {
             id: id as i32,
             name: name.to_string(),
@@ -367,8 +488,12 @@ fn load_items(dir: &Path, tags: &Tags) -> anyhow::Result<Vec<ItemInfo>> {
             equip_slot: g("equippable")["slot"].as_str().map(str::to_string),
             block,
             enchantable: g("enchantable")["value"].as_i64().unwrap_or(0) as i32,
-            trim_material: g("provides_trim_material").as_str().map(|m| m.trim_start_matches("minecraft:").to_string()),
-            repairable: g("repairable").get("items").and_then(|i| recipe::Ingredient::parse(i, tags)),
+            trim_material: g("provides_trim_material")
+                .as_str()
+                .map(|m| m.trim_start_matches("minecraft:").to_string()),
+            repairable: g("repairable")
+                .get("items")
+                .and_then(|i| recipe::Ingredient::parse(i, tags)),
         });
     }
     Ok(out)

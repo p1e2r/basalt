@@ -7,17 +7,23 @@ use std::sync::{OnceLock, RwLock};
 type Tables = (HashMap<String, String>, HashMap<String, String>);
 static LANG: OnceLock<RwLock<Tables>> = OnceLock::new();
 
-fn table() -> &'static RwLock<Tables> { LANG.get_or_init(|| RwLock::new((HashMap::new(), HashMap::new()))) }
+fn table() -> &'static RwLock<Tables> {
+    LANG.get_or_init(|| RwLock::new((HashMap::new(), HashMap::new())))
+}
 
 /// Install the language table (called once after the jar is read).
 pub fn init(json: Option<&[u8]>) {
-    let map = json.and_then(|j| serde_json::from_slice::<HashMap<String, String>>(j).ok()).unwrap_or_default();
+    let map = json
+        .and_then(|j| serde_json::from_slice::<HashMap<String, String>>(j).ok())
+        .unwrap_or_default();
     table().write().unwrap().0 = map;
 }
 
 /// Switch to another language (its json from the launcher asset store); None = back to en_us.
 pub fn set_language(json: Option<&[u8]>) {
-    let map = json.and_then(|j| serde_json::from_slice::<HashMap<String, String>>(j).ok()).unwrap_or_default();
+    let map = json
+        .and_then(|j| serde_json::from_slice::<HashMap<String, String>>(j).ok())
+        .unwrap_or_default();
     table().write().unwrap().1 = map;
 }
 
@@ -26,25 +32,46 @@ pub fn tr(key: &str, args: &[String]) -> String {
     let t = table().read().unwrap();
     let fmt = t.1.get(key).or_else(|| t.0.get(key)).map(|s| s.as_str());
     let Some(fmt) = fmt else {
-        return if args.is_empty() { key.to_string() } else { format!("{key} {}", args.join(" ")) };
+        return if args.is_empty() {
+            key.to_string()
+        } else {
+            format!("{key} {}", args.join(" "))
+        };
     };
     let mut out = String::new();
     let mut next = 0usize;
     let mut chars = fmt.chars().peekable();
     while let Some(c) = chars.next() {
-        if c != '%' { out.push(c); continue; }
+        if c != '%' {
+            out.push(c);
+            continue;
+        }
         // %% | %s | %N$s
         let mut num = String::new();
-        while let Some(d) = chars.peek().copied().filter(|d| d.is_ascii_digit()) { num.push(d); chars.next(); }
+        while let Some(d) = chars.peek().copied().filter(|d| d.is_ascii_digit()) {
+            num.push(d);
+            chars.next();
+        }
         match chars.next() {
             Some('%') => out.push('%'),
-            Some('s') | Some('d') => { out.push_str(args.get(next).map(|s| s.as_str()).unwrap_or("")); next += 1; }
+            Some('s') | Some('d') => {
+                out.push_str(args.get(next).map(|s| s.as_str()).unwrap_or(""));
+                next += 1;
+            }
             Some('$') => {
                 let i: usize = num.parse().unwrap_or(1);
                 chars.next(); // 's'
-                out.push_str(args.get(i.saturating_sub(1)).map(|s| s.as_str()).unwrap_or(""));
+                out.push_str(
+                    args.get(i.saturating_sub(1))
+                        .map(|s| s.as_str())
+                        .unwrap_or(""),
+                );
             }
-            Some(o) => { out.push('%'); out.push_str(&num); out.push(o); }
+            Some(o) => {
+                out.push('%');
+                out.push_str(&num);
+                out.push(o);
+            }
             None => out.push('%'),
         }
     }
@@ -57,40 +84,92 @@ pub fn text(t: &Tag) -> String {
         Tag::String(s) => s.clone(),
         Tag::Compound(c) => {
             let mut s = String::new();
-            if let Some(Tag::String(x)) = c.get("text") { s.push_str(x); }
-            if let Some(Tag::String(x)) = c.get("") { s.push_str(x); }
-            if let Some(Tag::String(k)) = c.get("translate") {
-                let args: Vec<String> = match c.get("with") { Some(Tag::List(w)) => w.iter().map(text).collect(), _ => Vec::new() };
-                let fallback = match c.get("fallback") { Some(Tag::String(f)) => Some(f.clone()), _ => None };
-                let r = tr(k, &args);
-                if r == *k && fallback.is_some() { s.push_str(&fallback.unwrap()); } else { s.push_str(&r); }
+            if let Some(Tag::String(x)) = c.get("text") {
+                s.push_str(x);
             }
-            if let Some(Tag::List(ex)) = c.get("extra") { for e in ex { s.push_str(&text(e)); } }
+            if let Some(Tag::String(x)) = c.get("") {
+                s.push_str(x);
+            }
+            if let Some(Tag::String(k)) = c.get("translate") {
+                let args: Vec<String> = match c.get("with") {
+                    Some(Tag::List(w)) => w.iter().map(text).collect(),
+                    _ => Vec::new(),
+                };
+                let fallback = match c.get("fallback") {
+                    Some(Tag::String(f)) => Some(f.clone()),
+                    _ => None,
+                };
+                let r = tr(k, &args);
+                if r == *k && fallback.is_some() {
+                    s.push_str(&fallback.unwrap());
+                } else {
+                    s.push_str(&r);
+                }
+            }
+            if let Some(Tag::List(ex)) = c.get("extra") {
+                for e in ex {
+                    s.push_str(&text(e));
+                }
+            }
             s
         }
         Tag::List(l) => l.iter().map(text).collect(),
-        Tag::Byte(v) => v.to_string(), Tag::Short(v) => v.to_string(), Tag::Int(v) => v.to_string(), Tag::Long(v) => v.to_string(),
-        Tag::Float(v) => v.to_string(), Tag::Double(v) => v.to_string(),
+        Tag::Byte(v) => v.to_string(),
+        Tag::Short(v) => v.to_string(),
+        Tag::Int(v) => v.to_string(),
+        Tag::Long(v) => v.to_string(),
+        Tag::Float(v) => v.to_string(),
+        Tag::Double(v) => v.to_string(),
         _ => String::new(),
     }
 }
 
 /// Display name of an item (from the language file).
 pub fn item_name(item: i32) -> String {
-    let n = basalt_data::registries::ITEM.get(item as usize).copied().unwrap_or("air");
+    let n = basalt_data::registries::ITEM
+        .get(item as usize)
+        .copied()
+        .unwrap_or("air");
     let k1 = format!("item.minecraft.{n}");
     let r = tr(&k1, &[]);
-    if r != k1 { return r; }
+    if r != k1 {
+        return r;
+    }
     let k2 = format!("block.minecraft.{n}");
     let r = tr(&k2, &[]);
-    if r != k2 { r } else { n.to_string() }
+    if r != k2 {
+        r
+    } else {
+        n.to_string()
+    }
 }
 
 /// Legacy colour code of a named text colour (`0`-`f`), or a private `x` + 6 hex digits for RGB.
 fn color_code(name: &str) -> Option<String> {
-    const NAMES: [&str; 16] = ["black", "dark_blue", "dark_green", "dark_aqua", "dark_red", "dark_purple", "gold", "gray", "dark_gray", "blue", "green", "aqua", "red", "light_purple", "yellow", "white"];
-    if let Some(i) = NAMES.iter().position(|n| *n == name) { return Some(format!("{:x}", i)); }
-    name.strip_prefix('#').filter(|h| h.len() == 6 && h.chars().all(|c| c.is_ascii_hexdigit())).map(|h| format!("x{h}"))
+    const NAMES: [&str; 16] = [
+        "black",
+        "dark_blue",
+        "dark_green",
+        "dark_aqua",
+        "dark_red",
+        "dark_purple",
+        "gold",
+        "gray",
+        "dark_gray",
+        "blue",
+        "green",
+        "aqua",
+        "red",
+        "light_purple",
+        "yellow",
+        "white",
+    ];
+    if let Some(i) = NAMES.iter().position(|n| *n == name) {
+        return Some(format!("{:x}", i));
+    }
+    name.strip_prefix('#')
+        .filter(|h| h.len() == 6 && h.chars().all(|c| c.is_ascii_hexdigit()))
+        .map(|h| format!("x{h}"))
 }
 
 /// Like `text`, with colours kept inline as `§<code>` (the UI renderer turns them into colour
@@ -99,23 +178,65 @@ pub fn styled(t: &Tag) -> String {
     fn walk(t: &Tag, cur: &str, out: &mut String) {
         match t {
             Tag::Compound(c) => {
-                let col = match c.get("color") { Some(Tag::String(n)) => color_code(n).unwrap_or_else(|| cur.to_string()), _ => cur.to_string() };
-                let set = |out: &mut String, code: &str| { if !code.is_empty() { out.push('§'); out.push_str(code); } else { out.push_str("§r"); } };
-                if col != cur { set(out, &col); }
-                if let Some(Tag::String(x)) = c.get("text") { out.push_str(x); }
-                if let Some(Tag::String(x)) = c.get("") { out.push_str(x); }
+                let col = match c.get("color") {
+                    Some(Tag::String(n)) => color_code(n).unwrap_or_else(|| cur.to_string()),
+                    _ => cur.to_string(),
+                };
+                let set = |out: &mut String, code: &str| {
+                    if !code.is_empty() {
+                        out.push('§');
+                        out.push_str(code);
+                    } else {
+                        out.push_str("§r");
+                    }
+                };
+                if col != cur {
+                    set(out, &col);
+                }
+                if let Some(Tag::String(x)) = c.get("text") {
+                    out.push_str(x);
+                }
+                if let Some(Tag::String(x)) = c.get("") {
+                    out.push_str(x);
+                }
                 if let Some(Tag::String(k)) = c.get("translate") {
                     let args: Vec<String> = match c.get("with") {
-                        Some(Tag::List(w)) => w.iter().map(|a| { let mut o = String::new(); walk(a, &col, &mut o); o.push_str(&if col.is_empty() { "§r".to_string() } else { format!("§{col}") }); o }).collect(),
+                        Some(Tag::List(w)) => w
+                            .iter()
+                            .map(|a| {
+                                let mut o = String::new();
+                                walk(a, &col, &mut o);
+                                o.push_str(&if col.is_empty() {
+                                    "§r".to_string()
+                                } else {
+                                    format!("§{col}")
+                                });
+                                o
+                            })
+                            .collect(),
                         _ => Vec::new(),
                     };
                     let r = tr(k, &args);
-                    match c.get("fallback") { Some(Tag::String(f)) if r == *k => out.push_str(f), _ => out.push_str(&r) }
+                    match c.get("fallback") {
+                        Some(Tag::String(f)) if r == *k => out.push_str(f),
+                        _ => out.push_str(&r),
+                    }
                 }
-                if let Some(Tag::List(ex)) = c.get("extra") { for e in ex { walk(e, &col, out); set(out, &col); } }
-                if col != cur { set(out, cur); }
+                if let Some(Tag::List(ex)) = c.get("extra") {
+                    for e in ex {
+                        walk(e, &col, out);
+                        set(out, &col);
+                    }
+                }
+                if col != cur {
+                    set(out, cur);
+                }
             }
-            Tag::List(l) => for e in l { walk(e, cur, out) },
+            Tag::List(l) => {
+                for e in l {
+                    walk(e, cur, out)
+                }
+            }
             other => out.push_str(&text(other)),
         }
     }
@@ -129,8 +250,15 @@ pub fn strip_codes(s: &str) -> String {
     let mut out = String::new();
     let mut it = s.chars().peekable();
     while let Some(c) = it.next() {
-        if c != '§' { out.push(c); continue; }
-        if it.next() == Some('x') { for _ in 0..6 { it.next(); } }
+        if c != '§' {
+            out.push(c);
+            continue;
+        }
+        if it.next() == Some('x') {
+            for _ in 0..6 {
+                it.next();
+            }
+        }
     }
     out
 }
@@ -139,8 +267,13 @@ pub fn strip_codes(s: &str) -> String {
 mod tests {
     #[test]
     fn formats() {
-        super::init(Some(br#"{"a":"%s was slain by %s","b":"%2$s then %1$s","c":"100%%"}"#));
-        assert_eq!(super::tr("a", &["X".into(), "Y".into()]), "X was slain by Y");
+        super::init(Some(
+            br#"{"a":"%s was slain by %s","b":"%2$s then %1$s","c":"100%%"}"#,
+        ));
+        assert_eq!(
+            super::tr("a", &["X".into(), "Y".into()]),
+            "X was slain by Y"
+        );
         assert_eq!(super::tr("b", &["X".into(), "Y".into()]), "Y then X");
         assert_eq!(super::tr("c", &[]), "100%");
         assert_eq!(super::tr("missing", &[]), "missing");

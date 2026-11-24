@@ -9,26 +9,45 @@ pub mod click_oracle;
 pub mod coverage;
 pub mod imgcmp;
 pub mod input_diff;
-pub mod water;
 pub mod mesh_diff;
 pub mod oracle;
 pub mod perf;
 pub mod rng;
 pub mod visual;
+pub mod water;
 
 /// Source paths whose changes make the client-mesh harness worth re-running.
-pub const MESH_AFFECTED: &[&str] = &["crates/client/src/mesh.rs", "crates/client/src/assets.rs", "crates/client/src/shader.wgsl"];
+pub const MESH_AFFECTED: &[&str] = &[
+    "crates/client/src/mesh.rs",
+    "crates/client/src/assets.rs",
+    "crates/client/src/shader.wgsl",
+];
 
 /// Source paths whose changes make the animation-parity harness (`client-anim`) worth re-running.
-pub const ANIM_AFFECTED: &[&str] = &["crates/client/src/{entity,anim,main,script}.rs", "crates/check/src/client/{anim_diff,input_diff,oracle}.rs", "tools/oracle-mod/**"];
+pub const ANIM_AFFECTED: &[&str] = &[
+    "crates/client/src/{entity,anim,main,script}.rs",
+    "crates/check/src/client/{anim_diff,input_diff,oracle}.rs",
+    "tools/oracle-mod/**",
+];
 
 /// Source paths whose changes make the input-parity / click-oracle stages worth re-running.
 /// (`client-input` / `client-clicks` drive the vanilla client through the oracle mod's control
 /// channel, see tools/oracle-mod/SCHEMA.md.)
-pub const INPUT_AFFECTED: &[&str] = &["crates/client/src/{main,script,container,player,net}.rs", "crates/server/src/{conn,commands}.rs", "crates/server/src/game/**", "crates/game/**"];
+pub const INPUT_AFFECTED: &[&str] = &[
+    "crates/client/src/{main,script,container,player,net}.rs",
+    "crates/server/src/{conn,commands}.rs",
+    "crates/server/src/game/**",
+    "crates/game/**",
+];
 
 /// Anything that changes what basalt-client draws or how fast it does so.
-pub const RENDER_AFFECTED: &[&str] = &["crates/client/**", "crates/data/**", "crates/world/**", "crates/protocol/**", "Cargo.lock"];
+pub const RENDER_AFFECTED: &[&str] = &[
+    "crates/client/**",
+    "crates/data/**",
+    "crates/world/**",
+    "crates/protocol/**",
+    "Cargo.lock",
+];
 
 /// A harness that cannot run here (no GPU, no real client, no display) fails with this error; the
 /// binaries print `SKIP` and the driver reports the row as skipped instead of failed.
@@ -68,10 +87,20 @@ pub fn finish(id: &str, r: anyhow::Result<usize>) -> i32 {
 
 /// True when basalt-client output says there is no usable graphics adapter (headless CI).
 pub fn no_gpu(output: &str) -> bool {
-    output.contains("no graphics adapter found") || output.contains("No suitable") || output.contains("request_adapter")
+    output.contains("no graphics adapter found")
+        || output.contains("No suitable")
+        || output.contains("request_adapter")
 }
 
 /// `target/release/basalt-client` (env BASALT_CLIENT overrides).
 pub fn client_bin() -> std::path::PathBuf {
-    std::env::var("BASALT_CLIENT").map(Into::into).unwrap_or_else(|_| format!("target/release/basalt-client{}", std::env::consts::EXE_SUFFIX).into())
+    std::env::var("BASALT_CLIENT")
+        .map(Into::into)
+        .unwrap_or_else(|_| {
+            format!(
+                "target/release/basalt-client{}",
+                std::env::consts::EXE_SUFFIX
+            )
+            .into()
+        })
 }

@@ -39,10 +39,25 @@ impl Ingredient {
 
 #[derive(Debug, Clone)]
 pub enum Recipe {
-    Shaped { id: String, width: usize, height: usize, cells: Vec<Option<Ingredient>>, result: (i32, i32) },
-    Shapeless { id: String, ingredients: Vec<Ingredient>, result: (i32, i32) },
+    Shaped {
+        id: String,
+        width: usize,
+        height: usize,
+        cells: Vec<Option<Ingredient>>,
+        result: (i32, i32),
+    },
+    Shapeless {
+        id: String,
+        ingredients: Vec<Ingredient>,
+        result: (i32, i32),
+    },
     /// `input` + `material` → `result` (components of the input carry over in vanilla).
-    Transmute { id: String, input: Ingredient, material: Ingredient, result: (i32, i32) },
+    Transmute {
+        id: String,
+        input: Ingredient,
+        material: Ingredient,
+        result: (i32, i32),
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -75,7 +90,10 @@ fn result_of(v: &Value) -> Option<(i32, i32)> {
     let r = &v["result"];
     let (id, count) = match r {
         Value::String(s) => (s.as_str(), 1),
-        _ => (r["id"].as_str().or_else(|| r["item"].as_str())?, r["count"].as_i64().unwrap_or(1) as i32),
+        _ => (
+            r["id"].as_str().or_else(|| r["item"].as_str())?,
+            r["count"].as_i64().unwrap_or(1) as i32,
+        ),
     };
     Some((item_id(id)?, count))
 }
@@ -89,10 +107,16 @@ impl Recipes {
         files.sort();
         let mut out = Recipes::default();
         for p in files {
-            let id = p.file_stem().unwrap_or_default().to_string_lossy().to_string();
+            let id = p
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             let v = read_json(&p)?;
             let ty = short(v["type"].as_str().unwrap_or(""));
-            let Some(result) = result_of(&v) else { continue };
+            let Some(result) = result_of(&v) else {
+                continue;
+            };
             match ty {
                 "crafting_shaped" => {
                     let key: HashMap<char, Ingredient> = v["key"]
@@ -101,8 +125,13 @@ impl Recipes {
                         .flatten()
                         .filter_map(|(k, x)| Some((k.chars().next()?, Ingredient::parse(x, tags)?)))
                         .collect();
-                    let rows: Vec<Vec<char>> =
-                        v["pattern"].as_array().into_iter().flatten().filter_map(|r| r.as_str()).map(|r| r.chars().collect()).collect();
+                    let rows: Vec<Vec<char>> = v["pattern"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|r| r.as_str())
+                        .map(|r| r.chars().collect())
+                        .collect();
                     let w = rows.iter().map(|r| r.len()).max().unwrap_or(0);
                     let h = rows.len();
                     let mut cells = Vec::with_capacity(w * h);
@@ -123,18 +152,40 @@ impl Recipes {
                         continue;
                     }
                     let (width, height, cells) = trim(w, h, &cells);
-                    out.crafting.push(Recipe::Shaped { id, width, height, cells, result });
+                    out.crafting.push(Recipe::Shaped {
+                        id,
+                        width,
+                        height,
+                        cells,
+                        result,
+                    });
                 }
                 "crafting_shapeless" => {
-                    let ingredients: Option<Vec<Ingredient>> =
-                        v["ingredients"].as_array().into_iter().flatten().map(|x| Ingredient::parse(x, tags)).collect();
+                    let ingredients: Option<Vec<Ingredient>> = v["ingredients"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(|x| Ingredient::parse(x, tags))
+                        .collect();
                     if let Some(ingredients) = ingredients.filter(|i| !i.is_empty()) {
-                        out.crafting.push(Recipe::Shapeless { id, ingredients, result });
+                        out.crafting.push(Recipe::Shapeless {
+                            id,
+                            ingredients,
+                            result,
+                        });
                     }
                 }
                 "crafting_transmute" => {
-                    if let (Some(input), Some(material)) = (Ingredient::parse(&v["input"], tags), Ingredient::parse(&v["material"], tags)) {
-                        out.crafting.push(Recipe::Transmute { id, input, material, result });
+                    if let (Some(input), Some(material)) = (
+                        Ingredient::parse(&v["input"], tags),
+                        Ingredient::parse(&v["material"], tags),
+                    ) {
+                        out.crafting.push(Recipe::Transmute {
+                            id,
+                            input,
+                            material,
+                            result,
+                        });
                     }
                 }
                 "smelting" | "blasting" | "smoking" | "campfire_cooking" => {
@@ -151,7 +202,9 @@ impl Recipes {
                         let mut ids: Vec<i32> = ing.0.into_iter().collect();
                         ids.sort();
                         for i in ids {
-                            if !out.cooking.contains_key(&(kind, i)) { out.cooking_ids.insert((kind, i), id.clone()); }
+                            if !out.cooking.contains_key(&(kind, i)) {
+                                out.cooking_ids.insert((kind, i), id.clone());
+                            }
                             out.cooking.entry((kind, i)).or_insert((result.0, xp, time));
                         }
                     }
@@ -201,16 +254,37 @@ impl Recipes {
         }
         let items: Vec<i32> = grid.iter().flatten().copied().collect();
         let found = self.crafting.iter().find_map(|r| match r {
-            Recipe::Shaped { width: w, height: h, cells: pat, result, .. } => {
-                (*w == bw && *h == bh && (shaped_match(pat, &cells, bw, false) || shaped_match(pat, &cells, bw, true))).then_some(*result)
-            }
-            Recipe::Shapeless { ingredients, result, .. } => shapeless_match(ingredients, &items).then_some(*result),
-            Recipe::Transmute { input, material, result, .. } => (items.len() == 2
-                && ((input.matches(items[0]) && material.matches(items[1])) || (input.matches(items[1]) && material.matches(items[0])))
+            Recipe::Shaped {
+                width: w,
+                height: h,
+                cells: pat,
+                result,
+                ..
+            } => (*w == bw
+                && *h == bh
+                && (shaped_match(pat, &cells, bw, false) || shaped_match(pat, &cells, bw, true)))
+            .then_some(*result),
+            Recipe::Shapeless {
+                ingredients,
+                result,
+                ..
+            } => shapeless_match(ingredients, &items).then_some(*result),
+            Recipe::Transmute {
+                input,
+                material,
+                result,
+                ..
+            } => (items.len() == 2
+                && ((input.matches(items[0]) && material.matches(items[1]))
+                    || (input.matches(items[1]) && material.matches(items[0])))
                 && !(items.contains(&result.0) && input.matches(result.0)))
             .then_some(*result),
         })?;
-        Some(CraftResult { item: found.0, count: found.1, remainders: grid.iter().map(|s| s.and_then(remainder)).collect() })
+        Some(CraftResult {
+            item: found.0,
+            count: found.1,
+            remainders: grid.iter().map(|s| s.and_then(remainder)).collect(),
+        })
     }
 }
 
@@ -268,7 +342,9 @@ fn shapeless_match(ings: &[Ingredient], items: &[i32]) -> bool {
         return false;
     }
     fn go(ings: &[Ingredient], items: &[i32], used: &mut [bool]) -> bool {
-        let Some((first, rest)) = ings.split_first() else { return true };
+        let Some((first, rest)) = ings.split_first() else {
+            return true;
+        };
         for i in 0..items.len() {
             if !used[i] && first.matches(items[i]) {
                 used[i] = true;

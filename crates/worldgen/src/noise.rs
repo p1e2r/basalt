@@ -4,33 +4,75 @@
 use crate::random::{Rng, Xoroshiro};
 
 const GRAD: [[f64; 3]; 16] = [
-    [1.0, 1.0, 0.0], [-1.0, 1.0, 0.0], [1.0, -1.0, 0.0], [-1.0, -1.0, 0.0],
-    [1.0, 0.0, 1.0], [-1.0, 0.0, 1.0], [1.0, 0.0, -1.0], [-1.0, 0.0, -1.0],
-    [0.0, 1.0, 1.0], [0.0, -1.0, 1.0], [0.0, 1.0, -1.0], [0.0, -1.0, -1.0],
-    [1.0, 1.0, 0.0], [0.0, -1.0, 1.0], [-1.0, 1.0, 0.0], [0.0, -1.0, -1.0],
+    [1.0, 1.0, 0.0],
+    [-1.0, 1.0, 0.0],
+    [1.0, -1.0, 0.0],
+    [-1.0, -1.0, 0.0],
+    [1.0, 0.0, 1.0],
+    [-1.0, 0.0, 1.0],
+    [1.0, 0.0, -1.0],
+    [-1.0, 0.0, -1.0],
+    [0.0, 1.0, 1.0],
+    [0.0, -1.0, 1.0],
+    [0.0, 1.0, -1.0],
+    [0.0, -1.0, -1.0],
+    [1.0, 1.0, 0.0],
+    [0.0, -1.0, 1.0],
+    [-1.0, 1.0, 0.0],
+    [0.0, -1.0, -1.0],
 ];
 
 #[inline]
-pub fn lerp(t: f64, a: f64, b: f64) -> f64 { a + t * (b - a) }
+pub fn lerp(t: f64, a: f64, b: f64) -> f64 {
+    a + t * (b - a)
+}
 #[inline]
-pub fn lerp2(tx: f64, ty: f64, a: f64, b: f64, c: f64, d: f64) -> f64 { lerp(ty, lerp(tx, a, b), lerp(tx, c, d)) }
+pub fn lerp2(tx: f64, ty: f64, a: f64, b: f64, c: f64, d: f64) -> f64 {
+    lerp(ty, lerp(tx, a, b), lerp(tx, c, d))
+}
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub fn lerp3(tx: f64, ty: f64, tz: f64, a: f64, b: f64, c: f64, d: f64, e: f64, f: f64, g: f64, h: f64) -> f64 {
+pub fn lerp3(
+    tx: f64,
+    ty: f64,
+    tz: f64,
+    a: f64,
+    b: f64,
+    c: f64,
+    d: f64,
+    e: f64,
+    f: f64,
+    g: f64,
+    h: f64,
+) -> f64 {
     lerp(tz, lerp2(tx, ty, a, b, c, d), lerp2(tx, ty, e, f, g, h))
 }
 #[inline]
-pub fn smoothstep(t: f64) -> f64 { t * t * t * (t * (t * 6.0 - 15.0) + 10.0) }
-#[inline]
-pub fn clamped_lerp(a: f64, b: f64, t: f64) -> f64 {
-    if t < 0.0 { a } else if t > 1.0 { b } else { lerp(t, a, b) }
+pub fn smoothstep(t: f64) -> f64 {
+    t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
 }
 #[inline]
-pub fn floor(v: f64) -> i32 { v.floor() as i32 }
+pub fn clamped_lerp(a: f64, b: f64, t: f64) -> f64 {
+    if t < 0.0 {
+        a
+    } else if t > 1.0 {
+        b
+    } else {
+        lerp(t, a, b)
+    }
+}
 #[inline]
-pub fn lfloor(v: f64) -> i64 { v.floor() as i64 }
+pub fn floor(v: f64) -> i32 {
+    v.floor() as i32
+}
 #[inline]
-pub fn wrap(v: f64) -> f64 { v - (lfloor(v / 33554432.0 + 0.5) as f64) * 33554432.0 }
+pub fn lfloor(v: f64) -> i64 {
+    v.floor() as i64
+}
+#[inline]
+pub fn wrap(v: f64) -> f64 {
+    v - (lfloor(v / 33554432.0 + 0.5) as f64) * 33554432.0
+}
 
 #[derive(Clone)]
 pub struct ImprovedNoise {
@@ -46,7 +88,9 @@ impl ImprovedNoise {
         let yo = r.next_double() * 256.0;
         let zo = r.next_double() * 256.0;
         let mut p = [0u8; 256];
-        for (i, v) in p.iter_mut().enumerate() { *v = i as u8; }
+        for (i, v) in p.iter_mut().enumerate() {
+            *v = i as u8;
+        }
         for i in 0..256 {
             let j = r.next_int_bounded(256 - i as i32) as usize;
             p.swap(i, i + j);
@@ -54,7 +98,9 @@ impl ImprovedNoise {
         Self { p, xo, yo, zo }
     }
     #[inline]
-    fn perm(&self, i: i32) -> i32 { self.p[(i & 255) as usize] as i32 }
+    fn perm(&self, i: i32) -> i32 {
+        self.p[(i & 255) as usize] as i32
+    }
 
     pub fn noise(&self, x: f64, y: f64, z: f64, y_scale: f64, y_max: f64) -> f64 {
         let d = x + self.xo;
@@ -69,7 +115,9 @@ impl ImprovedNoise {
         let o = if y_scale != 0.0 {
             let m = if y_max >= 0.0 && y_max < h { y_max } else { h };
             (floor(m / y_scale + 1.0e-7_f32 as f64) as f64) * y_scale
-        } else { 0.0 };
+        } else {
+            0.0
+        };
         self.sample_and_lerp(i, j, k, g, h - o, l, h)
     }
 
@@ -117,20 +165,38 @@ impl PerlinNoise {
         let n = amps.len();
         let pf = r.fork_positional();
         let levels = (0..n)
-            .map(|k| if amps[k] != 0.0 { Some(ImprovedNoise::new(&mut pf.from_hash(&format!("octave_{}", first_octave + k as i32)))) } else { None })
+            .map(|k| {
+                if amps[k] != 0.0 {
+                    Some(ImprovedNoise::new(
+                        &mut pf.from_hash(&format!("octave_{}", first_octave + k as i32)),
+                    ))
+                } else {
+                    None
+                }
+            })
             .collect();
         Self::finish(levels, amps, first_octave)
     }
 
     /// Modern construction over a legacy (java.util.Random) source: the positional fork
     /// seeds each octave with `String.hashCode("octave_N") ^ seed`.
-    pub fn new_legacy_positional(r: &mut crate::random::JavaRandom, first_octave: i32, amps: &[f64]) -> Self {
+    pub fn new_legacy_positional(
+        r: &mut crate::random::JavaRandom,
+        first_octave: i32,
+        amps: &[f64],
+    ) -> Self {
         let seed = r.next_long();
         let levels = (0..amps.len())
-            .map(|k| if amps[k] != 0.0 {
-                let h = java_hash(&format!("octave_{}", first_octave + k as i32)) as i64;
-                Some(ImprovedNoise::new(&mut crate::random::JavaRandom::new(h ^ seed)))
-            } else { None })
+            .map(|k| {
+                if amps[k] != 0.0 {
+                    let h = java_hash(&format!("octave_{}", first_octave + k as i32)) as i64;
+                    Some(ImprovedNoise::new(&mut crate::random::JavaRandom::new(
+                        h ^ seed,
+                    )))
+                } else {
+                    None
+                }
+            })
             .collect();
         Self::finish(levels, amps, first_octave)
     }
@@ -141,9 +207,15 @@ impl PerlinNoise {
         let j = -first_octave;
         let mut levels: Vec<Option<ImprovedNoise>> = vec![None; n as usize];
         let first = ImprovedNoise::new(r);
-        if j >= 0 && j < n && amps[j as usize] != 0.0 { levels[j as usize] = Some(first); }
+        if j >= 0 && j < n && amps[j as usize] != 0.0 {
+            levels[j as usize] = Some(first);
+        }
         for k in (0..j).rev() {
-            if k < n && amps[k as usize] != 0.0 { levels[k as usize] = Some(ImprovedNoise::new(r)); } else { r.consume(262); }
+            if k < n && amps[k as usize] != 0.0 {
+                levels[k as usize] = Some(ImprovedNoise::new(r));
+            } else {
+                r.consume(262);
+            }
         }
         Self::finish(levels, amps, first_octave)
     }
@@ -176,7 +248,11 @@ impl PerlinNoise {
     /// Octave `i` counted from the highest frequency.
     pub fn octave(&self, i: usize) -> Option<&ImprovedNoise> {
         let n = self.levels.len();
-        if i < n { self.levels[n - 1 - i].as_ref() } else { None }
+        if i < n {
+            self.levels[n - 1 - i].as_ref()
+        } else {
+            None
+        }
     }
 }
 
@@ -201,11 +277,18 @@ impl NormalNoise {
         let mut lo = i32::MAX;
         let mut hi = i32::MIN;
         for (i, a) in p.amplitudes.iter().enumerate() {
-            if *a != 0.0 { lo = lo.min(i as i32); hi = hi.max(i as i32); }
+            if *a != 0.0 {
+                lo = lo.min(i as i32);
+                hi = hi.max(i as i32);
+            }
         }
         let octaves = hi - lo;
         let dev = 0.1 * (1.0 + 1.0 / (octaves + 1) as f64);
-        Self { first, second, factor: 0.16666666666666666 / dev }
+        Self {
+            first,
+            second,
+            factor: 0.16666666666666666 / dev,
+        }
     }
 
     #[inline]
@@ -217,7 +300,8 @@ impl NormalNoise {
 
 /// java.lang.String#hashCode
 pub fn java_hash(s: &str) -> i32 {
-    s.encode_utf16().fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(c as i32))
+    s.encode_utf16()
+        .fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(c as i32))
 }
 
 impl NormalNoise {
@@ -253,11 +337,18 @@ impl NormalNoise {
         let mut lo = i32::MAX;
         let mut hi = i32::MIN;
         for (i, a) in amps.iter().enumerate() {
-            if *a != 0.0 { lo = lo.min(i as i32); hi = hi.max(i as i32); }
+            if *a != 0.0 {
+                lo = lo.min(i as i32);
+                hi = hi.max(i as i32);
+            }
         }
         let octaves = hi - lo;
         let dev = 0.1 * (1.0 + 1.0 / (octaves + 1) as f64);
-        Self { first, second, factor: 0.16666666666666666 / dev }
+        Self {
+            first,
+            second,
+            factor: 0.16666666666666666 / dev,
+        }
     }
 }
 
@@ -275,14 +366,30 @@ pub struct BlendedNoise {
 }
 
 impl BlendedNoise {
-    pub fn new<R: Rng>(r: &mut R, xz_scale: f64, y_scale: f64, xz_factor: f64, y_factor: f64, smear_mult: f64) -> Self {
+    pub fn new<R: Rng>(
+        r: &mut R,
+        xz_scale: f64,
+        y_scale: f64,
+        xz_factor: f64,
+        y_factor: f64,
+        smear_mult: f64,
+    ) -> Self {
         let ones16 = [1.0; 16];
         let ones8 = [1.0; 8];
         let min_limit = PerlinNoise::new_legacy(r, -15, &ones16);
         let max_limit = PerlinNoise::new_legacy(r, -15, &ones16);
         let main = PerlinNoise::new_legacy(r, -7, &ones8);
         let y_mul = 684.412 * y_scale;
-        Self { min_limit, max_limit, main, xz_mul: 684.412 * xz_scale, y_mul, xz_factor, y_factor, smear: y_mul * smear_mult }
+        Self {
+            min_limit,
+            max_limit,
+            main,
+            xz_mul: 684.412 * xz_scale,
+            y_mul,
+            xz_factor,
+            y_factor,
+            smear: y_mul * smear_mult,
+        }
     }
 
     pub fn get(&self, x: f64, y: f64, z: f64) -> f64 {
@@ -314,10 +421,14 @@ impl BlendedNoise {
             let u = wrap(f * o);
             let v = j * o;
             if !above {
-                if let Some(nz) = self.min_limit.octave(r) { l += nz.noise(s, t, u, v, e * o) / o; }
+                if let Some(nz) = self.min_limit.octave(r) {
+                    l += nz.noise(s, t, u, v, e * o) / o;
+                }
             }
             if !below {
-                if let Some(nz) = self.max_limit.octave(r) { m += nz.noise(s, t, u, v, e * o) / o; }
+                if let Some(nz) = self.max_limit.octave(r) {
+                    m += nz.noise(s, t, u, v, e * o) / o;
+                }
             }
             o /= 2.0;
         }
@@ -340,17 +451,23 @@ impl SimplexNoise {
         let yo = r.next_double() * 256.0;
         let zo = r.next_double() * 256.0;
         let mut p = [0i32; 512];
-        for (i, v) in p.iter_mut().enumerate().take(256) { *v = i as i32; }
+        for (i, v) in p.iter_mut().enumerate().take(256) {
+            *v = i as i32;
+        }
         for i in 0..256 {
             let j = r.next_int_bounded(256 - i as i32) as usize;
             p.swap(i, i + j);
         }
         Self { p, xo, yo, zo }
     }
-    fn perm(&self, i: i32) -> i32 { self.p[(i & 255) as usize] }
+    fn perm(&self, i: i32) -> i32 {
+        self.p[(i & 255) as usize]
+    }
     fn corner(&self, idx: i32, x: f64, y: f64, z: f64, off: f64) -> f64 {
         let mut d = off - x * x - y * y - z * z;
-        if d < 0.0 { 0.0 } else {
+        if d < 0.0 {
+            0.0
+        } else {
             d *= d;
             let g = &GRAD[(idx % 12) as usize];
             d * d * (g[0] * x + g[1] * y + g[2] * z)
@@ -401,11 +518,21 @@ impl PerlinSimplexNoise {
         let first = SimplexNoise::new(r);
         let mut levels: Vec<Option<SimplexNoise>> = (0..n).map(|_| None).collect();
         let l = hi;
-        if l >= 0 && (l as usize) < n && octaves.contains(&0) { levels[l as usize] = Some(first); }
-        for m in (l + 1) as usize..n {
-            if octaves.contains(&(l - m as i32)) { levels[m] = Some(SimplexNoise::new(r)); } else { r.consume(262); }
+        if l >= 0 && (l as usize) < n && octaves.contains(&0) {
+            levels[l as usize] = Some(first);
         }
-        Self { levels, highest_freq_input: 2f64.powi(hi), highest_freq_value: 1.0 / (2f64.powi(n as i32) - 1.0) }
+        for m in (l + 1) as usize..n {
+            if octaves.contains(&(l - m as i32)) {
+                levels[m] = Some(SimplexNoise::new(r));
+            } else {
+                r.consume(262);
+            }
+        }
+        Self {
+            levels,
+            highest_freq_input: 2f64.powi(hi),
+            highest_freq_value: 1.0 / (2f64.powi(n as i32) - 1.0),
+        }
     }
     pub fn get(&self, x: f64, y: f64, use_offsets: bool) -> f64 {
         let mut d = 0.0;
@@ -413,7 +540,10 @@ impl PerlinSimplexNoise {
         let mut f = self.highest_freq_value;
         for lv in &self.levels {
             if let Some(n) = lv {
-                d += n.get_2d(x * e + if use_offsets { n.xo } else { 0.0 }, y * e + if use_offsets { n.yo } else { 0.0 }) * f;
+                d += n.get_2d(
+                    x * e + if use_offsets { n.xo } else { 0.0 },
+                    y * e + if use_offsets { n.yo } else { 0.0 },
+                ) * f;
             }
             e /= 2.0;
             f *= 2.0;
@@ -438,7 +568,10 @@ mod tests {
     #[test]
     fn normal_noise_range() {
         let mut r = Xoroshiro::new(99);
-        let p = NoiseParams { first_octave: -3, amplitudes: vec![1.0, 1.0, 1.0] };
+        let p = NoiseParams {
+            first_octave: -3,
+            amplitudes: vec![1.0, 1.0, 1.0],
+        };
         let n = NormalNoise::new(&mut r, &p);
         let mut maxv: f64 = 0.0;
         for i in 0..1000 {

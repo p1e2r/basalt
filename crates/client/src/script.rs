@@ -37,7 +37,11 @@ pub(crate) fn log_packet(buf: &[u8]) {
 pub(crate) fn log_fx(fx: &str, name: &str, fields: &[(&str, f64)]) {
     let Ok(mut g) = LOG.lock() else { return };
     let Some((f, _)) = g.as_mut() else { return };
-    let mut line = format!("{{\"tick\":{},\"fx\":\"{fx}\",\"name\":{}", TICK.load(Ordering::Relaxed), Value::String(name.into()));
+    let mut line = format!(
+        "{{\"tick\":{},\"fx\":\"{fx}\",\"name\":{}",
+        TICK.load(Ordering::Relaxed),
+        Value::String(name.into())
+    );
     for (k, v) in fields {
         line += &format!(",\"{k}\":{v}");
     }

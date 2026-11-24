@@ -4,20 +4,28 @@ use crate::runner::{Servers, Spec, WorldKind};
 
 pub mod env;
 pub mod m1;
+pub mod m10;
 pub mod m3;
 pub mod m4;
 pub mod m4_blocks;
 pub mod m5;
 pub mod m5_animals;
 pub mod m6;
-pub mod m10;
 pub mod m8;
 pub mod throw;
 pub mod util;
 
 macro_rules! spec {
     ($group:literal, $id:literal, $f:path, $world:ident, $servers:ident, $diff:literal, $desc:literal) => {
-        Spec { id: $id, group: $group, desc: $desc, world: WorldKind::$world, servers: Servers::$servers, diff: $diff, run: $f }
+        Spec {
+            id: $id,
+            group: $group,
+            desc: $desc,
+            world: WorldKind::$world,
+            servers: Servers::$servers,
+            diff: $diff,
+            run: $f,
+        }
     };
 }
 

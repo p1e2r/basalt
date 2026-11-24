@@ -5,19 +5,30 @@ use std::sync::Arc;
 
 fn gen() -> Option<Generator> {
     let d = default_data_dir();
-    if !d.join("data/minecraft/worldgen").exists() { return None; }
+    if !d.join("data/minecraft/worldgen").exists() {
+        return None;
+    }
     Some(Generator::with_data_dir(12345, d))
 }
 
 fn count(c: &GeneratedChunk, pred: impl Fn(&str) -> bool) -> usize {
-    c.blocks.iter().flat_map(|s| s.iter()).filter(|b| pred(BlockState(**b as u32).name())).count()
+    c.blocks
+        .iter()
+        .flat_map(|s| s.iter())
+        .filter(|b| pred(BlockState(**b as u32).name()))
+        .count()
 }
 
 #[test]
 fn deterministic_across_threads() {
     let Some(g) = gen() else { return };
     let g = Arc::new(g);
-    let hs: Vec<_> = (0..2).map(|_| { let g = g.clone(); std::thread::spawn(move || g.generate_chunk(3, -2).blocks) }).collect();
+    let hs: Vec<_> = (0..2)
+        .map(|_| {
+            let g = g.clone();
+            std::thread::spawn(move || g.generate_chunk(3, -2).blocks)
+        })
+        .collect();
     let r: Vec<_> = hs.into_iter().map(|h| h.join().unwrap()).collect();
     assert!(r[0] == r[1]);
     // A fresh generator (empty neighbour cache) gives the same result.
@@ -36,7 +47,10 @@ fn stages_add_content() {
     assert!(count(&full, |n| n == "spruce_leaves") > 50, "foliage");
     assert!(count(&full, |n| n == "snow") > 50, "freeze_top_layer");
     assert!(count(&full, |n| n.ends_with("_ore")) > 20, "ores");
-    assert!(count(&full, |n| n == "bedrock") > 0 && count(&full, |n| n == "deepslate") > 1000, "surface rules");
+    assert!(
+        count(&full, |n| n == "bedrock") > 0 && count(&full, |n| n == "deepslate") > 1000,
+        "surface rules"
+    );
 }
 
 #[test]
@@ -51,5 +65,9 @@ fn geode_matches_vanilla_location() {
 #[test]
 fn features_registry_mostly_supported() {
     let Some(g) = gen() else { return };
-    assert!(g.unsupported_features().len() < 40, "{:?}", g.unsupported_features());
+    assert!(
+        g.unsupported_features().len() < 40,
+        "{:?}",
+        g.unsupported_features()
+    );
 }

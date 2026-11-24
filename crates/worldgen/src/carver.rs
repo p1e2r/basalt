@@ -15,16 +15,26 @@ pub struct Trig {
 
 impl Trig {
     pub fn new() -> Self {
-        Self { table: (0..65536).map(|i| (i as f64 * std::f64::consts::PI * 2.0 / 65536.0).sin() as f32).collect() }
+        Self {
+            table: (0..65536)
+                .map(|i| (i as f64 * std::f64::consts::PI * 2.0 / 65536.0).sin() as f32)
+                .collect(),
+        }
     }
     #[inline]
-    pub fn sin(&self, d: f64) -> f32 { self.table[((d * 10430.378350470453) as i64 & 65535) as usize] }
+    pub fn sin(&self, d: f64) -> f32 {
+        self.table[((d * 10430.378350470453) as i64 & 65535) as usize]
+    }
     #[inline]
-    pub fn cos(&self, d: f64) -> f32 { self.table[((d * 10430.378350470453 + 16384.0) as i64 & 65535) as usize] }
+    pub fn cos(&self, d: f64) -> f32 {
+        self.table[((d * 10430.378350470453 + 16384.0) as i64 & 65535) as usize]
+    }
 }
 
 impl Default for Trig {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -36,12 +46,29 @@ pub enum FloatProvider {
 
 impl FloatProvider {
     fn parse(v: &Value) -> Result<Self> {
-        if let Some(f) = v.as_f64() { return Ok(FloatProvider::Constant(f as f32)); }
-        let f = |k: &str| v[k].as_f64().map(|x| x as f32).ok_or_else(|| anyhow!("float provider {k}"));
-        match v["type"].as_str().unwrap_or("").trim_start_matches("minecraft:") {
+        if let Some(f) = v.as_f64() {
+            return Ok(FloatProvider::Constant(f as f32));
+        }
+        let f = |k: &str| {
+            v[k].as_f64()
+                .map(|x| x as f32)
+                .ok_or_else(|| anyhow!("float provider {k}"))
+        };
+        match v["type"]
+            .as_str()
+            .unwrap_or("")
+            .trim_start_matches("minecraft:")
+        {
             "constant" => Ok(FloatProvider::Constant(f("value")?)),
-            "uniform" => Ok(FloatProvider::Uniform(f("min_inclusive")?, f("max_exclusive")?)),
-            "trapezoid" => Ok(FloatProvider::Trapezoid { min: f("min")?, max: f("max")?, plateau: f("plateau")? }),
+            "uniform" => Ok(FloatProvider::Uniform(
+                f("min_inclusive")?,
+                f("max_exclusive")?,
+            )),
+            "trapezoid" => Ok(FloatProvider::Trapezoid {
+                min: f("min")?,
+                max: f("max")?,
+                plateau: f("plateau")?,
+            }),
             t => bail!("unsupported float provider {t}"),
         }
     }
@@ -60,9 +87,15 @@ impl FloatProvider {
 }
 
 fn anchor(v: &Value, min_y: i32, height: i32) -> Result<i32> {
-    if let Some(a) = v.get("absolute").and_then(|x| x.as_i64()) { return Ok(a as i32); }
-    if let Some(a) = v.get("above_bottom").and_then(|x| x.as_i64()) { return Ok(min_y + a as i32); }
-    if let Some(a) = v.get("below_top").and_then(|x| x.as_i64()) { return Ok(min_y + height - 1 - a as i32); }
+    if let Some(a) = v.get("absolute").and_then(|x| x.as_i64()) {
+        return Ok(a as i32);
+    }
+    if let Some(a) = v.get("above_bottom").and_then(|x| x.as_i64()) {
+        return Ok(min_y + a as i32);
+    }
+    if let Some(a) = v.get("below_top").and_then(|x| x.as_i64()) {
+        return Ok(min_y + height - 1 - a as i32);
+    }
     bail!("bad anchor {v}")
 }
 
@@ -74,13 +107,22 @@ pub struct UniformHeight {
 
 impl UniformHeight {
     fn parse(v: &Value, min_y: i32, height: i32) -> Result<Self> {
-        match v["type"].as_str().unwrap_or("").trim_start_matches("minecraft:") {
-            "uniform" => Ok(UniformHeight { min: anchor(&v["min_inclusive"], min_y, height)?, max: anchor(&v["max_inclusive"], min_y, height)? }),
+        match v["type"]
+            .as_str()
+            .unwrap_or("")
+            .trim_start_matches("minecraft:")
+        {
+            "uniform" => Ok(UniformHeight {
+                min: anchor(&v["min_inclusive"], min_y, height)?,
+                max: anchor(&v["max_inclusive"], min_y, height)?,
+            }),
             t => bail!("unsupported height provider {t}"),
         }
     }
     fn sample<R: Rng>(&self, r: &mut R) -> i32 {
-        if self.min > self.max { return self.min; }
+        if self.min > self.max {
+            return self.min;
+        }
         r.next_int_bounded(self.max - self.min + 1) + self.min
     }
 }
@@ -89,7 +131,12 @@ impl UniformHeight {
 pub enum Kind {
     /// `nether`: the nether_cave carver (cave bound 10, thicker tunnels, y scale 5, lava up to
     /// min_y + 31, cave_air elsewhere, no aquifer).
-    Cave { horizontal: FloatProvider, vertical: FloatProvider, floor: FloatProvider, nether: bool },
+    Cave {
+        horizontal: FloatProvider,
+        vertical: FloatProvider,
+        floor: FloatProvider,
+        nether: bool,
+    },
     Canyon {
         vertical_rotation: FloatProvider,
         distance_factor: FloatProvider,
@@ -115,12 +162,26 @@ pub struct Carver {
 
 /// Resolve a block tag (recursively) into block names.
 pub fn resolve_tag(tags: &Path, name: &str, out: &mut HashSet<String>) -> Result<()> {
-    let n = name.trim_start_matches('#').trim_start_matches("minecraft:");
+    let n = name
+        .trim_start_matches('#')
+        .trim_start_matches("minecraft:");
     let p = tags.join(format!("{n}.json"));
-    let v: Value = serde_json::from_str(&std::fs::read_to_string(&p).map_err(|e| anyhow!("{}: {e}", p.display()))?)?;
-    for e in v["values"].as_array().ok_or_else(|| anyhow!("tag values"))? {
-        let s = e.as_str().or_else(|| e.get("id").and_then(|i| i.as_str())).unwrap_or("");
-        if s.starts_with('#') { resolve_tag(tags, s, out)?; } else { out.insert(s.trim_start_matches("minecraft:").to_string()); }
+    let v: Value = serde_json::from_str(
+        &std::fs::read_to_string(&p).map_err(|e| anyhow!("{}: {e}", p.display()))?,
+    )?;
+    for e in v["values"]
+        .as_array()
+        .ok_or_else(|| anyhow!("tag values"))?
+    {
+        let s = e
+            .as_str()
+            .or_else(|| e.get("id").and_then(|i| i.as_str()))
+            .unwrap_or("");
+        if s.starts_with('#') {
+            resolve_tag(tags, s, out)?;
+        } else {
+            out.insert(s.trim_start_matches("minecraft:").to_string());
+        }
     }
     Ok(())
 }
@@ -129,14 +190,28 @@ impl Carver {
     /// `min_y`, `height`: generation range of the noise settings (anchors resolve against it).
     pub fn load(data: &Path, name: &str, min_y: i32, height: i32) -> Result<Carver> {
         let n = name.trim_start_matches("minecraft:");
-        let p = data.join("worldgen/configured_carver").join(format!("{n}.json"));
+        let p = data
+            .join("worldgen/configured_carver")
+            .join(format!("{n}.json"));
         let v: Value = serde_json::from_str(&std::fs::read_to_string(&p)?)?;
         let c = &v["config"];
         let mut set = HashSet::new();
-        let rep = c["replaceable"].as_str().ok_or_else(|| anyhow!("replaceable"))?;
-        if rep.starts_with('#') { resolve_tag(&data.join("tags/block"), rep, &mut set)?; } else { set.insert(rep.trim_start_matches("minecraft:").to_string()); }
-        let replaceable = (0..basalt_data::blocks::STATE_COUNT as u32).map(|i| set.contains(BlockState(i).name())).collect();
-        let kind = match v["type"].as_str().unwrap_or("").trim_start_matches("minecraft:") {
+        let rep = c["replaceable"]
+            .as_str()
+            .ok_or_else(|| anyhow!("replaceable"))?;
+        if rep.starts_with('#') {
+            resolve_tag(&data.join("tags/block"), rep, &mut set)?;
+        } else {
+            set.insert(rep.trim_start_matches("minecraft:").to_string());
+        }
+        let replaceable = (0..basalt_data::blocks::STATE_COUNT as u32)
+            .map(|i| set.contains(BlockState(i).name()))
+            .collect();
+        let kind = match v["type"]
+            .as_str()
+            .unwrap_or("")
+            .trim_start_matches("minecraft:")
+        {
             t @ ("cave" | "nether_cave") => Kind::Cave {
                 nether: t == "nether_cave",
                 horizontal: FloatProvider::parse(&c["horizontal_radius_multiplier"])?,
@@ -151,8 +226,12 @@ impl Carver {
                     thickness: FloatProvider::parse(&s["thickness"])?,
                     width_smoothness: s["width_smoothness"].as_i64().unwrap_or(3) as i32,
                     horizontal_radius_factor: FloatProvider::parse(&s["horizontal_radius_factor"])?,
-                    vertical_radius_default_factor: s["vertical_radius_default_factor"].as_f64().unwrap_or(1.0) as f32,
-                    vertical_radius_center_factor: s["vertical_radius_center_factor"].as_f64().unwrap_or(0.0) as f32,
+                    vertical_radius_default_factor: s["vertical_radius_default_factor"]
+                        .as_f64()
+                        .unwrap_or(1.0) as f32,
+                    vertical_radius_center_factor: s["vertical_radius_center_factor"]
+                        .as_f64()
+                        .unwrap_or(0.0) as f32,
                 }
             }
             t => bail!("unsupported carver type {t}"),
@@ -161,7 +240,9 @@ impl Carver {
             probability: c["probability"].as_f64().unwrap_or(0.0) as f32,
             y: UniformHeight::parse(&c["y"], min_y, height)?,
             y_scale: FloatProvider::parse(&c["yScale"])?,
-            lava_level: anchor(&c["lava_level"], min_y, height)?, min_y, height,
+            lava_level: anchor(&c["lava_level"], min_y, height)?,
+            min_y,
+            height,
             replaceable,
             kind,
         })
@@ -206,11 +287,23 @@ impl CarveCtx<'_> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn carve_ellipsoid(&mut self, c: &Carver, t: &mut dyn CarveTarget, x: f64, y: f64, z: f64, hr: f64, vr: f64, skip: Skip) {
+    fn carve_ellipsoid(
+        &mut self,
+        c: &Carver,
+        t: &mut dyn CarveTarget,
+        x: f64,
+        y: f64,
+        z: f64,
+        hr: f64,
+        vr: f64,
+        skip: Skip,
+    ) {
         let mx = (self.cx * 16 + 7) as f64;
         let mz = (self.cz * 16 + 7) as f64;
         let f = 16.0 + hr * 2.0;
-        if (x - mx).abs() > f || (z - mz).abs() > f { return; }
+        if (x - mx).abs() > f || (z - mz).abs() > f {
+            return;
+        }
         let i = self.cx * 16;
         let j = self.cz * 16;
         let k = ((x - hr).floor() as i32 - i - 1).max(0);
@@ -225,14 +318,20 @@ impl CarveCtx<'_> {
             for tt in p..=q {
                 let u = j + tt;
                 let h = (u as f64 + 0.5 - z) / hr;
-                if g * g + h * h >= 1.0 { continue; }
+                if g * g + h * h >= 1.0 {
+                    continue;
+                }
                 let mut surface = false;
                 let mut v = o;
                 while v > m {
                     let w = (v as f64 - 0.5 - y) / vr;
                     let skipped = match skip {
                         Skip::Cave(floor) => w <= floor || g * g + w * w + h * h >= 1.0,
-                        Skip::Canyon(fs) => (g * g + h * h) * fs[(v - crate::MIN_Y - 1) as usize] as f64 + w * w / 6.0 >= 1.0,
+                        Skip::Canyon(fs) => {
+                            (g * g + h * h) * fs[(v - crate::MIN_Y - 1) as usize] as f64
+                                + w * w / 6.0
+                                >= 1.0
+                        }
                     };
                     if !skipped && !self.mask_test_set(r, v, tt) {
                         self.carve_block(c, t, r, v, tt, &mut surface);
@@ -243,22 +342,49 @@ impl CarveCtx<'_> {
         }
     }
 
-    fn carve_block(&mut self, c: &Carver, t: &mut dyn CarveTarget, lx: i32, y: i32, lz: i32, surface: &mut bool) {
+    fn carve_block(
+        &mut self,
+        c: &Carver,
+        t: &mut dyn CarveTarget,
+        lx: i32,
+        y: i32,
+        lz: i32,
+        surface: &mut bool,
+    ) {
         let st = t.get(lx, y, lz);
-        if st == self.grass || st == self.mycelium { *surface = true; }
-        if !c.replaceable[st as usize] { return; }
+        if st == self.grass || st == self.mycelium {
+            *surface = true;
+        }
+        if !c.replaceable[st as usize] {
+            return;
+        }
         if let Kind::Cave { nether: true, .. } = c.kind {
-            t.set(lx, y, lz, if y <= c.min_y + 31 { self.lava } else { self.cave_air });
+            t.set(
+                lx,
+                y,
+                lz,
+                if y <= c.min_y + 31 {
+                    self.lava
+                } else {
+                    self.cave_air
+                },
+            );
             return;
         }
         let wx = self.cx * 16 + lx;
         let wz = self.cz * 16 + lz;
-        let ns = if y <= c.lava_level { Some(self.lava) } else { t.carve_state(wx, y, wz) };
+        let ns = if y <= c.lava_level {
+            Some(self.lava)
+        } else {
+            t.carve_state(wx, y, wz)
+        };
         let Some(ns) = ns else { return };
         t.set(lx, y, lz, ns);
         if *surface && y - 1 >= crate::MIN_Y && t.get(lx, y - 1, lz) == self.dirt {
             let fl = t.is_fluid(ns);
-            if let Some(top) = t.top_material(wx, y - 1, wz, fl) { t.set(lx, y - 1, lz, top); }
+            if let Some(top) = t.top_material(wx, y - 1, wz, fl) {
+                t.set(lx, y - 1, lz, top);
+            }
         }
     }
 
@@ -271,10 +397,22 @@ impl CarveCtx<'_> {
     }
 
     /// Run one carver started in chunk (sx, sz) with the prepared random.
-    pub fn carve(&mut self, c: &Carver, t: &mut dyn CarveTarget, r: &mut JavaRandom, sx: i32, sz: i32) {
+    pub fn carve(
+        &mut self,
+        c: &Carver,
+        t: &mut dyn CarveTarget,
+        r: &mut JavaRandom,
+        sx: i32,
+        sz: i32,
+    ) {
         let range = (4 * 2 - 1) * 16;
         match &c.kind {
-            Kind::Cave { horizontal, vertical, floor, nether } => {
+            Kind::Cave {
+                horizontal,
+                vertical,
+                floor,
+                nether,
+            } => {
                 let bound = r.next_int_bounded(if *nether { 10 } else { 15 }) + 1;
                 let b2 = r.next_int_bounded(bound) + 1;
                 let n = r.next_int_bounded(b2);
@@ -290,7 +428,8 @@ impl CarveCtx<'_> {
                     if r.next_int_bounded(4) == 0 {
                         let ys = c.y_scale.sample(r) as f64;
                         let o = 1.0 + r.next_float() * 6.0;
-                        let f = 1.5 + (self.trig.sin(std::f32::consts::FRAC_PI_2 as f64) * o) as f64;
+                        let f =
+                            1.5 + (self.trig.sin(std::f32::consts::FRAC_PI_2 as f64) * o) as f64;
                         let g = f * ys;
                         self.carve_ellipsoid(c, t, x + 1.0, y, z, f, g, skip);
                         m += r.next_int_bounded(4);
@@ -298,14 +437,39 @@ impl CarveCtx<'_> {
                     for _ in 0..m {
                         let yaw = r.next_float() * (std::f64::consts::PI * 2.0) as f32;
                         let pitch = (r.next_float() - 0.5) / 4.0;
-                        let thick = if *nether { (r.next_float() * 2.0 + r.next_float()) * 2.0 } else { cave_thickness(r) };
+                        let thick = if *nether {
+                            (r.next_float() * 2.0 + r.next_float()) * 2.0
+                        } else {
+                            cave_thickness(r)
+                        };
                         let count = range - r.next_int_bounded(range / 4);
                         let seed = r.next_long();
-                        self.tunnel(c, t, seed, x, y, z, hm, vm, thick, yaw, pitch, 0, count, if *nether { 5.0 } else { 1.0 }, skip);
+                        self.tunnel(
+                            c,
+                            t,
+                            seed,
+                            x,
+                            y,
+                            z,
+                            hm,
+                            vm,
+                            thick,
+                            yaw,
+                            pitch,
+                            0,
+                            count,
+                            if *nether { 5.0 } else { 1.0 },
+                            skip,
+                        );
                     }
                 }
             }
-            Kind::Canyon { vertical_rotation, distance_factor, thickness, .. } => {
+            Kind::Canyon {
+                vertical_rotation,
+                distance_factor,
+                thickness,
+                ..
+            } => {
                 let x = (sx * 16 + r.next_int_bounded(16)) as f64;
                 let y = c.y.sample(r) as f64;
                 let z = (sz * 16 + r.next_int_bounded(16)) as f64;
@@ -321,15 +485,35 @@ impl CarveCtx<'_> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn tunnel(&mut self, c: &Carver, t: &mut dyn CarveTarget, seed: i64, mut x: f64, mut y: f64, mut z: f64, hm: f64, vm: f64,
-              thickness: f32, mut yaw: f32, mut pitch: f32, branch: i32, count: i32, y_scale: f64, skip: Skip) {
+    fn tunnel(
+        &mut self,
+        c: &Carver,
+        t: &mut dyn CarveTarget,
+        seed: i64,
+        mut x: f64,
+        mut y: f64,
+        mut z: f64,
+        hm: f64,
+        vm: f64,
+        thickness: f32,
+        mut yaw: f32,
+        mut pitch: f32,
+        branch: i32,
+        count: i32,
+        y_scale: f64,
+        skip: Skip,
+    ) {
         let mut r = JavaRandom::new(seed);
         let split = r.next_int_bounded(count / 2) + count / 4;
         let steep = r.next_int_bounded(6) == 0;
         let mut f = 0.0f32;
         let mut g = 0.0f32;
         for j in branch..count {
-            let d = 1.5 + (self.trig.sin((std::f32::consts::PI * j as f32 / count as f32) as f64) * thickness) as f64;
+            let d = 1.5
+                + (self
+                    .trig
+                    .sin((std::f32::consts::PI * j as f32 / count as f32) as f64)
+                    * thickness) as f64;
             let e = d * y_scale;
             let h = self.trig.cos(pitch as f64);
             x += (self.trig.cos(yaw as f64) * h) as f64;
@@ -345,33 +529,97 @@ impl CarveCtx<'_> {
             if j == split && thickness > 1.0 {
                 let s1 = r.next_long();
                 let t1 = r.next_float() * 0.5 + 0.5;
-                self.tunnel(c, t, s1, x, y, z, hm, vm, t1, yaw - std::f32::consts::FRAC_PI_2, pitch / 3.0, j, count, 1.0, skip);
+                self.tunnel(
+                    c,
+                    t,
+                    s1,
+                    x,
+                    y,
+                    z,
+                    hm,
+                    vm,
+                    t1,
+                    yaw - std::f32::consts::FRAC_PI_2,
+                    pitch / 3.0,
+                    j,
+                    count,
+                    1.0,
+                    skip,
+                );
                 let s2 = r.next_long();
                 let t2 = r.next_float() * 0.5 + 0.5;
-                self.tunnel(c, t, s2, x, y, z, hm, vm, t2, yaw + std::f32::consts::FRAC_PI_2, pitch / 3.0, j, count, 1.0, skip);
+                self.tunnel(
+                    c,
+                    t,
+                    s2,
+                    x,
+                    y,
+                    z,
+                    hm,
+                    vm,
+                    t2,
+                    yaw + std::f32::consts::FRAC_PI_2,
+                    pitch / 3.0,
+                    j,
+                    count,
+                    1.0,
+                    skip,
+                );
                 return;
             }
-            if r.next_int_bounded(4) == 0 { continue; }
-            if !self.can_reach(x, z, j, count, thickness) { return; }
+            if r.next_int_bounded(4) == 0 {
+                continue;
+            }
+            if !self.can_reach(x, z, j, count, thickness) {
+                return;
+            }
             self.carve_ellipsoid(c, t, x, y, z, d * hm, e * vm, skip);
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn canyon(&mut self, c: &Carver, t: &mut dyn CarveTarget, seed: i64, mut x: f64, mut y: f64, mut z: f64, thickness: f32,
-              mut yaw: f32, mut pitch: f32, branch: i32, count: i32, y_scale: f64) {
-        let Kind::Canyon { width_smoothness, horizontal_radius_factor, vertical_radius_default_factor, vertical_radius_center_factor, .. } = &c.kind else { return };
+    fn canyon(
+        &mut self,
+        c: &Carver,
+        t: &mut dyn CarveTarget,
+        seed: i64,
+        mut x: f64,
+        mut y: f64,
+        mut z: f64,
+        thickness: f32,
+        mut yaw: f32,
+        mut pitch: f32,
+        branch: i32,
+        count: i32,
+        y_scale: f64,
+    ) {
+        let Kind::Canyon {
+            width_smoothness,
+            horizontal_radius_factor,
+            vertical_radius_default_factor,
+            vertical_radius_center_factor,
+            ..
+        } = &c.kind
+        else {
+            return;
+        };
         let mut r = JavaRandom::new(seed);
         let mut fs = vec![0f32; crate::HEIGHT as usize];
         let mut wf = 1.0f32;
         for (j, v) in fs.iter_mut().enumerate() {
-            if j == 0 || r.next_int_bounded(*width_smoothness) == 0 { wf = 1.0 + r.next_float() * r.next_float(); }
+            if j == 0 || r.next_int_bounded(*width_smoothness) == 0 {
+                wf = 1.0 + r.next_float() * r.next_float();
+            }
             *v = wf * wf;
         }
         let mut f = 0.0f32;
         let mut g = 0.0f32;
         for i in branch..count {
-            let mut d = 1.5 + (self.trig.sin((i as f32 * std::f32::consts::PI / count as f32) as f64) * thickness) as f64;
+            let mut d = 1.5
+                + (self
+                    .trig
+                    .sin((i as f32 * std::f32::consts::PI / count as f32) as f64)
+                    * thickness) as f64;
             let mut e = d * y_scale;
             d *= horizontal_radius_factor.sample(&mut r) as f64;
             let ff = 1.0 - (0.5 - i as f32 / count as f32).abs() * 2.0;
@@ -389,8 +637,12 @@ impl CarveCtx<'_> {
             f *= 0.5;
             g += (r.next_float() - r.next_float()) * r.next_float() * 2.0;
             f += (r.next_float() - r.next_float()) * r.next_float() * 4.0;
-            if r.next_int_bounded(4) == 0 { continue; }
-            if !self.can_reach(x, z, i, count, thickness) { return; }
+            if r.next_int_bounded(4) == 0 {
+                continue;
+            }
+            if !self.can_reach(x, z, i, count, thickness) {
+                return;
+            }
             self.carve_ellipsoid(c, t, x, y, z, d, e, Skip::Canyon(&fs));
         }
     }
@@ -398,7 +650,9 @@ impl CarveCtx<'_> {
 
 fn cave_thickness<R: Rng>(r: &mut R) -> f32 {
     let mut f = r.next_float() * 2.0 + r.next_float();
-    if r.next_int_bounded(10) == 0 { f *= r.next_float() * r.next_float() * 3.0 + 1.0; }
+    if r.next_int_bounded(10) == 0 {
+        f *= r.next_float() * r.next_float() * 3.0 + 1.0;
+    }
     f
 }
 

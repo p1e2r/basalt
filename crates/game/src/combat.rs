@@ -6,7 +6,9 @@ pub fn armor_reduced(damage: f32, armor: f32, toughness: f32) -> f32 {
         return 0.0;
     }
     let armor = armor.clamp(0.0, 30.0);
-    let eff = (armor / 5.0).max(armor - 4.0 * damage / (toughness.max(0.0) + 8.0)).min(20.0);
+    let eff = (armor / 5.0)
+        .max(armor - 4.0 * damage / (toughness.max(0.0) + 8.0))
+        .min(20.0);
     damage * (1.0 - eff / 25.0)
 }
 
@@ -26,9 +28,14 @@ pub fn difficulty_scaled(normal: f32, difficulty: u8) -> f32 {
 /// is measured to the entity's feet. Returns (damage, impact); impact is also the knockback.
 pub fn explosion_damage(dist: f64, radius: f64, exposure: f64) -> (f32, f64) {
     let range = radius * 2.0;
-    if dist > range { return (0.0, 0.0); }
+    if dist > range {
+        return (0.0, 0.0);
+    }
     let impact = (1.0 - dist / range) * exposure;
-    (((impact * impact + impact) / 2.0 * 7.0 * range + 1.0) as f32, impact)
+    (
+        ((impact * impact + impact) / 2.0 * 7.0 * range + 1.0) as f32,
+        impact,
+    )
 }
 
 /// Blast resistance by block name. An approximation of the Minecraft Wiki per-block values,
@@ -37,28 +44,54 @@ pub fn blast_resistance(block_name: &str) -> f32 {
     let n = block_name.trim_start_matches("minecraft:");
     match n {
         "air" | "cave_air" | "void_air" => return 0.0,
-        "bedrock" | "barrier" | "command_block" | "chain_command_block" | "repeating_command_block" | "structure_block" | "jigsaw"
-        | "end_portal" | "end_portal_frame" | "end_gateway" | "light" | "reinforced_deepslate" | "test_block" | "test_instance_block" => {
-            return 3_600_000.0
+        "bedrock"
+        | "barrier"
+        | "command_block"
+        | "chain_command_block"
+        | "repeating_command_block"
+        | "structure_block"
+        | "jigsaw"
+        | "end_portal"
+        | "end_portal_frame"
+        | "end_gateway"
+        | "light"
+        | "reinforced_deepslate"
+        | "test_block"
+        | "test_instance_block" => return 3_600_000.0,
+        "obsidian" | "crying_obsidian" | "ancient_debris" | "netherite_block"
+        | "respawn_anchor" | "enchanting_table" | "anvil" | "chipped_anvil" | "damaged_anvil" => {
+            return 1200.0
         }
-        "obsidian" | "crying_obsidian" | "ancient_debris" | "netherite_block" | "respawn_anchor" | "enchanting_table" | "anvil"
-        | "chipped_anvil" | "damaged_anvil" => return 1200.0,
         "water" | "lava" => return 100.0,
         "end_stone" | "end_stone_bricks" => return 9.0,
         "ender_chest" => return 600.0,
-        "glass" | "glass_pane" | "glowstone" | "sea_lantern" | "redstone_lamp" | "beacon" => return 0.3,
+        "glass" | "glass_pane" | "glowstone" | "sea_lantern" | "redstone_lamp" | "beacon" => {
+            return 0.3
+        }
         "netherrack" | "nether_gold_ore" | "nether_quartz_ore" => return 0.4,
-        "dirt" | "coarse_dirt" | "rooted_dirt" | "farmland" | "sand" | "red_sand" | "gravel" | "clay" | "soul_sand" | "soul_soil"
-        | "mud" | "ice" | "packed_ice" | "magma_block" | "dirt_path" | "suspicious_sand" | "suspicious_gravel" => return 0.5,
+        "dirt" | "coarse_dirt" | "rooted_dirt" | "farmland" | "sand" | "red_sand" | "gravel"
+        | "clay" | "soul_sand" | "soul_soil" | "mud" | "ice" | "packed_ice" | "magma_block"
+        | "dirt_path" | "suspicious_sand" | "suspicious_gravel" => return 0.5,
         "grass_block" | "podzol" | "mycelium" | "sponge" | "wet_sponge" => return 0.6,
-        "sandstone" | "red_sandstone" | "chiseled_sandstone" | "cut_sandstone" | "chiseled_red_sandstone" | "cut_red_sandstone" => return 0.8,
-        "tnt" | "short_grass" | "tall_grass" | "fern" | "large_fern" | "dead_bush" | "torch" | "wall_torch" | "redstone_wire"
-        | "fire" | "soul_fire" | "snow" | "seagrass" | "tall_seagrass" | "vine" => return 0.0,
+        "sandstone"
+        | "red_sandstone"
+        | "chiseled_sandstone"
+        | "cut_sandstone"
+        | "chiseled_red_sandstone"
+        | "cut_red_sandstone" => return 0.8,
+        "tnt" | "short_grass" | "tall_grass" | "fern" | "large_fern" | "dead_bush" | "torch"
+        | "wall_torch" | "redstone_wire" | "fire" | "soul_fire" | "snow" | "seagrass"
+        | "tall_seagrass" | "vine" => return 0.0,
         "iron_block" | "iron_door" | "iron_trapdoor" | "iron_bars" | "copper_block" => return 6.0,
         "gold_block" | "emerald_block" | "diamond_block" => return 6.0,
         _ => {}
     }
-    if n.ends_with("_leaves") || n.ends_with("_wool") || n.ends_with("_carpet") || n.contains("flower") || n.ends_with("_sapling") {
+    if n.ends_with("_leaves")
+        || n.ends_with("_wool")
+        || n.ends_with("_carpet")
+        || n.contains("flower")
+        || n.ends_with("_sapling")
+    {
         return 0.2;
     }
     if n.ends_with("_glass") || n.ends_with("_glass_pane") {
@@ -76,15 +109,37 @@ pub fn blast_resistance(block_name: &str) -> f32 {
     if n.ends_with("_concrete_powder") {
         return 0.5;
     }
-    let stony = ["stone", "cobble", "brick", "deepslate", "andesite", "diorite", "granite", "blackstone", "basalt", "tuff",
-        "calcite", "prismarine", "purpur", "quartz", "dripstone", "copper", "mossy"];
+    let stony = [
+        "stone",
+        "cobble",
+        "brick",
+        "deepslate",
+        "andesite",
+        "diorite",
+        "granite",
+        "blackstone",
+        "basalt",
+        "tuff",
+        "calcite",
+        "prismarine",
+        "purpur",
+        "quartz",
+        "dripstone",
+        "copper",
+        "mossy",
+    ];
     if stony.iter().any(|s| n.contains(s)) {
         return 6.0;
     }
-    if n.ends_with("_planks") || n.ends_with("_fence") || n.ends_with("_fence_gate") || n.ends_with("_slab") && n.contains("oak") {
+    if n.ends_with("_planks")
+        || n.ends_with("_fence")
+        || n.ends_with("_fence_gate")
+        || n.ends_with("_slab") && n.contains("oak")
+    {
         return 3.0;
     }
-    if n.ends_with("_log") || n.ends_with("_wood") || n.ends_with("_stem") || n.ends_with("_hyphae") {
+    if n.ends_with("_log") || n.ends_with("_wood") || n.ends_with("_stem") || n.ends_with("_hyphae")
+    {
         return 2.0;
     }
     if n.ends_with("_door") || n.ends_with("_trapdoor") {

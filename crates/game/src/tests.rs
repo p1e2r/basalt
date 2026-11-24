@@ -15,7 +15,9 @@ fn it(n: &str) -> i32 {
 }
 
 fn st(n: &str) -> u32 {
-    BlockState::from_name(n).unwrap_or_else(|| panic!("no block {n}")).0
+    BlockState::from_name(n)
+        .unwrap_or_else(|| panic!("no block {n}"))
+        .0
 }
 
 fn rng() -> StdRng {
@@ -37,7 +39,10 @@ fn loads() {
     assert_eq!(bread.food.as_ref().unwrap().nutrition, 5);
     assert_eq!(bread.consume_ticks, 32);
     let chest = g.item(it("diamond_chestplate")).unwrap();
-    assert_eq!((chest.armor, chest.toughness, chest.equip_slot.as_deref()), (8.0, 2.0, Some("chest")));
+    assert_eq!(
+        (chest.armor, chest.toughness, chest.equip_slot.as_deref()),
+        (8.0, 2.0, Some("chest"))
+    );
     assert_eq!(g.item(it("stone")).unwrap().block, Some(st("stone")));
     assert_eq!(g.item(it("stick")).unwrap().block, None);
     assert!(g.tags.block_has("#minecraft:mineable/pickaxe", "stone"));
@@ -49,7 +54,9 @@ fn loads() {
 #[test]
 fn dig_accept_thresholds_match_vanilla() {
     let g = gd();
-    let n = |b: &str, held: Option<&str>| GameData::dig_accept_ticks(g.dig_progress(st(b), held.map(it), true, false).unwrap());
+    let n = |b: &str, held: Option<&str>| {
+        GameData::dig_accept_ticks(g.dig_progress(st(b), held.map(it), true, false).unwrap())
+    };
     assert_eq!(n("stone", None), 104);
     assert_eq!(n("oak_planks", None), 41);
     assert_eq!(n("white_wool", None), 16);
@@ -58,29 +65,56 @@ fn dig_accept_thresholds_match_vanilla() {
     assert_eq!(n("glass", None), 6);
     assert_eq!(n("dirt", None), 10);
     // 5x slower in the air: glass by hand 9 -> 45 ticks, first accepted at 31
-    assert_eq!(GameData::dig_accept_ticks(g.dig_progress(st("glass"), None, false, false).unwrap()), 31);
+    assert_eq!(
+        GameData::dig_accept_ticks(g.dig_progress(st("glass"), None, false, false).unwrap()),
+        31
+    );
 }
 
 #[test]
 fn dig_times() {
     let g = gd();
     assert_eq!(g.dig_ticks(st("stone"), None, true, false), Some(150));
-    assert_eq!(g.dig_ticks(st("stone"), Some(it("wooden_pickaxe")), true, false), Some(23));
+    assert_eq!(
+        g.dig_ticks(st("stone"), Some(it("wooden_pickaxe")), true, false),
+        Some(23)
+    );
     assert_eq!(g.dig_ticks(st("dirt"), None, true, false), Some(15));
-    assert_eq!(g.dig_ticks(st("obsidian"), Some(it("diamond_pickaxe")), true, false), Some(188));
-    assert_eq!(g.dig_ticks(st("oak_leaves"), Some(it("shears")), true, false), Some(0));
+    assert_eq!(
+        g.dig_ticks(st("obsidian"), Some(it("diamond_pickaxe")), true, false),
+        Some(188)
+    );
+    assert_eq!(
+        g.dig_ticks(st("oak_leaves"), Some(it("shears")), true, false),
+        Some(0)
+    );
     assert_eq!(g.dig_ticks(st("oak_leaves"), None, true, false), Some(6));
-    assert_eq!(g.dig_ticks(st("bedrock"), Some(it("netherite_pickaxe")), true, false), None);
+    assert_eq!(
+        g.dig_ticks(st("bedrock"), Some(it("netherite_pickaxe")), true, false),
+        None
+    );
     assert_eq!(g.dig_ticks(st("short_grass"), None, true, false), Some(0));
     // Iron ore with a wooden pickaxe: pickaxe speed but wrong tier → /100 (7.5 s).
-    assert_eq!(g.dig_ticks(st("iron_ore"), Some(it("wooden_pickaxe")), true, false), Some(150));
+    assert_eq!(
+        g.dig_ticks(st("iron_ore"), Some(it("wooden_pickaxe")), true, false),
+        Some(150)
+    );
     // Penalties.
     assert_eq!(g.dig_ticks(st("dirt"), None, false, false), Some(75));
     assert_eq!(g.dig_ticks(st("dirt"), None, false, true), Some(375));
     // Wrong tool type: axe on stone behaves like a hand.
-    assert_eq!(g.dig_ticks(st("stone"), Some(it("wooden_axe")), true, false), Some(150));
-    assert_eq!(g.dig_ticks(st("oak_log"), Some(it("wooden_axe")), true, false), Some(30));
-    assert_eq!(g.dig_ticks(st("cobweb"), Some(it("iron_sword")), true, false), Some(8));
+    assert_eq!(
+        g.dig_ticks(st("stone"), Some(it("wooden_axe")), true, false),
+        Some(150)
+    );
+    assert_eq!(
+        g.dig_ticks(st("oak_log"), Some(it("wooden_axe")), true, false),
+        Some(30)
+    );
+    assert_eq!(
+        g.dig_ticks(st("cobweb"), Some(it("iron_sword")), true, false),
+        Some(8)
+    );
 }
 
 #[test]
@@ -107,14 +141,31 @@ fn drops() {
     let g = gd();
     let mut r = rng();
     let wp = Some(it("wooden_pickaxe"));
-    assert_eq!(g.block_drops(st("stone"), wp, false, 0, &mut r), vec![(it("cobblestone"), 1)]);
-    assert_eq!(g.block_drops(st("stone"), wp, true, 0, &mut r), vec![(it("stone"), 1)]);
-    assert!(g.block_drops(st("stone"), None, false, 0, &mut r).is_empty());
-    assert_eq!(g.block_drops(st("grass_block"), None, false, 0, &mut r), vec![(it("dirt"), 1)]);
-    assert_eq!(g.block_drops(st("coal_ore"), wp, false, 0, &mut r), vec![(it("coal"), 1)]);
+    assert_eq!(
+        g.block_drops(st("stone"), wp, false, 0, &mut r),
+        vec![(it("cobblestone"), 1)]
+    );
+    assert_eq!(
+        g.block_drops(st("stone"), wp, true, 0, &mut r),
+        vec![(it("stone"), 1)]
+    );
+    assert!(g
+        .block_drops(st("stone"), None, false, 0, &mut r)
+        .is_empty());
+    assert_eq!(
+        g.block_drops(st("grass_block"), None, false, 0, &mut r),
+        vec![(it("dirt"), 1)]
+    );
+    assert_eq!(
+        g.block_drops(st("coal_ore"), wp, false, 0, &mut r),
+        vec![(it("coal"), 1)]
+    );
 
     let avg = |f: u8, r: &mut StdRng| -> f64 {
-        (0..2000).map(|_| count_of(&g.block_drops(st("coal_ore"), wp, false, f, r), "coal") as f64).sum::<f64>() / 2000.0
+        (0..2000)
+            .map(|_| count_of(&g.block_drops(st("coal_ore"), wp, false, f, r), "coal") as f64)
+            .sum::<f64>()
+            / 2000.0
     };
     let (a0, a3) = (avg(0, &mut r), avg(3, &mut r));
     assert_eq!(a0, 1.0);
@@ -139,15 +190,41 @@ fn drops() {
         apple += count_of(&d, "apple");
         assert_eq!(count_of(&d, "oak_leaves"), 0);
     }
-    assert!(sap > 100 && stick > 40 && apple > 5, "sapling {sap} stick {stick} apple {apple}");
-    assert_eq!(g.block_drops(st("oak_leaves"), Some(it("shears")), false, 0, &mut r), vec![(it("oak_leaves"), 1)]);
+    assert!(
+        sap > 100 && stick > 40 && apple > 5,
+        "sapling {sap} stick {stick} apple {apple}"
+    );
+    assert_eq!(
+        g.block_drops(st("oak_leaves"), Some(it("shears")), false, 0, &mut r),
+        vec![(it("oak_leaves"), 1)]
+    );
 
     // Block-state conditions: a lower door half drops the door, the upper half nothing.
     let door = BlockState(st("oak_door"));
-    assert_eq!(g.block_drops(door.with("half", "lower").unwrap().0, None, false, 0, &mut r), vec![(it("oak_door"), 1)]);
-    assert!(g.block_drops(door.with("half", "upper").unwrap().0, None, false, 0, &mut r).is_empty());
+    assert_eq!(
+        g.block_drops(
+            door.with("half", "lower").unwrap().0,
+            None,
+            false,
+            0,
+            &mut r
+        ),
+        vec![(it("oak_door"), 1)]
+    );
+    assert!(g
+        .block_drops(
+            door.with("half", "upper").unwrap().0,
+            None,
+            false,
+            0,
+            &mut r
+        )
+        .is_empty());
     let slab = BlockState(st("oak_slab")).with("type", "double").unwrap();
-    assert_eq!(g.block_drops(slab.0, None, false, 0, &mut r), vec![(it("oak_slab"), 2)]);
+    assert_eq!(
+        g.block_drops(slab.0, None, false, 0, &mut r),
+        vec![(it("oak_slab"), 2)]
+    );
     // Ripe wheat drops wheat + seeds; young wheat only seeds.
     let wheat = BlockState(st("wheat"));
     let ripe = g.block_drops(wheat.with("age", "7").unwrap().0, None, false, 0, &mut r);
@@ -161,24 +238,41 @@ fn drops() {
 fn entity_loot() {
     let g = gd();
     let mut r = rng();
-    let ctx = LootContext { killed_by_player: true, ..Default::default() };
+    let ctx = LootContext {
+        killed_by_player: true,
+        ..Default::default()
+    };
     let mut flesh = 0;
     for _ in 0..500 {
         let d = g.loot("minecraft:entities/zombie", &ctx, &mut r);
         flesh += count_of(&d, "rotten_flesh");
     }
     assert!(flesh > 300 && flesh < 700, "flesh {flesh}"); // uniform 0..2 → avg 1
-    let looting = LootContext { looting: 3, ..ctx.clone() };
-    let f3: i32 = (0..500).map(|_| count_of(&g.loot("entities/zombie", &looting, &mut r), "rotten_flesh")).sum();
+    let looting = LootContext {
+        looting: 3,
+        ..ctx.clone()
+    };
+    let f3: i32 = (0..500)
+        .map(|_| count_of(&g.loot("entities/zombie", &looting, &mut r), "rotten_flesh"))
+        .sum();
     assert!(f3 > flesh + 300, "looting flesh {f3} vs {flesh}");
     // Explosions destroy some drops.
-    let boom = LootContext { tool: Some(it("wooden_pickaxe")), explosion_radius: Some(4.0), ..Default::default() };
-    let n: i32 = (0..1000).map(|_| count_of(&g.loot("blocks/dirt", &boom, &mut r), "dirt")).sum();
+    let boom = LootContext {
+        tool: Some(it("wooden_pickaxe")),
+        explosion_radius: Some(4.0),
+        ..Default::default()
+    };
+    let n: i32 = (0..1000)
+        .map(|_| count_of(&g.loot("blocks/dirt", &boom, &mut r), "dirt"))
+        .sum();
     assert!(n > 150 && n < 350, "explosion dirt {n}");
 }
 
 fn grid(names: &[&str]) -> Vec<Option<i32>> {
-    names.iter().map(|n| if n.is_empty() { None } else { Some(it(n)) }).collect()
+    names
+        .iter()
+        .map(|n| if n.is_empty() { None } else { Some(it(n)) })
+        .collect()
 }
 
 #[test]
@@ -196,37 +290,69 @@ fn crafting() {
     let r = g.craft(&grid(&["", "", "", "oak_log"]), 2, 2).unwrap();
     assert_eq!((r.item, r.count), (it("oak_planks"), 4));
     let s = "stick";
-    let r = g.craft(&grid(&[p, p, p, "", s, "", "", s, ""]), 3, 3).unwrap();
+    let r = g
+        .craft(&grid(&[p, p, p, "", s, "", "", s, ""]), 3, 3)
+        .unwrap();
     assert_eq!((r.item, r.count), (it("wooden_pickaxe"), 1));
     // Mixed planks via #planks tag.
-    let r = g.craft(&grid(&["birch_planks", p, "spruce_planks", "", s, "", "", s, ""]), 3, 3).unwrap();
+    let r = g
+        .craft(
+            &grid(&["birch_planks", p, "spruce_planks", "", s, "", "", s, ""]),
+            3,
+            3,
+        )
+        .unwrap();
     assert_eq!(r.item, it("wooden_pickaxe"));
     // Wooden axe, both orientations, shifted in the grid.
-    let a = g.craft(&grid(&[p, p, "", p, s, "", "", s, ""]), 3, 3).unwrap();
-    let b = g.craft(&grid(&["", p, p, "", s, p, "", s, ""]), 3, 3).unwrap();
+    let a = g
+        .craft(&grid(&[p, p, "", p, s, "", "", s, ""]), 3, 3)
+        .unwrap();
+    let b = g
+        .craft(&grid(&["", p, p, "", s, p, "", s, ""]), 3, 3)
+        .unwrap();
     assert_eq!(a.item, it("wooden_axe"));
     assert_eq!(b.item, it("wooden_axe"));
     // Sticks: 2 planks vertical, anywhere.
-    let r = g.craft(&grid(&["", "", p, "", "", p, "", "", ""]), 3, 3).unwrap();
+    let r = g
+        .craft(&grid(&["", "", p, "", "", p, "", "", ""]), 3, 3)
+        .unwrap();
     assert_eq!((r.item, r.count), (it("stick"), 4));
     // Pickaxe pattern doesn't fit a 2x2.
     assert!(g.craft(&grid(&[p, s, "", ""]), 2, 2).is_none());
     assert!(g.craft(&grid(&["", "", "", ""]), 2, 2).is_none());
     // Shapeless dyes, any order/position.
-    let r = g.craft(&grid(&["blue_dye", "", "", "red_dye"]), 2, 2).unwrap();
+    let r = g
+        .craft(&grid(&["blue_dye", "", "", "red_dye"]), 2, 2)
+        .unwrap();
     assert_eq!((r.item, r.count), (it("purple_dye"), 2));
-    let r = g.craft(&grid(&["red_dye", "blue_dye", "", ""]), 2, 2).unwrap();
+    let r = g
+        .craft(&grid(&["red_dye", "blue_dye", "", ""]), 2, 2)
+        .unwrap();
     assert_eq!(r.item, it("purple_dye"));
     let r = g.craft(&grid(&["poppy", "", "", ""]), 2, 2).unwrap();
     assert_eq!(r.item, it("red_dye"));
     // Transmute: dye a shulker box.
-    let r = g.craft(&grid(&["shulker_box", "black_dye", "", ""]), 2, 2).unwrap();
+    let r = g
+        .craft(&grid(&["shulker_box", "black_dye", "", ""]), 2, 2)
+        .unwrap();
     assert_eq!(r.item, it("black_shulker_box"));
     // Remainders: cake leaves 3 empty buckets.
     let m = "milk_bucket";
-    let r = g.craft(&grid(&[m, m, m, "sugar", "egg", "sugar", "wheat", "wheat", "wheat"]), 3, 3).unwrap();
+    let r = g
+        .craft(
+            &grid(&[m, m, m, "sugar", "egg", "sugar", "wheat", "wheat", "wheat"]),
+            3,
+            3,
+        )
+        .unwrap();
     assert_eq!(r.item, it("cake"));
-    assert_eq!(r.remainders.iter().filter(|x| **x == Some(it("bucket"))).count(), 3);
+    assert_eq!(
+        r.remainders
+            .iter()
+            .filter(|x| **x == Some(it("bucket")))
+            .count(),
+        3
+    );
     assert_eq!(r.remainders.len(), 9);
 }
 
@@ -259,7 +385,9 @@ fn correct_tool_blocks_are_mineable() {
     let mut bad = Vec::new();
     for b in basalt_data::blocks::BLOCKS {
         if requires_correct_tool(b.name)
-            && !["pickaxe", "shovel", "axe", "hoe"].iter().any(|t| g.tags.block_has(&format!("mineable/{t}"), b.name))
+            && !["pickaxe", "shovel", "axe", "hoe"]
+                .iter()
+                .any(|t| g.tags.block_has(&format!("mineable/{t}"), b.name))
             && b.name != "cobweb"
         {
             bad.push(b.name);
@@ -284,7 +412,11 @@ fn pickaxe_blocks_without_tool_requirement() {
     };
     let bad: Vec<&str> = basalt_data::blocks::BLOCKS
         .iter()
-        .filter(|b| g.tags.block_has("mineable/pickaxe", b.name) && !requires_correct_tool(b.name) && !allowed(b.name, b.kind))
+        .filter(|b| {
+            g.tags.block_has("mineable/pickaxe", b.name)
+                && !requires_correct_tool(b.name)
+                && !allowed(b.name, b.kind)
+        })
         .map(|b| b.name)
         .collect();
     assert!(bad.is_empty(), "{bad:?}");
@@ -300,12 +432,23 @@ fn entity_loot_uses_entity_state() {
     let white = it("white_wool");
     let ctx = |fire: bool, col: &str, sheared: bool| LootContext {
         killed_by_player: true,
-        this_entity: Some(EntityProps { on_fire: fire, sheep_color: Some(col.into()), sheared, baby: false }),
+        this_entity: Some(EntityProps {
+            on_fire: fire,
+            sheep_color: Some(col.into()),
+            sheared,
+            baby: false,
+        }),
         ..Default::default()
     };
     let d = gd.loot("entities/sheep", &ctx(false, "lime", false), &mut rng);
-    assert!(d.iter().any(|s| s.0 == lime) && !d.iter().any(|s| s.0 == white), "{d:?}");
+    assert!(
+        d.iter().any(|s| s.0 == lime) && !d.iter().any(|s| s.0 == white),
+        "{d:?}"
+    );
     assert!(d.iter().any(|s| s.0 == mutton));
     let d = gd.loot("entities/sheep", &ctx(true, "white", true), &mut rng);
-    assert!(d.iter().any(|s| s.0 == cooked) && !d.iter().any(|s| s.0 == white), "{d:?}");
+    assert!(
+        d.iter().any(|s| s.0 == cooked) && !d.iter().any(|s| s.0 == white),
+        "{d:?}"
+    );
 }

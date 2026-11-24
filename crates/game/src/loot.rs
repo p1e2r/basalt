@@ -48,7 +48,11 @@ pub(crate) fn load_tables(dir: &Path) -> anyhow::Result<HashMap<String, Value>> 
             if p.is_dir() {
                 walk(root, &p, out)?;
             } else if p.extension().is_some_and(|x| x == "json") {
-                let id = p.strip_prefix(root)?.with_extension("").to_string_lossy().replace('\\', "/");
+                let id = p
+                    .strip_prefix(root)?
+                    .with_extension("")
+                    .to_string_lossy()
+                    .replace('\\', "/");
                 out.insert(id, crate::read_json(&p)?);
             }
         }
@@ -67,14 +71,29 @@ struct Ctx<'a> {
     depth: u32,
 }
 
-pub(crate) fn eval_table<R: Rng + ?Sized>(gd: &GameData, table: &str, lc: &LootContext, state: Option<BlockState>, rng: &mut R) -> Vec<(i32, i32)> {
-    let ctx = Ctx { gd, lc, state, depth: 0 };
+pub(crate) fn eval_table<R: Rng + ?Sized>(
+    gd: &GameData,
+    table: &str,
+    lc: &LootContext,
+    state: Option<BlockState>,
+    rng: &mut R,
+) -> Vec<(i32, i32)> {
+    let ctx = Ctx {
+        gd,
+        lc,
+        state,
+        depth: 0,
+    };
     let mut raw = Vec::new();
     // wall variants (wall_torch, oak_wall_sign, ...) have no table of their own: they drop like the standing block
     let name = short(table);
     let t = gd.loot_tables.get(name).or_else(|| {
         let (head, base) = name.split_once('/')?;
-        let alias = if base.contains("_wall_") { base.replacen("_wall_", "_", 1) } else { base.strip_prefix("wall_")?.to_string() };
+        let alias = if base.contains("_wall_") {
+            base.replacen("_wall_", "_", 1)
+        } else {
+            base.strip_prefix("wall_")?.to_string()
+        };
         gd.loot_tables.get(format!("{head}/{alias}").as_str())
     });
     if let Some(t) = t {
@@ -149,7 +168,12 @@ struct Leaf<'a> {
 }
 
 /// Expand an entry into the leaves it contributes; returns whether the entry "succeeded".
-fn expand<'a, R: Rng + ?Sized>(ctx: &Ctx, e: &'a Value, rng: &mut R, out: &mut Vec<Leaf<'a>>) -> bool {
+fn expand<'a, R: Rng + ?Sized>(
+    ctx: &Ctx,
+    e: &'a Value,
+    rng: &mut R,
+    out: &mut Vec<Leaf<'a>>,
+) -> bool {
     if !conds(ctx, &e["conditions"], rng) {
         return false;
     }
@@ -180,7 +204,11 @@ fn expand<'a, R: Rng + ?Sized>(ctx: &Ctx, e: &'a Value, rng: &mut R, out: &mut V
         }
         "item" => {
             if let Some(id) = e["name"].as_str().and_then(item_id) {
-                out.push(Leaf { weight, kind: LeafKind::Item(id), entry: e });
+                out.push(Leaf {
+                    weight,
+                    kind: LeafKind::Item(id),
+                    entry: e,
+                });
             }
             true
         }
@@ -190,19 +218,35 @@ fn expand<'a, R: Rng + ?Sized>(ctx: &Ctx, e: &'a Value, rng: &mut R, out: &mut V
                 let mut ids: Vec<i32> = ctx.gd.tags.item_tag(name).collect();
                 ids.sort();
                 for id in ids {
-                    out.push(Leaf { weight, kind: LeafKind::Item(id), entry: e });
+                    out.push(Leaf {
+                        weight,
+                        kind: LeafKind::Item(id),
+                        entry: e,
+                    });
                 }
             } else {
-                out.push(Leaf { weight, kind: LeafKind::TagAll(name), entry: e });
+                out.push(Leaf {
+                    weight,
+                    kind: LeafKind::TagAll(name),
+                    entry: e,
+                });
             }
             true
         }
         "loot_table" => {
-            out.push(Leaf { weight, kind: LeafKind::Table(&e["value"]), entry: e });
+            out.push(Leaf {
+                weight,
+                kind: LeafKind::Table(&e["value"]),
+                entry: e,
+            });
             true
         }
         "empty" => {
-            out.push(Leaf { weight, kind: LeafKind::Empty, entry: e });
+            out.push(Leaf {
+                weight,
+                kind: LeafKind::Empty,
+                entry: e,
+            });
             true
         }
         _ => false, // dynamic (block entity contents) and unknown types
@@ -219,7 +263,12 @@ fn generate<R: Rng + ?Sized>(ctx: &Ctx, leaf: &Leaf, rng: &mut R, out: &mut Vec<
             out.extend(ids.into_iter().map(|i| (i, 1)));
         }
         LeafKind::Table(v) => {
-            let sub = Ctx { gd: ctx.gd, lc: ctx.lc, state: ctx.state, depth: ctx.depth + 1 };
+            let sub = Ctx {
+                gd: ctx.gd,
+                lc: ctx.lc,
+                state: ctx.state,
+                depth: ctx.depth + 1,
+            };
             match v {
                 Value::String(s) => {
                     if let Some(t) = ctx.gd.loot_tables.get(short(s)) {
@@ -244,11 +293,19 @@ fn num<R: Rng + ?Sized>(ctx: &Ctx, v: &Value, rng: &mut R, default: f32) -> f32 
             let ty = o.get("type").and_then(|t| t.as_str()).map(short);
             match ty {
                 Some("constant") => num(ctx, &v["value"], rng, default),
-                Some("binomial") => binomial(num_int(ctx, &v["n"], rng, 0), num(ctx, &v["p"], rng, 0.0), rng) as f32,
+                Some("binomial") => binomial(
+                    num_int(ctx, &v["n"], rng, 0),
+                    num(ctx, &v["p"], rng, 0.0),
+                    rng,
+                ) as f32,
                 Some("uniform") | None if o.contains_key("min") || o.contains_key("max") => {
                     let a = num(ctx, &v["min"], rng, 0.0);
                     let b = num(ctx, &v["max"], rng, a);
-                    if b > a { rng.gen_range(a..b) } else { a }
+                    if b > a {
+                        rng.gen_range(a..b)
+                    } else {
+                        a
+                    }
                 }
                 _ => default,
             }
@@ -265,7 +322,11 @@ fn num_int<R: Rng + ?Sized>(ctx: &Ctx, v: &Value, rng: &mut R, default: i32) -> 
                 Some("uniform") | None if o.contains_key("min") || o.contains_key("max") => {
                     let a = num_int(ctx, &v["min"], rng, 0);
                     let b = num_int(ctx, &v["max"], rng, a);
-                    if b > a { rng.gen_range(a..=b) } else { a }
+                    if b > a {
+                        rng.gen_range(a..=b)
+                    } else {
+                        a
+                    }
                 }
                 _ => num(ctx, v, rng, default as f32).round() as i32,
             }
@@ -306,8 +367,15 @@ fn cond<R: Rng + ?Sized>(ctx: &Ctx, c: &Value, rng: &mut R) -> bool {
         },
         "random_chance" => rng.gen::<f32>() < num(ctx, &c["chance"], rng, 0.0),
         "random_chance_with_enchanted_bonus" => {
-            let lvl = level_for(ctx, c["enchantment"].as_str().unwrap_or("minecraft:looting"));
-            let p = if lvl == 0 { num(ctx, &c["unenchanted_chance"], rng, 0.0) } else { level_based(&c["enchanted_chance"], lvl) };
+            let lvl = level_for(
+                ctx,
+                c["enchantment"].as_str().unwrap_or("minecraft:looting"),
+            );
+            let p = if lvl == 0 {
+                num(ctx, &c["unenchanted_chance"], rng, 0.0)
+            } else {
+                level_based(&c["enchanted_chance"], lvl)
+            };
             rng.gen::<f32>() < p
         }
         "killed_by_player" => ctx.lc.killed_by_player,
@@ -323,8 +391,16 @@ fn cond<R: Rng + ?Sized>(ctx: &Ctx, c: &Value, rng: &mut R) -> bool {
         "match_tool" => match_tool(ctx, &c["predicate"]),
         "block_state_property" => block_state_prop(ctx, c),
         "inverted" => !cond(ctx, &c["term"], rng),
-        "any_of" | "alternative" => c["terms"].as_array().into_iter().flatten().any(|t| cond(ctx, t, rng)),
-        "all_of" => c["terms"].as_array().into_iter().flatten().all(|t| cond(ctx, t, rng)),
+        "any_of" | "alternative" => c["terms"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|t| cond(ctx, t, rng)),
+        "all_of" => c["terms"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .all(|t| cond(ctx, t, rng)),
         "entity_properties" => entity_props(ctx, c),
         "location_check" => location_check(ctx, c),
         "reference" => false,
@@ -339,7 +415,10 @@ fn level_based(v: &Value, lvl: u8) -> f32 {
         Value::Object(o) => match o.get("type").and_then(|t| t.as_str()).map(short) {
             Some("linear") => {
                 let base = o.get("base").and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
-                let per = o.get("per_level_above_first").and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
+                let per = o
+                    .get("per_level_above_first")
+                    .and_then(|x| x.as_f64())
+                    .unwrap_or(0.0) as f32;
                 base + per * (lvl as f32 - 1.0)
             }
             Some("constant") => o.get("value").and_then(|x| x.as_f64()).unwrap_or(0.0) as f32,
@@ -359,7 +438,9 @@ fn item_selector_matches(ctx: &Ctx, sel: &Value, item: i32) -> bool {
 }
 
 fn match_tool(ctx: &Ctx, p: &Value) -> bool {
-    let Some(obj) = p.as_object() else { return true };
+    let Some(obj) = p.as_object() else {
+        return true;
+    };
     for (k, v) in obj {
         match k.as_str() {
             "items" => {
@@ -375,12 +456,17 @@ fn match_tool(ctx: &Ctx, p: &Value) -> bool {
                             for e in pv.as_array().into_iter().flatten() {
                                 let names: Vec<&str> = match &e["enchantments"] {
                                     Value::String(s) => vec![s.as_str()],
-                                    Value::Array(a) => a.iter().filter_map(|x| x.as_str()).collect(),
+                                    Value::Array(a) => {
+                                        a.iter().filter_map(|x| x.as_str()).collect()
+                                    }
                                     _ => vec![],
                                 };
-                                let lvl = names.iter().map(|n| level_for(ctx, n)).max().unwrap_or(0) as i64;
+                                let lvl = names.iter().map(|n| level_for(ctx, n)).max().unwrap_or(0)
+                                    as i64;
                                 let (min, max) = match &e["levels"] {
-                                    Value::Number(n) => (n.as_i64().unwrap_or(1), n.as_i64().unwrap_or(1)),
+                                    Value::Number(n) => {
+                                        (n.as_i64().unwrap_or(1), n.as_i64().unwrap_or(1))
+                                    }
                                     Value::Object(o) => (
                                         o.get("min").and_then(|x| x.as_i64()).unwrap_or(1),
                                         o.get("max").and_then(|x| x.as_i64()).unwrap_or(i64::MAX),
@@ -404,7 +490,9 @@ fn match_tool(ctx: &Ctx, p: &Value) -> bool {
 
 /// `location_check` for the block one above/below (offsetY +-1): block id and state properties of its predicate.
 fn location_check(ctx: &Ctx, c: &Value) -> bool {
-    let Some((below, above)) = ctx.lc.around else { return false };
+    let Some((below, above)) = ctx.lc.around else {
+        return false;
+    };
     let st = match c["offsetY"].as_i64() {
         Some(1) => BlockState(above),
         Some(-1) => BlockState(below),
@@ -438,9 +526,17 @@ fn block_state_prop(ctx: &Ctx, c: &Value) -> bool {
             Value::Number(n) => have.parse::<f64>().ok() == n.as_f64(),
             Value::Bool(b) => have == if *b { "true" } else { "false" },
             Value::Object(o) => {
-                let Ok(h) = have.parse::<f64>() else { return false };
-                let min = o.get("min").map(|x| x.as_f64().or_else(|| x.as_str().and_then(|s| s.parse().ok())));
-                let max = o.get("max").map(|x| x.as_f64().or_else(|| x.as_str().and_then(|s| s.parse().ok())));
+                let Ok(h) = have.parse::<f64>() else {
+                    return false;
+                };
+                let min = o.get("min").map(|x| {
+                    x.as_f64()
+                        .or_else(|| x.as_str().and_then(|s| s.parse().ok()))
+                });
+                let max = o.get("max").map(|x| {
+                    x.as_f64()
+                        .or_else(|| x.as_str().and_then(|s| s.parse().ok()))
+                });
                 min.flatten().is_none_or(|m| h >= m) && max.flatten().is_none_or(|m| h <= m)
             }
             _ => false,
@@ -463,7 +559,11 @@ fn entity_props(ctx: &Ctx, c: &Value) -> bool {
     }
     let e = ctx.lc.this_entity.clone().unwrap_or_default();
     let p = &c["predicate"];
-    let flags = if p["minecraft:flags"].is_object() { &p["minecraft:flags"] } else { &p["flags"] };
+    let flags = if p["minecraft:flags"].is_object() {
+        &p["minecraft:flags"]
+    } else {
+        &p["flags"]
+    };
     if let Some(f) = flags["is_on_fire"].as_bool() {
         if f != e.on_fire {
             return false;
@@ -504,7 +604,11 @@ fn apply_fn<R: Rng + ?Sized>(ctx: &Ctx, f: &Value, rng: &mut R, s: &mut (i32, i3
     match short(f["function"].as_str().unwrap_or("")) {
         "set_count" => {
             let n = num_int(ctx, &f["count"], rng, 1);
-            s.1 = if f["add"].as_bool().unwrap_or(false) { s.1 + n } else { n };
+            s.1 = if f["add"].as_bool().unwrap_or(false) {
+                s.1 + n
+            } else {
+                n
+            };
         }
         "apply_bonus" => {
             let lvl = level_for(ctx, f["enchantment"].as_str().unwrap_or("")) as i32;
@@ -551,7 +655,10 @@ fn apply_fn<R: Rng + ?Sized>(ctx: &Ctx, f: &Value, rng: &mut R, s: &mut (i32, i3
             }
         }
         "enchanted_count_increase" | "looting_enchant" => {
-            let lvl = level_for(ctx, f["enchantment"].as_str().unwrap_or("minecraft:looting"));
+            let lvl = level_for(
+                ctx,
+                f["enchantment"].as_str().unwrap_or("minecraft:looting"),
+            );
             if lvl > 0 {
                 let inc = num(ctx, &f["count"], rng, 0.0) * lvl as f32;
                 s.1 += inc.round() as i32;

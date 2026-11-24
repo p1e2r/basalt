@@ -88,11 +88,30 @@ impl Particles {
         });
     }
 
-    fn spawn_uv(&mut self, uv: [f32; 4], pos: [f64; 3], vel: [f64; 3], tint: [u8; 3], life: u32, size: f32) {
+    fn spawn_uv(
+        &mut self,
+        uv: [f32; 4],
+        pos: [f64; 3],
+        vel: [f64; 3],
+        tint: [u8; 3],
+        life: u32,
+        size: f32,
+    ) {
         if self.list.len() >= MAX {
             self.list.remove(0);
         }
-        self.list.push(Particle { pos, prev: pos, vel, age: 0, life, size, uv, tint, on_ground: false, kind: 0 });
+        self.list.push(Particle {
+            pos,
+            prev: pos,
+            vel,
+            age: 0,
+            life,
+            size,
+            uv,
+            tint,
+            on_ground: false,
+            kind: 0,
+        });
     }
 
     /// Item break burst (a snowball or egg hitting something): small chips of the item sprite.
@@ -104,8 +123,17 @@ impl Particles {
         for _ in 0..n {
             let (fu, fv) = (self.rand() as f32 * 0.75, self.rand() as f32 * 0.75);
             let (du, dv) = (t[2] - t[0], t[3] - t[1]);
-            let uv = [t[0] + fu * du, t[1] + fv * dv, t[0] + (fu + 0.25) * du, t[1] + (fv + 0.25) * dv];
-            let vel = [(self.rand() - 0.5) * 0.2, self.rand() * 0.2, (self.rand() - 0.5) * 0.2];
+            let uv = [
+                t[0] + fu * du,
+                t[1] + fv * dv,
+                t[0] + (fu + 0.25) * du,
+                t[1] + (fv + 0.25) * dv,
+            ];
+            let vel = [
+                (self.rand() - 0.5) * 0.2,
+                self.rand() * 0.2,
+                (self.rand() - 0.5) * 0.2,
+            ];
             let life = (4.0 / (self.rand() * 0.9 + 0.1)) as u32;
             let size = (0.1 * (self.rand() * 0.5 + 0.5)) as f32;
             self.spawn_uv(uv, pos, vel, [255, 255, 255], life, size);
@@ -114,13 +142,24 @@ impl Particles {
 
     /// Potion / experience bottle shatter (level event 2002 / 2007): coloured specks rising from the impact.
     pub fn splash(&mut self, a: &Assets, argb: u32, b: [i32; 3]) {
-        let Some(t) = a.tex_uv("block/white_concrete") else { return };
+        let Some(t) = a.tex_uv("block/white_concrete") else {
+            return;
+        };
         if self.seed == 0 {
             self.seed = 0x9E37_79B9_7F4A_7C15;
         }
-        let tint = [(argb >> 16 & 255) as u8, (argb >> 8 & 255) as u8, (argb & 255) as u8];
+        let tint = [
+            (argb >> 16 & 255) as u8,
+            (argb >> 8 & 255) as u8,
+            (argb & 255) as u8,
+        ];
         let c = [b[0] as f64 + 0.5, b[1] as f64 + 0.3, b[2] as f64 + 0.5];
-        let uv = [t[0], t[1], t[0] + (t[2] - t[0]) * 0.25, t[1] + (t[3] - t[1]) * 0.25];
+        let uv = [
+            t[0],
+            t[1],
+            t[0] + (t[2] - t[0]) * 0.25,
+            t[1] + (t[3] - t[1]) * 0.25,
+        ];
         for _ in 0..40 {
             let ang = self.rand() * std::f64::consts::TAU;
             let sp = self.rand() * 0.15;
@@ -147,13 +186,21 @@ impl Particles {
         let y = pos[1].floor() + 1.0;
         for _ in 0..13 {
             let at = [pos[0] + self.rr(-0.5, 0.5), y, pos[2] + self.rr(-0.5, 0.5)];
-            let v = [self.rr(-0.02, 0.02), -(0.2 * speed) - self.rr(-0.004, 0.056), self.rr(-0.02, 0.02)];
+            let v = [
+                self.rr(-0.02, 0.02),
+                -(0.2 * speed) - self.rr(-0.004, 0.056),
+                self.rr(-0.02, 0.02),
+            ];
             let (life, size) = (self.life8(), self.rr(0.027, 0.137) as f32);
             self.spawn_sprite(a, "particle/bubble", 1, at, v, life, size);
         }
         for _ in 0..13 {
             let at = [pos[0] + self.rr(-0.5, 0.5), y, pos[2] + self.rr(-0.5, 0.5)];
-            let v = [self.rr(-0.04, 0.04), self.rr(0.105, 0.295), self.rr(-0.04, 0.04)];
+            let v = [
+                self.rr(-0.04, 0.04),
+                self.rr(0.105, 0.295),
+                self.rr(-0.04, 0.04),
+            ];
             let (life, size) = (self.life8(), self.rr(0.10, 0.196) as f32);
             let n = (self.rand() * 4.0) as u32;
             self.spawn_sprite(a, &format!("particle/splash_{n}"), 2, at, v, life, size);
@@ -164,13 +211,50 @@ impl Particles {
         (8.0 / self.rr(0.2, 1.0)) as u32
     }
 
-    fn spawn_sprite(&mut self, a: &Assets, name: &str, kind: u8, pos: [f64; 3], vel: [f64; 3], life: u32, half: f32) {
+    fn spawn_sprite(
+        &mut self,
+        a: &Assets,
+        name: &str,
+        kind: u8,
+        pos: [f64; 3],
+        vel: [f64; 3],
+        life: u32,
+        half: f32,
+    ) {
         let Some(uv) = a.tex_uv(name) else { return };
-        crate::script::log_fx("particle", if kind == 1 { "BubbleParticle" } else { "SplashParticle" }, &[("x", pos[0]), ("y", pos[1]), ("z", pos[2]), ("vx", vel[0]), ("vy", vel[1]), ("vz", vel[2]), ("life", life as f64), ("size", half as f64)]);
+        crate::script::log_fx(
+            "particle",
+            if kind == 1 {
+                "BubbleParticle"
+            } else {
+                "SplashParticle"
+            },
+            &[
+                ("x", pos[0]),
+                ("y", pos[1]),
+                ("z", pos[2]),
+                ("vx", vel[0]),
+                ("vy", vel[1]),
+                ("vz", vel[2]),
+                ("life", life as f64),
+                ("size", half as f64),
+            ],
+        );
         if self.list.len() >= MAX {
             self.list.remove(0);
         }
-        self.list.push(Particle { pos, prev: pos, vel, age: 0, life, size: half, uv, tint: [255; 3], on_ground: false, kind });
+        self.list.push(Particle {
+            pos,
+            prev: pos,
+            vel,
+            age: 0,
+            life,
+            size: half,
+            uv,
+            tint: [255; 3],
+            on_ground: false,
+            kind,
+        });
     }
 
     /// A broken block: a 4x4x4 burst spread through the block, flying outwards from its centre.
@@ -264,7 +348,11 @@ impl Particles {
         // surface height of the water at a point (None when it isn't in water): still water is 8/9 of
         // its block, water with water above fills it
         let water_top = |p: [f64; 3]| -> Option<f64> {
-            let (x, y, z) = (p[0].floor() as i32, p[1].floor() as i32, p[2].floor() as i32);
+            let (x, y, z) = (
+                p[0].floor() as i32,
+                p[1].floor() as i32,
+                p[2].floor() as i32,
+            );
             let st = world.get(x, y, z);
             if st == 0 || a.info(st).fluid != 1 {
                 return None;
@@ -272,7 +360,10 @@ impl Particles {
             if a.info(world.get(x, y + 1, z)).fluid != 0 {
                 return Some(y as f64 + 1.0);
             }
-            let lvl = basalt_data::BlockState(st as u32).get("level").and_then(|v| v.parse::<i32>().ok()).unwrap_or(0);
+            let lvl = basalt_data::BlockState(st as u32)
+                .get("level")
+                .and_then(|v| v.parse::<i32>().ok())
+                .unwrap_or(0);
             Some(y as f64 + (8 - if lvl >= 8 { 0 } else { lvl }) as f64 / 9.0)
         };
         self.list.retain_mut(|q| {
@@ -395,7 +486,9 @@ mod tests {
     #[test]
     fn bubble_and_drop_follow_the_recorded_paths() {
         let (mut p, mut v) = ([2005.0792, 200.0, 2005.4943], [-0.0171, -0.2531, 0.0043]);
-        let want = [199.7489, 199.5374, 199.3597, 199.2106, 199.0859, 198.9819, 198.8955, 198.8241];
+        let want = [
+            199.7489, 199.5374, 199.3597, 199.2106, 199.0859, 198.9819, 198.8955, 198.8241,
+        ];
         for w in want {
             water_step(true, &mut p, &mut v);
             assert!((p[1] - w).abs() < 2e-4, "bubble y {} vs {w}", p[1]);

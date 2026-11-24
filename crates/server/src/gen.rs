@@ -7,14 +7,26 @@ pub trait Generator: Send + Sync {
     fn generate(&self, cx: i32, cz: i32) -> Chunk;
     /// `/locate structure`: `spec` is a structure id or `#tag`. Err(()) = unknown structure,
     /// Ok(None) = none found; Ok(Some((found id, block x, block z))).
-    fn locate_structure(&self, _spec: &str, _x: i32, _z: i32) -> Result<Option<(String, i32, i32)>, ()> { Ok(None) }
+    fn locate_structure(
+        &self,
+        _spec: &str,
+        _x: i32,
+        _z: i32,
+    ) -> Result<Option<(String, i32, i32)>, ()> {
+        Ok(None)
+    }
 }
 
 /// Vanilla-matching terrain of one dimension (crates/worldgen).
 pub struct Vanilla(pub basalt_worldgen::Generator);
 
 impl Generator for Vanilla {
-    fn locate_structure(&self, spec: &str, x: i32, z: i32) -> Result<Option<(String, i32, i32)>, ()> {
+    fn locate_structure(
+        &self,
+        spec: &str,
+        x: i32,
+        z: i32,
+    ) -> Result<Option<(String, i32, i32)>, ()> {
         match self.0.structures() {
             Some(_) => self.0.locate_spec(spec, x, z, 100),
             // other dimensions: known ids are simply not found here
@@ -26,22 +38,37 @@ impl Generator for Vanilla {
         let g = self.0.generate_chunk(cx, cz);
         // the world's chunk buffer always spans y -64..320: place the dimension's sections in it
         let first = ((g.min_y - basalt_world::MIN_Y) / 16) as usize;
-        if first == 0 && g.blocks.len() == basalt_world::SECTIONS { return Chunk::from_generated(cx, cz, &g.blocks, &g.biomes); }
+        if first == 0 && g.blocks.len() == basalt_world::SECTIONS {
+            return Chunk::from_generated(cx, cz, &g.blocks, &g.biomes);
+        }
         let mut blocks = vec![[0u16; 4096]; basalt_world::SECTIONS];
         let mut biomes = vec![g.biomes[0]; basalt_world::SECTIONS];
-        for (i, (b, bi)) in g.blocks.iter().zip(&g.biomes).enumerate() { blocks[first + i] = *b; biomes[first + i] = *bi; }
-        if let Some(top) = g.biomes.last() { for b in biomes.iter_mut().skip(first + g.biomes.len()) { *b = *top; } }
+        for (i, (b, bi)) in g.blocks.iter().zip(&g.biomes).enumerate() {
+            blocks[first + i] = *b;
+            biomes[first + i] = *bi;
+        }
+        if let Some(top) = g.biomes.last() {
+            for b in biomes.iter_mut().skip(first + g.biomes.len()) {
+                *b = *top;
+            }
+        }
         Chunk::from_generated(cx, cz, &blocks, &biomes)
     }
 }
 
 /// Classic superflat: bedrock, two dirt, grass block; plains biome.
-pub struct Flat { layers: Vec<u16>, biome: u8 }
+pub struct Flat {
+    layers: Vec<u16>,
+    biome: u8,
+}
 
 impl Flat {
     pub fn new(plains_biome: u8) -> Flat {
         let s = |n: &str| crate::game::block_default(n).unwrap_or(1) as u16;
-        Flat { layers: vec![s("bedrock"), s("dirt"), s("dirt"), s("grass_block")], biome: plains_biome }
+        Flat {
+            layers: vec![s("bedrock"), s("dirt"), s("dirt"), s("grass_block")],
+            biome: plains_biome,
+        }
     }
 }
 
@@ -49,7 +76,9 @@ impl Generator for Flat {
     fn generate(&self, cx: i32, cz: i32) -> Chunk {
         let mut blocks = vec![[0u16; 4096]; basalt_world::SECTIONS];
         for (y, &b) in self.layers.iter().enumerate() {
-            for i in 0..256 { blocks[0][y << 8 | i] = b; }
+            for i in 0..256 {
+                blocks[0][y << 8 | i] = b;
+            }
         }
         let biomes = vec![[self.biome; 64]; basalt_world::SECTIONS];
         Chunk::from_generated(cx, cz, &blocks, &biomes)
@@ -69,23 +98,41 @@ impl GenPool {
         let (jtx, jrx) = mpsc::channel::<(i32, i32)>();
         let (dtx, drx) = mpsc::channel();
         let jrx = Arc::new(Mutex::new(jrx));
-        let n = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).saturating_sub(2).clamp(1, 12);
+        let n = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .saturating_sub(2)
+            .clamp(1, 12);
         for i in 0..n {
             let (jrx, dtx, gen) = (jrx.clone(), dtx.clone(), gen.clone());
-            std::thread::Builder::new().name(format!("gen{i}")).spawn(move || loop {
-                let job = jrx.lock().unwrap().recv();
-                let Ok((cx, cz)) = job else { return };
-                if dtx.send(gen.generate(cx, cz)).is_err() { return; }
-            }).unwrap();
+            std::thread::Builder::new()
+                .name(format!("gen{i}"))
+                .spawn(move || loop {
+                    let job = jrx.lock().unwrap().recv();
+                    let Ok((cx, cz)) = job else { return };
+                    if dtx.send(gen.generate(cx, cz)).is_err() {
+                        return;
+                    }
+                })
+                .unwrap();
         }
-        GenPool { gen, jobs: jtx, done: drx, pending: HashSet::new() }
+        GenPool {
+            gen,
+            jobs: jtx,
+            done: drx,
+            pending: HashSet::new(),
+        }
     }
     pub fn request(&mut self, cx: i32, cz: i32) {
-        if self.pending.insert((cx, cz)) { let _ = self.jobs.send((cx, cz)); }
+        if self.pending.insert((cx, cz)) {
+            let _ = self.jobs.send((cx, cz));
+        }
     }
     pub fn finished(&mut self) -> Vec<Chunk> {
         let v: Vec<Chunk> = self.done.try_iter().collect();
-        for c in &v { self.pending.remove(&(c.x, c.z)); }
+        for c in &v {
+            self.pending.remove(&(c.x, c.z));
+        }
         v
     }
 }

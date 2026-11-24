@@ -152,7 +152,11 @@ fn cases() -> Vec<(&'static str, Vec<Value>, Vec<Value>)> {
         ),
         (
             "lava_fall",
-            vec![c("effect give @s fire_resistance 9999 0 true"), c("tp @s 2025.5 210 2025.5 0 0"), w(2)],
+            vec![
+                c("effect give @s fire_resistance 9999 0 true"),
+                c("tp @s 2025.5 210 2025.5 0 0"),
+                w(2),
+            ],
             vec![w(60)],
         ),
         (
@@ -168,7 +172,12 @@ fn cases() -> Vec<(&'static str, Vec<Value>, Vec<Value>)> {
         (
             "lava_walk",
             vec![c("tp @s 2022.5 191 2025.5 -90 0"), w(30)],
-            vec![json!({"op": "move", "forward": true}), w(30), json!({"op": "move", "forward": false}), w(20)],
+            vec![
+                json!({"op": "move", "forward": true}),
+                w(30),
+                json!({"op": "move", "forward": false}),
+                w(20),
+            ],
         ),
         // standing in the flowing water of the channel: pushed along it
         (
@@ -179,16 +188,30 @@ fn cases() -> Vec<(&'static str, Vec<Value>, Vec<Value>)> {
         (
             "swim_fwd",
             vec![c("tp @s 2002.5 195 2005.5 -90 0"), w(30)],
-            vec![json!({"op": "move", "forward": true}), w(25), json!({"op": "move", "forward": false}), w(15)],
+            vec![
+                json!({"op": "move", "forward": true}),
+                w(25),
+                json!({"op": "move", "forward": false}),
+                w(15),
+            ],
         ),
         (
             "wade",
             vec![c("tp @s 2002.5 191 2005.5 -90 0"), w(30)],
-            vec![json!({"op": "move", "forward": true}), w(30), json!({"op": "move", "forward": false}), w(15)],
+            vec![
+                json!({"op": "move", "forward": true}),
+                w(30),
+                json!({"op": "move", "forward": false}),
+                w(15),
+            ],
         ),
         (
             "dolphin_sprint",
-            vec![c("effect give @s dolphins_grace 9999 0 true"), c("tp @s 2002.5 195 2005.5 -90 0"), w(30)],
+            vec![
+                c("effect give @s dolphins_grace 9999 0 true"),
+                c("tp @s 2002.5 195 2005.5 -90 0"),
+                w(30),
+            ],
             vec![
                 json!({"op": "sprint", "action": "press"}),
                 json!({"op": "move", "forward": true}),
@@ -201,17 +224,37 @@ fn cases() -> Vec<(&'static str, Vec<Value>, Vec<Value>)> {
         (
             "dolphin_fwd",
             vec![c("tp @s 2002.5 195 2005.5 -90 0"), w(30)],
-            vec![json!({"op": "move", "forward": true}), w(25), json!({"op": "move", "forward": false}), w(15)],
+            vec![
+                json!({"op": "move", "forward": true}),
+                w(25),
+                json!({"op": "move", "forward": false}),
+                w(15),
+            ],
         ),
         (
             "wade_ds",
-            [vec![c("effect clear @s")], equip_depth_strider(), vec![c("tp @s 2002.5 191 2005.5 -90 0"), w(30)]].concat(),
-            vec![json!({"op": "move", "forward": true}), w(30), json!({"op": "move", "forward": false}), w(15)],
+            [
+                vec![c("effect clear @s")],
+                equip_depth_strider(),
+                vec![c("tp @s 2002.5 191 2005.5 -90 0"), w(30)],
+            ]
+            .concat(),
+            vec![
+                json!({"op": "move", "forward": true}),
+                w(30),
+                json!({"op": "move", "forward": false}),
+                w(15),
+            ],
         ),
         (
             "swim_fwd_ds",
             vec![c("tp @s 2002.5 195 2005.5 -90 0"), w(30)],
-            vec![json!({"op": "move", "forward": true}), w(25), json!({"op": "move", "forward": false}), w(15)],
+            vec![
+                json!({"op": "move", "forward": true}),
+                w(25),
+                json!({"op": "move", "forward": false}),
+                w(15),
+            ],
         ),
     ]
 }
@@ -318,7 +361,10 @@ fn fx_diff(v: &Fx, b: &Fx) -> Vec<String> {
         for (x, y) in v.sounds.iter().zip(&b.sounds) {
             // the eyes-under sounds follow a rule not fully found (see main.rs track_water): 2 ticks
             let amb = x.0.starts_with("ambient");
-            if (x.1 - y.1).abs() > if amb { 2 } else { 1 } || (x.3 - y.3).abs() > 0.03 || (x.2 - y.2).abs() > if amb { 2.5 } else { 0.3 } {
+            if (x.1 - y.1).abs() > if amb { 2 } else { 1 }
+                || (x.3 - y.3).abs() > 0.03
+                || (x.2 - y.2).abs() > if amb { 2.5 } else { 0.3 }
+            {
                 d.push(format!(
                     "{}: tick {} y {:.2} vol {:.3} vs tick {} y {:.2} vol {:.3}",
                     x.0, x.1, x.2, x.3, y.1, y.2, y.3
@@ -452,7 +498,14 @@ pub fn run(o: &Opts) -> Result<usize> {
             "FX   {name:12} {} {}",
             if fd.is_empty() { "pass" } else { "FAIL" },
             if fd.is_empty() {
-                format!("sounds={} particles={:?}", fv.sounds.len(), fv.particles.iter().map(|(k, x)| format!("{k}x{}", x.0)).collect::<Vec<_>>())
+                format!(
+                    "sounds={} particles={:?}",
+                    fv.sounds.len(),
+                    fv.particles
+                        .iter()
+                        .map(|(k, x)| format!("{k}x{}", x.0))
+                        .collect::<Vec<_>>()
+                )
             } else {
                 fd.join(" | ")
             }
