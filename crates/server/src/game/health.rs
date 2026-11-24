@@ -162,7 +162,20 @@ impl Game {
                 // landing on hay / slime / beds etc. reduces damage
                 let below = basalt_data::BlockState(self.world.get_block(p.pos[0].floor() as i32, (p.pos[1] - 0.2).floor() as i32, p.pos[2].floor() as i32)).name();
                 let k = match below { "hay_block" => 0.2, "slime_block" => 0.0, "honey_block" => 0.2, n if n.ends_with("_bed") => 0.5, "pointed_dripstone" => 2.0, _ => 1.0 };
-                if dmg * k >= 1.0 { self.hurt(eid, (dmg * k).floor(), "fall"); }
+                if dmg * k >= 1.0 {
+                    let amount = (dmg * k).floor();
+                    // other players hear the landing (the faller's client plays these itself): measured on
+                    // vanilla 26.2 with m4_fall_damage's onlooker (2026-11-24) — small_fall up to 4
+                    // damage, big_fall from 5; the landed-on block's fall sound at volume 0.5, pitch
+                    // 0.75; then the hurt sound; all category 7 (players) at the player's position
+                    let pos = self.players.get(&eid).map(|p| p.pos).unwrap_or([0.0; 3]);
+                    let below = self.world.get_block(pos[0].floor() as i32, (pos[1] - 0.2).floor() as i32, pos[2].floor() as i32);
+                    let group = basalt_data::sound_group::block_group(basalt_data::BlockState(below).name());
+                    self.play_sound_except(if amount > 4.0 { "entity.player.big_fall" } else { "entity.player.small_fall" }, 7, pos, 1.0, 1.0, Some(eid));
+                    self.play_sound_except(&format!("block.{group}.fall"), 7, pos, 0.5, 0.75, Some(eid));
+                    self.play_sound_except("entity.player.hurt", 7, pos, 1.0, 1.0, Some(eid));
+                    self.hurt(eid, amount, "fall");
+                }
             }
         } else {
             let top = p.fall_start.get_or_insert(old_y.max(p.pos[1]));

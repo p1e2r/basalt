@@ -101,6 +101,28 @@ impl Particles {
         }
     }
 
+    /// Landing dust: `n` pieces of the landed-on block from around the feet, thrown up and out.
+    pub fn block_land(&mut self, a: &Assets, state: u16, feet: [f64; 3], n: usize, tint: [u8; 3]) {
+        if state == 0 {
+            return;
+        }
+        for _ in 0..n {
+            let ang = self.rand() * std::f64::consts::TAU;
+            let r = self.rand() * 0.3;
+            let pos = [
+                feet[0] + ang.cos() * r,
+                feet[1] + 0.05,
+                feet[2] + ang.sin() * r,
+            ];
+            let v = [
+                ang.cos() * (0.05 + self.rand() * 0.1),
+                0.1 + self.rand() * 0.15,
+                ang.sin() * (0.05 + self.rand() * 0.1),
+            ];
+            self.spawn(a, state, pos, v, tint);
+        }
+    }
+
     /// One chip off the face being dug (`face` = protocol direction 0 down .. 5 east).
     pub fn block_hit(&mut self, a: &Assets, state: u16, b: [i32; 3], face: u8, tint: [u8; 3]) {
         if state == 0 {

@@ -18,6 +18,7 @@ pub struct BlockInfo {
 include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 
 pub mod block;
+pub mod sound_group;
 pub use block::BlockState;
 
 /// Look up a registry entry's numeric id.

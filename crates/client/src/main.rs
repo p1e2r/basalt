@@ -198,6 +198,8 @@ pub struct Game {
     world: World,
     /// item pickup animations: (copy of the item entity, collector, age in ticks; 3 ticks long)
     pickups: Vec<(entity::Entity, i32, u32)>,
+    /// highest point of the current fall (None on the ground / in water / flying)
+    fall_top: Option<f64>,
     /// tick of the last take_item_entity for this player, and per-hotbar-slot pop timers (5 ticks)
     last_take: u64,
     pop: [u8; 9],
@@ -327,7 +329,7 @@ impl Game {
         let (otx, _orx) = tokio::sync::mpsc::unbounded_channel();
         let mut sounds = o.sounds; sounds.master = o.cfg.master_volume;
         let mut g = Game {
-            gpu, assets, rules, ui, entity_atlas, biomes, dim_types: Vec::new(), dim: None, world: World::new(-64, 384), pickups: Vec::new(), last_take: 0, pop: [0; 9], player: Player::new(), mesher,
+            gpu, assets, rules, ui, entity_atlas, biomes, dim_types: Vec::new(), dim: None, world: World::new(-64, 384), pickups: Vec::new(), fall_top: None, last_take: 0, pop: [0; 9], player: Player::new(), mesher,
             dirty: HashMap::new(), in_flight: HashSet::new(), events: rx, out: otx, entities: HashMap::new(), player_names: HashMap::new(), board: Default::default(), my_eid: 0, name: o.name,
             chat: Vec::new(), chat_input: None, chat_cursor: None, chat_sel: None, chat_hist: Vec::new(), chat_hist_pos: None, chat_draft: String::new(), chat_scroll: 0, clipboard: String::new(), cmd_tree: None, sug: Sug::default(), hp: 20.0, food: 20, xp: (0.0, 0), enchantments: Vec::new(), title: (String::new(), String::new(), -1, [10, 70, 20]), actionbar: (String::new(), 0), hotbar: Default::default(), held: 0, inventory: vec![ItemStack::default(); 46], inv_state: 0, carried: ItemStack::default(), day_time: 6000,
             spawned: false, loaded_sent: false, connected: false, keys: HashSet::new(), mouse: [false; 2], mouse_pos: (0.0, 0.0), slider_drag: None, last_tick: Instant::now(),
@@ -524,7 +526,11 @@ impl Game {
             Event::EntityData { id, entries } => { if let Some(e) = self.entities.get_mut(&id) { e.apply_meta(&entries); } }
             Event::HeadYaw { id, yaw } => { if let Some(e) = self.entities.get_mut(&id) { e.set_head(yaw); } }
             Event::Animate { id, action } => { if action == 0 || action == 3 { if let Some(e) = self.entities.get_mut(&id) { e.swing = 0; } } }
-            Event::Hurt { id } => { if id == self.my_eid { self.self_hurt = 10; } else if let Some(e) = self.entities.get_mut(&id) { e.hurt = 10; } }
+            Event::Hurt { id } => {
+                // the server sends the hurt sound to everyone but the hurt player: play it here
+                if id == self.my_eid && self.self_hurt == 0 { let p = self.player.pos; self.sounds.play("entity.player.hurt", Some(p), 1.0, 1.0); }
+                if id == self.my_eid { self.self_hurt = 10; } else if let Some(e) = self.entities.get_mut(&id) { e.hurt = 10; }
+            }
             Event::EntityEvent { id, status } => { if let Some(e) = self.entities.get_mut(&id) { match status { 3 => { if e.death == 0 { e.death = 1; } } 2 => e.hurt = 10, _ => {} } } }
             Event::TakeItem { item, collector, count } => {
                 // the item flies into the collector over 3 ticks (a copy: the server removes the entity
@@ -584,6 +590,36 @@ impl Game {
         let mut w = Writer::with_id(sb::CLIENT_COMMAND); w.varint(0); send(&self.out, w);
         self.spawned = false;
         if matches!(self.screen, Some(Screen::Death { .. })) { self.screen = None; }
+    }
+
+    /// Landing: the server sends the fall sounds to everyone but us (measured with m4_fall_damage's
+    /// onlooker, 2026-11-24), so the client plays them itself — small_fall up to 4 damage, big_fall
+    /// from 5, the landed-on block's fall sound (volume 0.5, pitch 0.75) — plus a dust burst from
+    /// that block (the size is an estimate, not measured).
+    fn track_landing(&mut self, was_ground: bool) {
+        let p = &self.player;
+        if p.flying || p.in_water || matches!(p.gamemode, 1 | 3) { self.fall_top = None; return; }
+        if !p.on_ground {
+            let top = self.fall_top.get_or_insert(p.pos[1]);
+            if p.pos[1] > *top { *top = p.pos[1]; }
+            return;
+        }
+        let Some(top) = self.fall_top.take() else { return };
+        if was_ground { return; }
+        let dist = top - p.pos[1];
+        let at = p.pos;
+        let below = self.world.get(at[0].floor() as i32, (at[1] - 0.2).floor() as i32, at[2].floor() as i32);
+        let name = basalt_data::BlockState(below as u32).name();
+        let k = match name { "hay_block" | "honey_block" => 0.2, "slime_block" => 0.0, n if n.ends_with("_bed") => 0.5, _ => 1.0 };
+        let dmg = ((dist - 3.0).ceil() * k).floor();
+        if dmg < 1.0 { return; }
+        self.sounds.play(if dmg > 4.0 { "entity.player.big_fall" } else { "entity.player.small_fall" }, Some(at), 1.0, 1.0);
+        let g = sound::block_group(name);
+        self.sounds.play(&format!("block.{g}.fall"), Some(at), 0.5, 0.75);
+        let n = ((dist * 2.0) as usize).clamp(4, 40);
+        let b = [at[0].floor() as i32, (at[1] - 0.2).floor() as i32, at[2].floor() as i32];
+        let tint = self.particle_tint(below, b);
+        self.particles.block_land(&self.assets, below, at, n, tint);
     }
 
     fn block_sound(&mut self, state: u16, kind: &str, at: [f64; 3]) {
@@ -781,7 +817,9 @@ impl Game {
             let mut w = Writer::with_id(sb::PLAYER_COMMAND); w.varint(self.my_eid).varint(if sprinting { 1 } else { 2 }).varint(0); send(&self.out, w);
         }
         let before = self.player.pos;
+        let was_ground = self.player.on_ground;
         self.player.tick(&self.assets, &self.world, inp);
+        self.track_landing(was_ground);
         // view bobbing (vanilla client, oracle "fp" recorder 2026-11-23): the walk distance grows by
         // 0.6 x horizontal distance; the amplitude eases (x0.4/tick) to min(0.1, horizontal speed)
         // on the ground and to 0 in the air

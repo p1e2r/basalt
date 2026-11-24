@@ -14,7 +14,7 @@ use winit::keyboard::KeyCode;
 const W: u32 = 854;
 const H: u32 = 480;
 
-pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer", "falling_block", "sprint", "xp_bar", "titles", "nether", "enchanting_screen", "anvil_screen", "grindstone_screen", "smithing_screen", "brewing_screen", "font_widths", "grass_overlay", "item_drop_smooth", "pickup_anim", "chat_keys"];
+pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer", "falling_block", "sprint", "xp_bar", "titles", "nether", "enchanting_screen", "anvil_screen", "grindstone_screen", "smithing_screen", "brewing_screen", "font_widths", "grass_overlay", "item_drop_smooth", "pickup_anim", "chat_keys", "landing"];
 
 enum Outcome { Pass(String), Skip(String) }
 
@@ -41,7 +41,7 @@ pub fn run(args: &Args, assets: Arc<Assets>, name: &str) -> Result<bool> {
         let t = Instant::now();
         let r = match s {
             "edge_chunks" => edge_chunks(&ctx), "inventory" => inventory(&ctx), "crafting_table" => crafting_table(&ctx), "death" => death(&ctx),
-            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "falling_block" => falling_block(&ctx), "sprint" => sprint(&ctx), "xp_bar" => xp_bar(&ctx), "titles" => titles(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx), "nether" => nether(&ctx), "enchanting_screen" => enchanting_screen(&ctx), "anvil_screen" => anvil_screen(&ctx), "grindstone_screen" => grindstone_screen(&ctx), "smithing_screen" => smithing_screen(&ctx), "brewing_screen" => brewing_screen(&ctx), "font_widths" => font_widths(&ctx), "grass_overlay" => grass_overlay(&ctx), "item_drop_smooth" => item_drop_smooth(&ctx), "pickup_anim" => pickup_anim(&ctx), "chat_keys" => chat_keys(&ctx),
+            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "falling_block" => falling_block(&ctx), "sprint" => sprint(&ctx), "xp_bar" => xp_bar(&ctx), "titles" => titles(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx), "nether" => nether(&ctx), "enchanting_screen" => enchanting_screen(&ctx), "anvil_screen" => anvil_screen(&ctx), "grindstone_screen" => grindstone_screen(&ctx), "smithing_screen" => smithing_screen(&ctx), "brewing_screen" => brewing_screen(&ctx), "font_widths" => font_widths(&ctx), "grass_overlay" => grass_overlay(&ctx), "item_drop_smooth" => item_drop_smooth(&ctx), "pickup_anim" => pickup_anim(&ctx), "chat_keys" => chat_keys(&ctx), "landing" => landing(&ctx),
             other => Err(anyhow!("unknown scenario {other} (known: {})", ALL.join(", "))),
         };
         let secs = t.elapsed().as_secs_f32();
@@ -931,6 +931,45 @@ fn break_particles(c: &Ctx) -> Result<Outcome> {
     wait(&mut g, 2.5)?;
     if !g.particles.is_empty() { bail!("{} particles still alive after 2.5 s", g.particles.len()); }
     Ok(Outcome::Pass(format!("{dig_max} while digging, {after} on break, all gone after 2.5 s")))
+}
+
+/// Landing audio and dust: the server sends the fall sounds to other players only (measured on
+/// vanilla), so the client plays small_fall / big_fall, the landed-on block's fall sound and, with the
+/// damage event, the hurt sound itself, and throws block dust. 10 blocks: big_fall; 5: small_fall; 3: nothing.
+fn landing(c: &Ctx) -> Result<Outcome> {
+    let mut g = c.game("land")?;
+    join(&mut g)?;
+    cmd(&mut g, "gamemode creative");
+    tp(&mut g, [1000.5, -60.0, 1020.5], 0.0, 0.0)?;
+    wait(&mut g, 1.0)?;
+    cmd(&mut g, "gamemode survival");
+    wait(&mut g, 0.5)?;
+    let mut notes = Vec::new();
+    for (h, want) in [(3.0, None), (5.0, Some("entity.player.small_fall")), (10.0, Some("entity.player.big_fall"))] {
+        cmd(&mut g, "effect give @s instant_health 1 5");
+        wait(&mut g, 1.5)?;
+        g.sounds.log.clear();
+        let parts0 = g.particles.len();
+        cmd(&mut g, &format!("tp @s 1000.5 {} 1020.5", -60.0 + h));
+        wait(&mut g, 0.3)?;
+        if !wait_until(&mut g, 4.0, |g| g.player.on_ground)? { bail!("{h}-block fall: never landed"); }
+        let mut dust = 0;
+        for _ in 0..10 { step(&mut g)?; dust = dust.max(g.particles.len().saturating_sub(parts0)); }
+        wait(&mut g, 0.5)?;
+        let ev: Vec<String> = g.sounds.log.iter().map(|p| p.event.clone()).collect();
+        let fall_block = ev.iter().any(|e| e.starts_with("block.") && e.ends_with(".fall"));
+        match want {
+            None => { if fall_block || ev.iter().any(|e| e.contains("_fall")) { bail!("{h}-block fall played landing sounds {ev:?}"); } }
+            Some(w) => {
+                if !ev.iter().any(|e| e == w) { bail!("{h}-block fall: no {w} in {ev:?}"); }
+                if !fall_block { bail!("{h}-block fall: no block fall sound in {ev:?}"); }
+                if !ev.iter().any(|e| e == "entity.player.hurt") { bail!("{h}-block fall: no hurt sound in {ev:?}"); }
+                if dust == 0 { bail!("{h}-block fall: no landing dust"); }
+            }
+        }
+        notes.push(format!("{h}: {} sounds, {dust} dust", ev.len()));
+    }
+    Ok(Outcome::Pass(notes.join("; ")))
 }
 
 /// Chat box keys like vanilla: Up/Down through the session history (Down past the newest brings

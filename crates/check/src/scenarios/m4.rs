@@ -274,6 +274,11 @@ pub fn fall_damage(ctx: &mut Ctx) -> Result<()> {
     // the arena only clears 5 blocks up: on the long-running vanilla world other runs can leave
     // blocks higher in the drop columns, which shortens the fall
     fill(&bot, [o[0], Y, o[2]], [o[0] + 5, Y + 22, o[2] + 5], "air")?;
+    // a second player next to the landing spot: what other players get to hear
+    let obs = ctx.bot()?;
+    obs.tp([p[0] + 2.0, p[1], p[2]])?;
+    obs.wait_on_ground(Duration::from_secs(5));
+    obs.wait_ticks(10);
     // 3 blocks: no damage
     let t0 = Instant::now();
     bot.tp([p[0], p[1] + 3.0, p[2]])?;
@@ -292,6 +297,52 @@ pub fn fall_damage(ctx: &mut Ctx) -> Result<()> {
     ctx.approx("10-block fall damage", dmg, 7.0, 0.0);
     ctx.metric("fall_3", small.iter().sum::<f32>() as f64, 0.0);
     ctx.metric("fall_10", dmg, 0.0);
+    // which sounds the server sends for the landings (vanilla-measured: compared as a sorted list)
+    let names = |from: Instant, to: Instant| -> Vec<String> {
+        let mut v: Vec<String> = bot.st().sounds.iter().filter(|x| x.0 >= from && x.0 < to).map(|x| basalt_data::registries::SOUND_EVENT.get(x.1 as usize).copied().unwrap_or("?").to_string()).collect();
+        v.sort();
+        v
+    };
+    let (s3, s10) = (names(t0, t1), names(t1, Instant::now()));
+    ctx.note(format!("sounds after the 3-block landing: {s3:?}; after the 10-block landing: {s10:?}"));
+    let onames = |from: Instant, to: Instant| -> Vec<String> {
+        let mut v: Vec<String> = obs.st().sounds.iter().filter(|x| x.0 >= from && x.0 < to).map(|x| basalt_data::registries::SOUND_EVENT.get(x.1 as usize).copied().unwrap_or("?").to_string()).collect();
+        v.sort();
+        v
+    };
+    let (o3, o10) = (onames(t0, t1), onames(t1, Instant::now()));
+    ctx.note(format!("an onlooker heard after the 3-block landing: {o3:?}; after the 10-block landing: {o10:?}"));
+    let det: Vec<String> = obs.st().sound_detail.iter().filter(|x| x.0 >= t1).map(|x| format!("{} cat {} at {:.2},{:.2},{:.2} (lander {:.2},{:.2},{:.2}) vol {} pitch {}", basalt_data::registries::SOUND_EVENT.get(x.1 as usize).copied().unwrap_or("?"), x.2, x.3[0], x.3[1], x.3[2], p[0], p[1], p[2], x.4, x.5)).collect();
+    ctx.note(format!("details: {det:?}"));
+    let ents: Vec<String> = obs.st().entity_sounds.iter().filter(|x| x.0 >= t1).map(|x| basalt_data::registries::SOUND_EVENT.get(x.1 as usize).copied().unwrap_or("?").to_string()).collect();
+    ctx.note(format!("...of which sound_entity: {ents:?}"));
+    // 5 blocks: 2 damage (the small/big fall threshold)
+    bot.wait_ticks(25);
+    let t5 = Instant::now();
+    bot.tp([p[0], p[1] + 5.0, p[2]])?;
+    bot.wait_ticks(5); bot.wait_on_ground(Duration::from_secs(4)); bot.wait_ticks(8);
+    let o5 = onames(t5, Instant::now());
+    ctx.note(format!("an onlooker heard after the 5-block landing: {o5:?}"));
+    // 7 and 8 blocks: 4 and 5 damage
+    let mut o78 = Vec::new();
+    for hgt in [7.0, 8.0] {
+        bot.wait_ticks(25);
+        let t = Instant::now();
+        bot.tp([p[0], p[1] + hgt, p[2]])?;
+        bot.wait_ticks(5); bot.wait_on_ground(Duration::from_secs(4)); bot.wait_ticks(8);
+        let o = onames(t, Instant::now());
+        ctx.note(format!("an onlooker heard after the {hgt}-block landing: {o:?}"));
+        o78.push(o);
+    }
+    bot.cmd("effect give @s instant_health 1 5");
+    let h = |v: &[String]| v.iter().fold(0u64, |a, x| a.wrapping_mul(31).wrapping_add(x.bytes().fold(0u64, |b, c| b.wrapping_mul(131).wrapping_add(c as u64)))) as f64 % 1.0e9;
+    ctx.metric("landing_sounds_3", h(&s3), 0.0);
+    ctx.metric("landing_sounds_10", h(&s10), 0.0);
+    ctx.metric("onlooker_sounds_3", h(&o3), 0.0);
+    ctx.metric("onlooker_sounds_10", h(&o10), 0.0);
+    ctx.metric("onlooker_sounds_5", h(&o5), 0.0);
+    ctx.metric("onlooker_sounds_7", h(&o78[0]), 0.0);
+    ctx.metric("onlooker_sounds_8", h(&o78[1]), 0.0);
     // 20 blocks onto hay: 17 * 0.2 = 3.4 -> 3
     let hay = [o[0] + 4, Y, o[2] + 4];
     setblock(&bot, hay, "hay_block")?;

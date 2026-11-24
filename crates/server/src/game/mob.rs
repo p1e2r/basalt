@@ -344,11 +344,16 @@ impl Game {
 
     /// `sound` packet: holder (id+1), category, fixed-point xyz (×8), volume, pitch, seed.
     pub(super) fn play_sound(&mut self, name: &str, category: i32, pos: [f64; 3], volume: f32, pitch: f32) {
+        self.play_sound_except(name, category, pos, volume, pitch, None);
+    }
+
+    /// [`play_sound`] for everyone who sees the chunk except `except` (whose client plays it itself).
+    pub(super) fn play_sound_except(&mut self, name: &str, category: i32, pos: [f64; 3], volume: f32, pitch: f32, except: Option<i32>) {
         let id = Self::sound_id(name);
         if id == 0 { return; }
         let seed: i64 = rand::Rng::gen(&mut self.rng);
         let c = ((pos[0].floor() as i32) >> 4, (pos[2].floor() as i32) >> 4);
-        self.broadcast_chunk(c, None, || {
+        self.broadcast_chunk(c, except, || {
             let mut w = Writer::with_id(cb::SOUND);
             w.varint(id).varint(category).i32((pos[0] * 8.0) as i32).i32((pos[1] * 8.0) as i32).i32((pos[2] * 8.0) as i32).f32(volume).f32(pitch).i64(seed);
             w
