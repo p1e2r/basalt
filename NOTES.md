@@ -466,7 +466,7 @@ Code: `Game::update_neighbors` (place.rs), `finish_dig` (game.rs), `/setblock` +
 - Breaking a seagrass/kelp/waterlogged block leaves a water source.
 - Dug by hand on vanilla but not reproduced by the bot (dig had no effect, unexplained, so no scenario): big_dripleaf_stem,
   tall_seagrass. Tall seagrass behaviour of the lower half / creative / commands varied between vanilla runs (dependent on water
-  flow timing), so only digging the upper half with shears is in the scenario; the rules above come from the first clean runs.
+  flow timing), so the scenario has no seagrass case; the rules above come from the first clean runs (digging by hand also had no effect in the bot).
 
 ## Entity + first-person animation vs the real 26.2 client (oracle `bones`/`fp`, `basalt-check client-anim`, 2026-11-23)
 Measured from the vanilla client's own model parts / PoseStacks (exact fits; formulas live in crates/client/src/entity.rs):
