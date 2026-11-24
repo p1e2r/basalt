@@ -7,6 +7,7 @@ pub mod m1;
 pub mod m3;
 pub mod m4;
 pub mod m5;
+pub mod m5_animals;
 pub mod m6;
 pub mod m10;
 pub mod m8;
@@ -69,6 +70,9 @@ pub static ALL: &[Spec] = &[
     spec!("M5", "m5_sheep_eat_grass", m5::sheep_eat_grass, Flat, Both, true, "baby sheep eat grass: eating animation, grass turns to dirt"),
     spec!("M5", "m5_breeding", m5::breeding, Flat, Both, true, "feeding two cows wheat: love mode, baby cow, 1-7 xp"),
     spec!("M5", "m5_xp_orbs", m5::xp_orbs, Flat, Both, true, "player kills drop experience orbs (cow 1-3); collected by walking onto them"),
+    spec!("M5", "m5_animals_avoid_water", m5_animals::animals_avoid_water, Flat, Both, true, "16 land animals next to a lake: share of time in the water vs vanilla (150 s)"),
+    spec!("M5", "m5_animal_float", m5_animals::animal_float, Flat, Both, true, "animals dropped in a lake ride the surface and swim back to land"),
+    spec!("M5", "m5_chicken_fall", m5_animals::chicken_fall, Flat, Both, true, "chicken slow fall: time and speed over a 40-block drop"),
     spec!("M5", "m5_sheep_loot", m5::sheep_loot, Flat, Both, true, "red sheep drops 1 red wool; sheared sheep none"),
     spec!("M5", "m5_undead_sun", m5::undead_sun, Flat, Both, true, "zombie under noon sky catches fire and takes damage"),
     spec!("Env", "env_drowning", env::drowning, Flat, Both, true, "air drains 1/tick, 2 damage at -20, then every 20 ticks; refill +4/tick"),
