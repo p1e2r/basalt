@@ -20,7 +20,8 @@ fn wanted(name: &str, img: &crate::assets::Image) -> bool {
 
 impl UiAtlas {
     pub fn build(a: &Assets) -> UiAtlas {
-        let (w, h) = (2048u32, 2048u32);
+        // 2048 x 4096: the GUI sprites (M10 screens included) no longer fit 2048 x 2048 with the font pages
+        let (w, h) = (2048u32, 4096u32);
         let mut rgba = vec![0u8; (w * h * 4) as usize];
         let mut rects = HashMap::new();
         let mut glyph_w = [6u8; 256];
@@ -44,23 +45,12 @@ impl UiAtlas {
         // white block
         for py in 0..8 { for px in 0..8 { let d = (((200 + py) * w + 300 + px) * 4) as usize; rgba[d..d + 4].copy_from_slice(&[255; 4]); } }
         rects.insert("white".into(), [302, 202, 4, 4]);
-        // shelf-pack the GUI textures, tallest first
-        let mut names: Vec<&String> = a.gui.iter().filter(|(n, i)| wanted(n, i)).map(|(n, _)| n).collect();
-        names.sort_by(|x, y| a.gui[*y].h.cmp(&a.gui[*x].h).then(x.cmp(y)));
         let (mut x, mut y, mut row) = (0u32, 260u32, 0u32);
-        for n in names {
-            let img = &a.gui[n];
-            if x + img.w + 2 > w { x = 0; y += row + 2; row = 0; }
-            if y + img.h > h { log::warn!("ui atlas full at {n}"); break; }
-            blit(&mut rects, n, img, x, y, &mut rgba); x += img.w + 2; row = row.max(img.h);
-            // short aliases for HUD sprites ("hotbar", "heart/full", ...)
-            if let Some(s) = n.strip_prefix("sprites/hud/") { let r = rects[n.as_str()]; rects.insert(s.to_string(), r); }
-        }
         // font pages (vanilla's providers in order; the first page with a character wins)
         let mut glyphs: HashMap<char, Glyph> = HashMap::new();
         for (pi, page) in a.font_pages.iter().enumerate() {
             let img = &page.img;
-            // continue the shelf after the GUI textures
+            // font pages go first: text must never lose its glyphs to a full atlas
             if x + img.w + 2 > w { x = 0; y += row + 2; row = 0; }
             if y + img.h > h { log::warn!("ui atlas full at font page {pi}"); break; }
             let (fx, py0, rows) = (x, y, page.chars.len() as u32);
@@ -83,6 +73,17 @@ impl UiAtlas {
                     });
                 }
             }
+        }
+        // shelf-pack the GUI textures, tallest first
+        let mut names: Vec<&String> = a.gui.iter().filter(|(n, i)| wanted(n, i)).map(|(n, _)| n).collect();
+        names.sort_by(|x, y| a.gui[*y].h.cmp(&a.gui[*x].h).then(x.cmp(y)));
+        for n in names {
+            let img = &a.gui[n];
+            if x + img.w + 2 > w { x = 0; y += row + 2; row = 0; }
+            if y + img.h > h { log::warn!("ui atlas full at {n}"); break; }
+            blit(&mut rects, n, img, x, y, &mut rgba); x += img.w + 2; row = row.max(img.h);
+            // short aliases for HUD sprites ("hotbar", "heart/full", ...)
+            if let Some(s) = n.strip_prefix("sprites/hud/") { let r = rects[n.as_str()]; rects.insert(s.to_string(), r); }
         }
         UiAtlas { w, h, rgba, rects, glyph_w, glyphs }
     }

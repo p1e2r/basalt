@@ -14,7 +14,7 @@ use winit::keyboard::KeyCode;
 const W: u32 = 854;
 const H: u32 = 480;
 
-pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer", "falling_block", "sprint", "xp_bar", "titles", "nether", "enchanting_screen", "anvil_screen", "grindstone_screen", "smithing_screen", "brewing_screen"];
+pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer", "falling_block", "sprint", "xp_bar", "titles", "nether", "enchanting_screen", "anvil_screen", "grindstone_screen", "smithing_screen", "brewing_screen", "font_widths"];
 
 enum Outcome { Pass(String), Skip(String) }
 
@@ -40,7 +40,7 @@ pub fn run(args: &Args, assets: Arc<Assets>, name: &str) -> Result<bool> {
         let t = Instant::now();
         let r = match s {
             "edge_chunks" => edge_chunks(&ctx), "inventory" => inventory(&ctx), "crafting_table" => crafting_table(&ctx), "death" => death(&ctx),
-            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "falling_block" => falling_block(&ctx), "sprint" => sprint(&ctx), "xp_bar" => xp_bar(&ctx), "titles" => titles(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx), "nether" => nether(&ctx), "enchanting_screen" => enchanting_screen(&ctx), "anvil_screen" => anvil_screen(&ctx), "grindstone_screen" => grindstone_screen(&ctx), "smithing_screen" => smithing_screen(&ctx), "brewing_screen" => brewing_screen(&ctx),
+            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "falling_block" => falling_block(&ctx), "sprint" => sprint(&ctx), "xp_bar" => xp_bar(&ctx), "titles" => titles(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx), "nether" => nether(&ctx), "enchanting_screen" => enchanting_screen(&ctx), "anvil_screen" => anvil_screen(&ctx), "grindstone_screen" => grindstone_screen(&ctx), "smithing_screen" => smithing_screen(&ctx), "brewing_screen" => brewing_screen(&ctx), "font_widths" => font_widths(&ctx),
             other => Err(anyhow!("unknown scenario {other} (known: {})", ALL.join(", "))),
         };
         let secs = t.elapsed().as_secs_f32();
@@ -930,6 +930,25 @@ fn break_particles(c: &Ctx) -> Result<Outcome> {
     wait(&mut g, 2.5)?;
     if !g.particles.is_empty() { bail!("{} particles still alive after 2.5 s", g.particles.len()); }
     Ok(Outcome::Pass(format!("{dig_max} while digging, {after} on break, all gone after 2.5 s")))
+}
+
+/// Per-glyph advances like vanilla's bitmap provider (rightmost opaque column + 1, +1 spacing,
+/// space 4) on the ascii page — and every ASCII glyph present, so a full UI atlas can't silently
+/// fall back to a fixed advance again ("Si ngl epl ayer"). Expected widths computed from the
+/// jar's font/ascii.png with that rule (2026-11-24).
+fn font_widths(c: &Ctx) -> Result<Outcome> {
+    let g = c.game_at("font", None)?;
+    for ch in (0x21u8..0x7f).map(|b| b as char) {
+        if !g.ui.has_glyph(ch) { bail!("no glyph for {ch:?}: the ascii font page is missing from the UI atlas"); }
+    }
+    let want = [("i", 2.0), ("l", 3.0), ("t", 4.0), ("!", 2.0), (".", 2.0), ("W", 6.0), (" ", 4.0), ("Singleplayer", 62.0), ("Multiplayer", 54.0), ("Options...", 42.0), ("Minecraft Realms", 84.0), ("Quit Game", 46.0)];
+    let mut bad = Vec::new();
+    for (t, w) in want {
+        let got = g.ui.text_width(t, 1.0);
+        if (got - w).abs() > 0.01 { bad.push(format!("{t:?} {got} (want {w})")); }
+    }
+    if !bad.is_empty() { bail!("text widths differ from vanilla: {}", bad.join(", ")); }
+    Ok(Outcome::Pass(format!("{} widths match vanilla's bitmap rule; all 94 ASCII glyphs present", want.len())))
 }
 
 /// Title + pause + every Options page renders and works: icons/tooltips, the vanilla options
