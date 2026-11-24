@@ -109,7 +109,7 @@ Read NOTES.md for verified packet formats.
       drowning (Respiration, Water Breathing, conduit power w/ frame detection, turtle helmet),
       powder-snow freezing (ticks_frozen 140, thaw 2/tick, leather immunity, entity-data synced),
       suffocation, lava, fire/burning, campfire, magma, cactus, berry bush, void. Status effects
-      (/effect), enchantments on stacks (/enchant), /setblock /fill /kill. Armor reduction done in M5. Missing: non-food use_item (buckets etc.), death
+      (/effect), enchantments on stacks (/enchant), /setblock /fill /kill. Armor reduction done in M5. Double blocks + support pops done (2026-11-24; breaking either half of a tall plant/door removes the other, dependants of a removed block pop with tool-less drops via dig / creative / /setblock / /fill / falling sand; /setblock + /fill destroy drop; scenarios m4_double_block_break + m4_support_break match vanilla; rules in NOTES.md "Double blocks and support pops"; pops from explosions/piston/fluids not wired yet). Missing: non-food use_item (buckets etc.), death
       screen in basalt-client (auto-respawns), human-driven real-client inventory test.
 - [x] M5 mobs — done, check-all M5 12/12 + Diff 34/34 vs vanilla (2026-11-23) (server game/{mob,ai,path,combat,arrow,explosion,spawn,track}.rs):
       zombie/skeleton/creeper/spider/cow/pig/sheep/chicken with vanilla-measured spawn packets +

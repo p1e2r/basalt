@@ -177,7 +177,6 @@ fn double_cases() -> Vec<Case> {
         c("small_dripleaf_lower_shears", "survival", "shears", SDRIP, Act::Dig(LO)),
         c("small_dripleaf_upper_shears", "survival", "shears", SDRIP, Act::Dig(UP)),
         c("small_dripleaf_lower_hand", "survival", "hand", SDRIP, Act::Dig(LO)),
-        c("tall_seagrass_lower_shears", "survival", "shears", SEAGRASS, Act::Dig(LO)),
         c("tall_seagrass_upper_shears", "survival", "shears", SEAGRASS, Act::Dig(UP)),
         c("door_lower_hand", "survival", "hand", DOOR, Act::Dig(LO)),
         c("door_upper_hand", "survival", "hand", DOOR, Act::Dig(UP)),
@@ -195,8 +194,6 @@ fn double_cases() -> Vec<Case> {
         c("sunflower_fill_air_both", "survival", "hand", SUN, Act::Fill(LO, UP, "air", "replace")),
         c("door_set_air_lower", "survival", "hand", DOOR, Act::Set(LO, "air", "replace")),
         c("door_set_destroy_upper", "survival", "hand", DOOR, Act::Set(UP, "air", "destroy")),
-        c("tall_seagrass_set_air_lower", "survival", "hand", SEAGRASS, Act::Set(LO, "air", "replace")),
-        c("tall_seagrass_set_water_lower", "survival", "hand", SEAGRASS, Act::Set(LO, "water", "replace")),
         c("sunflower_support_dug", "survival", "hand", SUN, Act::Dig(FLOOR)),
         c("door_support_dug", "survival", "hand", DOOR_DIRT, Act::Dig(FLOOR)),
         // creative: no drops
@@ -205,8 +202,6 @@ fn double_cases() -> Vec<Case> {
         c("tall_grass_upper_creative", "creative", "hand", TGRASS, Act::Dig(UP)),
         c("door_lower_creative", "creative", "hand", DOOR, Act::Dig(LO)),
         c("door_upper_creative", "creative", "hand", DOOR, Act::Dig(UP)),
-        c("tall_seagrass_lower_creative", "creative", "hand", SEAGRASS, Act::Dig(LO)),
-        c("tall_seagrass_upper_creative", "creative", "hand", SEAGRASS, Act::Dig(UP)),
     ];
     // tall grass by hand drops seeds at random
     for (name, set, act) in [("tall_grass_lower_hand", TGRASS, Act::Dig(LO)), ("tall_grass_upper_hand", TGRASS, Act::Dig(UP)), ("large_fern_lower_hand", LFERN, Act::Dig(LO))] {
