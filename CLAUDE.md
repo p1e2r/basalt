@@ -138,6 +138,16 @@ Next steps for a fresh session, in order:
 - Throwables (2026-11-24): use_item for snowball, egg, ender pearl, xp bottle, splash/lingering potions (+ area effect cloud), wind charge, player bow, trident throw/pickup done and diffed vs vanilla (scenarios throw_*, bow_shoot, trident_throw, wind_charge). basalt-client: item-sprite billboards, own flight prediction, break/splash particles, sends use_item for throwables (PARTIAL: client scenario not written, untested in a real window, trident drawn as a sprite). Remaining: crossbow, trident Loyalty/Riptide/Channeling, endermite from pearls, egg chicken variants (blue/brown egg), wind charge damage on entity hit, tipped/spectral arrows, bow Infinity/Power, potion effects on mobs, buckets, flint and steel, bonemeal, shears, hoe/shovel/axe, fishing rod, client scenario for projectiles.
 - Water (M7, 2026-11-24): basalt-client plays splash/underwater sounds + bubble/splash particles like the real client (basalt-check client-water now also diffs local fx; 12 cases pass; scenario water_splash). PARTIAL: client-water cases for lava, flowing-water current, swim_fwd, wade, Dolphin's Grace and Depth Strider are written (crates/check/src/client/water.rs) but never run; basalt-client has no handling for them yet (needs mob-effect tracking, boots enchant, lava/current physics); server onlooker splash not sent. See NOTES.md.
 
+### Cloud session (2026-11-24, from 10:30 WIB — the user switched work to the cloud while travelling)
+- Environment: claude.ai cloud container, 2 cores / 8 GB, no GPU (Xvfb + Mesa llvmpipe/lavapipe for the real client and basalt-client),
+  checkout /home/claude/basalt, vanilla/ -> /home/claude/vanilla (server.jar, client.jar, srv/). Vanilla test server: vanilla/srv/run.sh
+  (console.fifo + server.log, port 25566). Structure-parity world generation needs ~3 GB per world and is very slow on 2 cores: skip it
+  unless worldgen/structure code changed.
+- Merged + pushed: worktree-agent-a68d4f6072bc2774f (throwables) and worktree-agent-ae0d6e8c9e8320a65 (water effects).
+  Gate on the merged tree: cargo test --workspace green; clippy: no new lints from the merges (7 toolchain-version lints in older
+  files differ from the Mac baseline); scenarios --diff vs vanilla: 269/280 (the failures are vanilla-side, e.g. m6_break_contents,
+  m6_random_ticks — shared-world interference); basalt-only 99/100 with m8_portal_travel flaky under --jobs 2 (passes 3/3 alone).
+
 ### Task list
 - [x] M1 client builds, joins vanilla, renders chunks
 - [x] M2 crates/world: sections/paletted containers, light, Anvil region read/write

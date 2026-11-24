@@ -211,6 +211,7 @@ impl Particles {
         (8.0 / self.rr(0.2, 1.0)) as u32
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn spawn_sprite(
         &mut self,
         a: &Assets,

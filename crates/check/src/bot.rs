@@ -44,6 +44,9 @@ pub struct Line {
     pub text: Text,
 }
 
+/// level_particles record: (time, particle type id, position, delta, speed, count)
+pub type ParticleRec = (Instant, i32, [f64; 3], [f32; 3], f32, i32);
+
 #[derive(Clone, Debug)]
 pub struct Entity {
     pub uuid: Uuid,
@@ -154,7 +157,7 @@ pub struct State {
     /// positional sounds: (time, event, category, position, volume, pitch)
     pub sound_detail: Vec<(Instant, i32, i32, [f64; 3], f32, f32)>,
     /// level_particles: (time, particle type id, position, delta, speed, count)
-    pub particle_log: Vec<(Instant, i32, [f64; 3], [f32; 3], f32, i32)>,
+    pub particle_log: Vec<ParticleRec>,
     pub xp_total: i32,
     pub xp_level: i32,
     /// entities removed by remove_entities (with their last known state), oldest first
