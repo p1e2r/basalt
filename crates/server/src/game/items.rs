@@ -194,10 +194,12 @@ impl Game {
         for (item_id, pid) in picks {
             let Some(e) = self.items.get(&item_id) else { continue };
             let stack = e.stack;
-            let left = self.give_stack(pid, stack);
+            let (left, _) = self.give_stack_quiet(pid, stack);
             let taken = stack.count - left;
             if taken <= 0 { continue; }
+            // vanilla order: take_item_entity first, then the inventory update
             for p in self.players.values() { if p.seen_items.contains(&item_id) { let mut w = Writer::with_id(cb::TAKE_ITEM_ENTITY); w.varint(item_id).varint(pid).varint(taken); p.send(w); } }
+            if let Some(p) = self.players.get_mut(&pid) { Self::send_window(p); }
             if left == 0 { self.remove_item(item_id); } else {
                 let e = self.items.get_mut(&item_id).unwrap(); e.stack.count = left;
             }

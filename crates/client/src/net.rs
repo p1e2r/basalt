@@ -65,7 +65,7 @@ pub enum Event {
     Animate { id: i32, action: u8 },
     Hurt { id: i32 },
     EntityEvent { id: i32, status: u8 },
-    TakeItem { item: i32, collector: i32 },
+    TakeItem { item: i32, collector: i32, count: i32 },
     RemoveEntities(Vec<i32>),
     BlockDestruction { id: i32, pos: [i32; 3], stage: i8 },
     Sound { event: String, pos: Option<[f64; 3]>, entity: Option<i32>, volume: f32, pitch: f32, category: i32 },
@@ -414,7 +414,7 @@ fn handle_play(id: i32, data: &[u8], tx: &Sender<Event>, players: &mut HashMap<U
         cb::ANIMATE => { let id = r.varint()?; Event::Animate { id, action: r.u8()? } }
         cb::HURT_ANIMATION | cb::DAMAGE_EVENT => Event::Hurt { id: r.varint()? },
         cb::ENTITY_EVENT => { let id = r.i32()?; Event::EntityEvent { id, status: r.u8()? } }
-        cb::TAKE_ITEM_ENTITY => { let item = r.varint()?; let collector = r.varint()?; Event::TakeItem { item, collector } }
+        cb::TAKE_ITEM_ENTITY => { let item = r.varint()?; let collector = r.varint()?; let count = r.varint().unwrap_or(1); Event::TakeItem { item, collector, count } }
         cb::REMOVE_ENTITIES => { let n = r.varint()?; let mut v = Vec::new(); for _ in 0..n { v.push(r.varint()?); } Event::RemoveEntities(v) }
         cb::BLOCK_DESTRUCTION => { let id = r.varint()?; let (x, y, z) = r.position()?; Event::BlockDestruction { id, pos: [x, y, z], stage: r.i8()? } }
         cb::SOUND => {

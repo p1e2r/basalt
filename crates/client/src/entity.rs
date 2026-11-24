@@ -35,6 +35,7 @@ pub fn dims(kind: i32) -> (f32, f32, [u8; 4]) {
 
 pub fn is_living(kind: i32) -> bool { !matches!(type_name(kind), "item" | "arrow" | "spectral_arrow" | "experience_orb" | "") }
 
+#[derive(Clone)]
 pub struct Entity {
     pub id: i32,
     pub uuid: Uuid,

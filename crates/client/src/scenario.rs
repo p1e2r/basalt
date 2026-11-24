@@ -14,7 +14,7 @@ use winit::keyboard::KeyCode;
 const W: u32 = 854;
 const H: u32 = 480;
 
-pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer", "falling_block", "sprint", "xp_bar", "titles", "nether", "enchanting_screen", "anvil_screen", "grindstone_screen", "smithing_screen", "brewing_screen", "font_widths", "grass_overlay", "item_drop_smooth"];
+pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer", "falling_block", "sprint", "xp_bar", "titles", "nether", "enchanting_screen", "anvil_screen", "grindstone_screen", "smithing_screen", "brewing_screen", "font_widths", "grass_overlay", "item_drop_smooth", "pickup_anim"];
 
 enum Outcome { Pass(String), Skip(String) }
 
@@ -40,7 +40,7 @@ pub fn run(args: &Args, assets: Arc<Assets>, name: &str) -> Result<bool> {
         let t = Instant::now();
         let r = match s {
             "edge_chunks" => edge_chunks(&ctx), "inventory" => inventory(&ctx), "crafting_table" => crafting_table(&ctx), "death" => death(&ctx),
-            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "falling_block" => falling_block(&ctx), "sprint" => sprint(&ctx), "xp_bar" => xp_bar(&ctx), "titles" => titles(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx), "nether" => nether(&ctx), "enchanting_screen" => enchanting_screen(&ctx), "anvil_screen" => anvil_screen(&ctx), "grindstone_screen" => grindstone_screen(&ctx), "smithing_screen" => smithing_screen(&ctx), "brewing_screen" => brewing_screen(&ctx), "font_widths" => font_widths(&ctx), "grass_overlay" => grass_overlay(&ctx), "item_drop_smooth" => item_drop_smooth(&ctx),
+            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "falling_block" => falling_block(&ctx), "sprint" => sprint(&ctx), "xp_bar" => xp_bar(&ctx), "titles" => titles(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx), "nether" => nether(&ctx), "enchanting_screen" => enchanting_screen(&ctx), "anvil_screen" => anvil_screen(&ctx), "grindstone_screen" => grindstone_screen(&ctx), "smithing_screen" => smithing_screen(&ctx), "brewing_screen" => brewing_screen(&ctx), "font_widths" => font_widths(&ctx), "grass_overlay" => grass_overlay(&ctx), "item_drop_smooth" => item_drop_smooth(&ctx), "pickup_anim" => pickup_anim(&ctx),
             other => Err(anyhow!("unknown scenario {other} (known: {})", ALL.join(", "))),
         };
         let secs = t.elapsed().as_secs_f32();
@@ -930,6 +930,49 @@ fn break_particles(c: &Ctx) -> Result<Outcome> {
     wait(&mut g, 2.5)?;
     if !g.particles.is_empty() { bail!("{} particles still alive after 2.5 s", g.particles.len()); }
     Ok(Outcome::Pass(format!("{dig_max} while digging, {after} on break, all gone after 2.5 s")))
+}
+
+/// Picking an item up: take_item_entity makes the item fly into the player over 3 ticks (a copy is
+/// drawn after the server removed the entity), the pickup sound plays, and the hotbar slot that
+/// received it pops for 5 ticks.
+fn pickup_anim(c: &Ctx) -> Result<Outcome> {
+    let mut g = c.game("pick")?;
+    join(&mut g)?;
+    cmd(&mut g, "gamemode creative");
+    tp(&mut g, [980.5, -60.0, 980.5], 0.0, 30.0)?;
+    wait(&mut g, 1.0)?;
+    cmd(&mut g, "gamemode survival");
+    cmd(&mut g, "clear @s");
+    wait(&mut g, 0.3)?;
+    let b = [980, -60, 981];
+    cmd(&mut g, &format!("setblock {} {} {} dirt", b[0], b[1], b[2]));
+    if !wait_until(&mut g, 3.0, |g| basalt_data::BlockState(g.world.get(b[0], b[1], b[2]) as u32).name() == "dirt")? { bail!("setblock dirt failed"); }
+    look_at(&mut g, [b[0] as f64 + 0.5, b[1] as f64 + 0.5, b[2] as f64 + 0.5]);
+    step(&mut g)?;
+    g.mouse_button(0, true);
+    let broke = wait_until(&mut g, 3.0, |g| basalt_data::BlockState(g.world.get(b[0], b[1], b[2]) as u32).is_air())?;
+    g.mouse_button(0, false);
+    if !broke { bail!("dirt did not break"); }
+    let sounds0 = g.sounds.log.len();
+    if !wait_until(&mut g, 3.0, |g| !g.pickups.is_empty())? { bail!("no pickup animation started (take_item_entity)"); }
+    // follow the flying copy: it must move towards the player
+    let me = g.player.pos;
+    let dist = |g: &Game| g.pickups.first().map(|(e, _, age)| { let t = (*age as f64 / 3.0).min(1.0); let p: Vec<f64> = (0..3).map(|i| e.pos[i] + ([me[0], me[1] + 0.5, me[2]][i] - e.pos[i]) * t).collect(); ((p[0] - me[0]).powi(2) + (p[1] - me[1] - 0.5).powi(2) + (p[2] - me[2]).powi(2)).sqrt() }).unwrap_or(-1.0);
+    let d0 = dist(&g);
+    ticks(&mut g, 1)?;
+    let d1 = dist(&g);
+    if d1 >= 0.0 && d1 >= d0 { bail!("pickup copy not moving towards the player ({d0:.2} -> {d1:.2})"); }
+    let popped = wait_until(&mut g, 1.0, |g| g.pop.iter().any(|p| *p > 0))?;
+    if !popped { bail!("hotbar slot did not pop after the pickup"); }
+    let slot = g.pop.iter().position(|p| *p > 0).unwrap_or(0);
+    wait(&mut g, 0.5)?;
+    if !g.pickups.is_empty() { bail!("pickup animation still running after 0.5 s (3 ticks long)"); }
+    if g.pop.iter().any(|p| *p > 0) { bail!("pop timer still running after 0.5 s (5 ticks)"); }
+    let heard = g.sounds.log[sounds0.min(g.sounds.log.len())..].iter().any(|p| p.event == "entity.item.pickup");
+    if !heard { bail!("no entity.item.pickup sound"); }
+    let got = g.hotbar[slot].item == item_id("dirt");
+    if !got { bail!("popped slot {slot} doesn't hold the dirt"); }
+    Ok(Outcome::Pass(format!("item flew in ({d0:.2} -> {d1:.2} from the player), slot {slot} popped, pickup sound played")))
 }
 
 /// Dropped items must not teleport: a Q-drop and a block drop are followed every tick for 1.5 s;

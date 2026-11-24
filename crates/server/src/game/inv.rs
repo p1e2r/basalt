@@ -44,16 +44,28 @@ impl Player {
 impl Game {
     pub(super) fn max_stack(&self, item: i32) -> i32 { self.data.item(item).map(|i| i.max_stack).unwrap_or(64).max(1) }
 
-    /// Insert into the main inventory (hotbar first). Returns what didn't fit.
+    /// Insert into the inventory like vanilla's pickup / give (order to be confirmed by the click
+    /// fuzzer's pickup cases): first merge into incomplete stacks of the same item with identical
+    /// components — the selected hotbar slot, the offhand, hotbar 0-8, then main 9-35 — then fill
+    /// empty slots, hotbar 0-8 left to right, then main 9-35. Returns what didn't fit.
     pub(super) fn give_stack(&mut self, eid: i32, s: Stack) -> i32 {
+        let (left, changed) = self.give_stack_quiet(eid, s);
+        if changed { if let Some(p) = self.players.get_mut(&eid) { Self::send_window(p); } }
+        left
+    }
+
+    /// [`give_stack`] without sending the window (pickups send take_item_entity first, like vanilla).
+    pub(super) fn give_stack_quiet(&mut self, eid: i32, s: Stack) -> (i32, bool) {
         let max = self.max_stack(s.item);
-        let Some(p) = self.players.get_mut(&eid) else { return s.count };
+        let Some(p) = self.players.get_mut(&eid) else { return (s.count, false) };
         let mut count = s.count;
-        let order: Vec<usize> = (36..45).chain(9..36).collect();
-        for &i in &order { if count == 0 { break; } let t = &mut p.inv[i]; if t.count > 0 && t.item == s.item && t.count < max { let n = (max - t.count).min(count); t.count += n; count -= n; } }
-        for &i in &order { if count == 0 { break; } let t = &mut p.inv[i]; if t.count == 0 { let n = max.min(count); *t = Stack { item: s.item, count: n, damage: s.damage, ench: s.ench }; count -= n; } }
-        if count != s.count { Self::send_window(p); }
-        count
+        let same = |t: &Stack| t.count > 0 && t.item == s.item && t.damage == s.damage && t.ench == s.ench;
+        let mut merge: Vec<usize> = vec![36 + p.held, 45];
+        merge.extend((36..45).filter(|&i| i != 36 + p.held));
+        merge.extend(9..36);
+        for &i in &merge { if count == 0 { break; } let t = &mut p.inv[i]; if same(t) && t.count < max { let n = (max - t.count).min(count); t.count += n; count -= n; } }
+        for i in (36..45).chain(9..36) { if count == 0 { break; } let t = &mut p.inv[i]; if t.count == 0 { let n = max.min(count); *t = Stack { item: s.item, count: n, damage: s.damage, ench: s.ench }; count -= n; } }
+        (count, count != s.count)
     }
 
     fn update_craft(&mut self, eid: i32) {

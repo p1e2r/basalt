@@ -196,6 +196,11 @@ pub struct Game {
     /// the current dimension type (None before login)
     pub dim: Option<assets::DimensionType>,
     world: World,
+    /// item pickup animations: (copy of the item entity, collector, age in ticks; 3 ticks long)
+    pickups: Vec<(entity::Entity, i32, u32)>,
+    /// tick of the last take_item_entity for this player, and per-hotbar-slot pop timers (5 ticks)
+    last_take: u64,
+    pop: [u8; 9],
     player: Player,
     mesher: Mesher,
     dirty: HashMap<(i32, i32, i32), Instant>,
@@ -312,7 +317,7 @@ impl Game {
         let (otx, _orx) = tokio::sync::mpsc::unbounded_channel();
         let mut sounds = o.sounds; sounds.master = o.cfg.master_volume;
         let mut g = Game {
-            gpu, assets, rules, ui, entity_atlas, biomes, dim_types: Vec::new(), dim: None, world: World::new(-64, 384), player: Player::new(), mesher,
+            gpu, assets, rules, ui, entity_atlas, biomes, dim_types: Vec::new(), dim: None, world: World::new(-64, 384), pickups: Vec::new(), last_take: 0, pop: [0; 9], player: Player::new(), mesher,
             dirty: HashMap::new(), in_flight: HashSet::new(), events: rx, out: otx, entities: HashMap::new(), player_names: HashMap::new(), board: Default::default(), my_eid: 0, name: o.name,
             chat: Vec::new(), chat_input: None, cmd_tree: None, sug: Sug::default(), hp: 20.0, food: 20, xp: (0.0, 0), enchantments: Vec::new(), title: (String::new(), String::new(), -1, [10, 70, 20]), actionbar: (String::new(), 0), hotbar: Default::default(), held: 0, inventory: vec![ItemStack::default(); 46], inv_state: 0, carried: ItemStack::default(), day_time: 6000,
             spawned: false, loaded_sent: false, connected: false, keys: HashSet::new(), mouse: [false; 2], mouse_pos: (0.0, 0.0), slider_drag: None, last_tick: Instant::now(),
@@ -456,6 +461,11 @@ impl Game {
                 // set_player_inventory numbering: 0-8 hotbar, 9-35 main, 36-39 armor (feet..head), 40 offhand
                 let (window, slot) = if window == -2 { (0, match slot { 0..=8 => 36 + slot, 9..=35 => slot, 36..=39 => 8 - (slot - 36), 40 => 45, _ => -1 }) } else { (window, slot) };
                 if window == 0 && (0..46).contains(&slot) {
+                    // a pickup makes the stack in the hotbar "pop"
+                    if (36..45).contains(&slot) && self.ticks.saturating_sub(self.last_take) <= 10 {
+                        let old = &self.inventory[slot as usize];
+                        if item.count > 0 && (old.item != item.item || item.count > old.count) { self.pop[(slot - 36) as usize] = 5; }
+                    }
                     self.inventory[slot as usize] = item.clone();
                     if (36..45).contains(&slot) { self.hotbar[(slot - 36) as usize] = item.clone(); }
                     if state != 0 { self.inv_state = state; }
@@ -467,6 +477,12 @@ impl Game {
                 }
             }
             Event::Content { window, state, items, carried } => {
+                if window == 0 && self.ticks.saturating_sub(self.last_take) <= 10 {
+                    for i in 0..9 {
+                        let (old, new) = (&self.inventory[36 + i], items.get(36 + i));
+                        if let Some(n) = new { if n.count > 0 && (old.item != n.item || n.count > old.count) { self.pop[i] = 5; } }
+                    }
+                }
                 if window == 0 {
                     for (i, it) in items.iter().enumerate().take(46) { self.inventory[i] = it.clone(); }
                     for i in 0..9 { self.hotbar[i] = self.inventory[36 + i].clone(); }
@@ -500,9 +516,18 @@ impl Game {
             Event::Animate { id, action } => { if action == 0 || action == 3 { if let Some(e) = self.entities.get_mut(&id) { e.swing = 0; } } }
             Event::Hurt { id } => { if id == self.my_eid { self.self_hurt = 10; } else if let Some(e) = self.entities.get_mut(&id) { e.hurt = 10; } }
             Event::EntityEvent { id, status } => { if let Some(e) = self.entities.get_mut(&id) { match status { 3 => { if e.death == 0 { e.death = 1; } } 2 => e.hurt = 10, _ => {} } } }
-            Event::TakeItem { item, collector } => {
-                if collector == self.my_eid { let p = self.player.pos; self.sounds.play("entity.item.pickup", Some(p), 0.2, 1.4); }
-                let _ = item;
+            Event::TakeItem { item, collector, count } => {
+                // the item flies into the collector over 3 ticks (a copy: the server removes the entity
+                // right after this packet), with the pickup sound at the item
+                if let Some(e) = self.entities.get(&item) {
+                    let mut copy = e.clone();
+                    if let Some(it) = copy.item.as_mut() { if count > 0 && count < it.count { it.count = count; } }
+                    let p = e.pos;
+                    let pitch = 1.4 + (self.ticks % 7) as f32 * 0.1;
+                    if crate::entity::type_name(e.kind) == "item" { self.sounds.play("entity.item.pickup", Some(p), 0.2, pitch); }
+                    self.pickups.push((copy, collector, 0));
+                }
+                if collector == self.my_eid { self.last_take = self.ticks; }
             }
             Event::RemoveEntities(v) => { for id in v { self.entities.remove(&id); self.destroy.remove(&id); } }
             Event::BlockDestruction { id, pos, stage } => { if (0..10).contains(&stage) { self.destroy.insert(id, (pos, stage)); } else { self.destroy.remove(&id); } }
@@ -705,6 +730,9 @@ impl Game {
             e.target = e.pos;
         }
         if self.fp_swing >= 0 { self.fp_swing += 1; if self.fp_swing >= 6 { self.fp_swing = -1; } }
+        for p in self.pop.iter_mut() { *p = p.saturating_sub(1); }
+        for p in self.pickups.iter_mut() { p.2 += 1; }
+        self.pickups.retain(|p| p.2 < 3);
         if !self.particles.is_empty() { self.particles.tick(&self.assets, &self.world); }
         // equip height (measured on the vanilla client, oracle "fp" recorder 2026-11-23): moves at most
         // 0.4/tick towards (attack strength)^3, or towards 0 while a different item is still drawn;
@@ -1175,7 +1203,14 @@ impl Game {
             for (i, it) in self.hotbar.iter().enumerate() {
                 if it.count <= 0 { continue; }
                 let (x, y) = (hx + (3.0 + i as f32 * 20.0) * s, hy + 3.0 * s);
-                ui::item_icon(&self.assets, items, it.item, x, y, s);
+                // pop after a pickup: grows by up to 40 % and back over 5 ticks, anchored at the bottom centre
+                let f = self.pop[i] as f32 - alpha;
+                if f > 0.0 {
+                    let k = 1.0 + f / 5.0 * 0.4;
+                    ui::item_icon(&self.assets, items, it.item, x + 8.0 * s * (1.0 - k), y + 16.0 * s * (1.0 - k), s * k);
+                } else {
+                    ui::item_icon(&self.assets, items, it.item, x, y, s);
+                }
                 ui::item_decorations(a, deco, it, self.max_damage(it.item), x, y, s);
             }
             // title (4x) and subtitle (2x) centred, fading in/out; action bar above the hotbar
@@ -1367,6 +1402,16 @@ impl Game {
                         Self::cuboid(&mut fd.extra, [p[0] - hw, p[1], p[2] - hw], [p[0] + hw, p[1] + bh, p[2] + hw], wool, color, (sl.max(bl) * 17).max(40));
                     }
                 }
+            }
+            // pickups: from where the item was towards the collector (its middle), over 3 ticks
+            for (e, collector, age) in &self.pickups {
+                let t = ((*age as f32 + a) / 3.0).clamp(0.0, 1.0) as f64;
+                let to = if *collector == self.my_eid { let p = self.player.pos; [p[0], p[1] + 0.5, p[2]] } else if let Some(c) = self.entities.get(collector) { let p = c.render_pos(a); [p[0], p[1] + 0.5, p[2]] } else { e.pos };
+                let mut m = e.clone();
+                for (i, ti) in to.iter().enumerate() { m.pos[i] = e.pos[i] + (ti - e.pos[i]) * t; }
+                m.prev = m.pos;
+                let (sl, bl) = self.world.light(m.pos[0].floor() as i32, (m.pos[1] + 0.5).floor() as i32, m.pos[2].floor() as i32);
+                entity::build_item(&self.assets, &m, a, [sl * 17, bl * 17], &mut fd.items3d);
             }
             self.particles.build(&self.world, self.player.yaw, self.player.pitch, a, &mut fd.items3d);
             // first-person arm, or the held item in its place
