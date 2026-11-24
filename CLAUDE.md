@@ -274,3 +274,24 @@ The old `tools/*.sh` scripts are thin wrappers around the same tasks, so existin
 
 ## Daily log
 (One entry appended each day at 8 am Jakarta by the long-run loop: what changed, check numbers, agents, open issues.)
+
+### 2026-11-24 (Tue)
+- Merged: M8 Nether (b45d78e: worldgen biomes 100 %, shape/exact 99.8-99.99 %, per-dimension server, portals); client
+  harness group (c00436d); M10 enchanting/anvil/grindstone/smithing/brewing (699b0fa, all m10_* = vanilla); M3c structures
+  stages 1-4 (8f43c5f, 8082f64, 9115b2c, 57bb118: 165/165 starts, jigsaw 3986/3986 pieces, terrain adaptation fitted
+  (villages 98.9-99.8 %, ancient cities 96.6 %), igloos, swamp huts, temples, mineshafts, strongholds 77-82 %, monuments).
+- M16: admin files (6b0d3b6), vanilla level files (8d8c533), players/data .dat (a04c6e3): the official server opens Basalt saves.
+- M13: /seed /me /msg /setworldspawn /spawnpoint /defaultgamemode /item /clone (7044793), /particle /stopsound /tag
+  /rotate (0b566d3), /data get (f5886d9), /scoreboard + operation + selector tag=/scores=/level= (82a8d6e, 6999ffa,
+  f9898af), /bossbar + client sidebar/boss bars (75989f4). Ender chests (59f40f3).
+- Play-test fixes: font advances (11b527b, UI atlas overflow), grass shimmer = missing mipmaps (ffc14f8, diagnosed from
+  2 s motion recordings of both clients; flat_noon SSIM 0.888 -> 0.955), item drops hanging/teleporting (bfe958a), pickup
+  animation + hotbar pop + vanilla insertion order (dc5b9de; fuzz_pickup 750 cases 0 mismatches, 13f7446), chat-box keys
+  (81a4dc2), player water physics fitted to the real client (c4a3f9a, client-water 4/4 cases).
+- Checks: pr_ready green on main after every merge; client_visual 12/12 scenes; client scenarios 35/35; fuzz: clicks 0,
+  commands 0 new (8 known), pickup 0, place/dig known only; client_mesh <= 32849 baseline.
+- Agents: running — double-block breaking + support checks, land animals avoiding water (both due 8:30 pm on their
+  branches). Stopped: the portal-placement agent (no progress; WIP scenario on worktree-agent-a8aab1358eb6aafd2, unmerged).
+- Open: water splash/bubbles/sounds, Depth Strider/Dolphin's Grace/lava/currents; landing sounds + particles; throwables,
+  tool actions, buckets (requested, continue Wed 25 Nov 8 pm); woodland mansions; m8 exit-portal build rule.
+- Schedule: the user takes the laptop away; the loop ends tonight 9 pm WIB with a hand-off in this file.
