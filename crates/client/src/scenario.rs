@@ -14,7 +14,7 @@ use winit::keyboard::KeyCode;
 const W: u32 = 854;
 const H: u32 = 480;
 
-pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer", "falling_block", "sprint", "xp_bar", "titles", "nether", "enchanting_screen", "anvil_screen", "grindstone_screen", "smithing_screen", "brewing_screen", "font_widths", "grass_overlay", "item_drop_smooth", "pickup_anim", "chat_keys", "landing"];
+pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer", "falling_block", "sprint", "xp_bar", "titles", "nether", "enchanting_screen", "anvil_screen", "grindstone_screen", "smithing_screen", "brewing_screen", "font_widths", "grass_overlay", "item_drop_smooth", "pickup_anim", "chat_keys", "landing", "water_splash"];
 
 enum Outcome { Pass(String), Skip(String) }
 
@@ -41,7 +41,7 @@ pub fn run(args: &Args, assets: Arc<Assets>, name: &str) -> Result<bool> {
         let t = Instant::now();
         let r = match s {
             "edge_chunks" => edge_chunks(&ctx), "inventory" => inventory(&ctx), "crafting_table" => crafting_table(&ctx), "death" => death(&ctx),
-            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "falling_block" => falling_block(&ctx), "sprint" => sprint(&ctx), "xp_bar" => xp_bar(&ctx), "titles" => titles(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx), "nether" => nether(&ctx), "enchanting_screen" => enchanting_screen(&ctx), "anvil_screen" => anvil_screen(&ctx), "grindstone_screen" => grindstone_screen(&ctx), "smithing_screen" => smithing_screen(&ctx), "brewing_screen" => brewing_screen(&ctx), "font_widths" => font_widths(&ctx), "grass_overlay" => grass_overlay(&ctx), "item_drop_smooth" => item_drop_smooth(&ctx), "pickup_anim" => pickup_anim(&ctx), "chat_keys" => chat_keys(&ctx), "landing" => landing(&ctx),
+            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "falling_block" => falling_block(&ctx), "sprint" => sprint(&ctx), "xp_bar" => xp_bar(&ctx), "titles" => titles(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx), "nether" => nether(&ctx), "enchanting_screen" => enchanting_screen(&ctx), "anvil_screen" => anvil_screen(&ctx), "grindstone_screen" => grindstone_screen(&ctx), "smithing_screen" => smithing_screen(&ctx), "brewing_screen" => brewing_screen(&ctx), "font_widths" => font_widths(&ctx), "grass_overlay" => grass_overlay(&ctx), "item_drop_smooth" => item_drop_smooth(&ctx), "pickup_anim" => pickup_anim(&ctx), "chat_keys" => chat_keys(&ctx), "landing" => landing(&ctx), "water_splash" => water_splash(&ctx),
             other => Err(anyhow!("unknown scenario {other} (known: {})", ALL.join(", "))),
         };
         let secs = t.elapsed().as_secs_f32();
@@ -969,6 +969,42 @@ fn landing(c: &Ctx) -> Result<Outcome> {
         }
         notes.push(format!("{h}: {} sounds, {dust} dust", ev.len()));
     }
+    Ok(Outcome::Pass(notes.join("; ")))
+}
+
+/// Falling into a pool: the splash sound (normal from 3 blocks, high-speed from 14) with ~13 bubbles +
+/// ~13 drops, the drops gone after a second, the underwater enter sound; leaving it plays the exit sound.
+fn water_splash(c: &Ctx) -> Result<Outcome> {
+    let mut g = c.game("splash")?;
+    join(&mut g)?;
+    cmd(&mut g, "gamemode creative");
+    tp(&mut g, [1000.5, -58.0, 1060.5], 0.0, 0.0)?;
+    cmd(&mut g, "fill 997 -61 1057 1003 -50 1063 stone");
+    cmd(&mut g, "fill 998 -60 1058 1002 -53 1062 water");
+    cmd(&mut g, "fill 998 -52 1058 1002 -30 1062 air");
+    wait(&mut g, 1.0)?;
+    cmd(&mut g, "gamemode survival");
+    wait(&mut g, 0.5)?;
+    let mut notes = Vec::new();
+    for (h, want) in [(3.0, "entity.player.splash"), (20.0, "entity.player.splash.high_speed")] {
+        tp(&mut g, [1000.5, -52.0 + 8.0, 1060.5], 0.0, 0.0)?;
+        wait(&mut g, 2.0)?;
+        g.sounds.log.clear();
+        let p0 = g.particles.len();
+        cmd(&mut g, &format!("tp @s 1000.5 {} 1060.5", -52.0 + h));
+        let mut peak = 0;
+        if !wait_until(&mut g, 4.0, |g| g.player.pos[1] > -52.0 + h - 1.0)? { bail!("tp above the pool not applied"); }
+        wait_until(&mut g, 2.0, |g| !g.player.in_water)?;
+        if !wait_until(&mut g, 5.0, |g| g.player.in_water)? { bail!("never fell into the water: pos {:?} gm {} flying {} block {}", g.player.pos, g.player.gamemode, g.player.flying, g.world.get(1000, -53, 1060)); }
+        for _ in 0..5 { step(&mut g)?; peak = peak.max(g.particles.len().saturating_sub(p0)); }
+        wait(&mut g, 0.4)?;
+        let ev: Vec<String> = g.sounds.log.iter().map(|p| p.event.clone()).collect();
+        if !ev.iter().any(|e| e == want) { bail!("{h}-block fall into water: no {want} in {ev:?}"); }
+        if peak < 20 { bail!("{h}-block fall into water: only {peak} splash particles"); }
+        notes.push(format!("{h}: {want}, {peak} particles"));
+    }
+    wait(&mut g, 2.5)?;
+    if g.particles.len() > 5 { bail!("splash particles did not die out: {}", g.particles.len()); }
     Ok(Outcome::Pass(notes.join("; ")))
 }
 
