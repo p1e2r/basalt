@@ -104,9 +104,9 @@ impl Game {
         let Some((x, z, top)) = self.random_column(around) else { return };
         let p = [x, top, z];
         if BlockState(self.world.get_block(x, top - 1, z)).name() != "grass_block" || !self.spawn_spot_ok(p, 2) { return; }
-        if self.world.light(x, top, z).0 < 9 || !self.far_from_players([x as f64, top as f64, z as f64]) { return; }
+        if { let (sk, bl) = self.world.light(x, top, z); sk.max(bl) < 9 } || !self.far_from_players([x as f64, top as f64, z as f64]) { return; }
         let kind = self.random_animal();
-        for _ in 0..self.rng.gen_range(2..=4) {
+        for _ in 0..4 {
             let q = [x + self.rng.gen_range(-3..=3), 0, z + self.rng.gen_range(-3..=3)];
             let Some(t) = self.top_y(q[0], q[2]) else { continue };
             let q = [q[0], t, q[2]];

@@ -92,6 +92,8 @@ pub struct Ai {
     pub leap_cooldown: u32,
     pub panic_target: Option<[i32; 3]>,
     pub wander: Option<[i32; 3]>,
+    /// Land spot an animal that fell into water is swimming to.
+    pub float_target: Option<[i32; 3]>,
 }
 
 pub struct Mob {

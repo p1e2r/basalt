@@ -13,6 +13,9 @@ pub enum Cell { Open, Solid, Water, Danger }
 
 pub trait Grid { fn cell(&self, x: i32, y: i32, z: i32) -> Cell; }
 
+/// Extra cost of a path node in water (ground mobs detour around lakes unless it is far shorter).
+pub const WATER_COST: f32 = 8.0;
+
 pub struct Params { pub height: i32, pub max_drop: i32, pub max_nodes: usize, pub can_swim: bool }
 
 impl Default for Params { fn default() -> Self { Params { height: 2, max_drop: 3, max_nodes: 600, can_swim: true } } }
@@ -62,7 +65,7 @@ fn neighbours(g: &impl Grid, p: [i32; 3], pr: &Params, out: &mut Vec<([i32; 3], 
         if open_column(q[0], q[1], q[2], pr.height) {
             if let Some(l) = land(g, q, pr) {
                 let water = g.cell(l[0], l[1], l[2]) == Cell::Water;
-                out.push((l, base + (p[1] - l[1]) as f32 * 0.5 + if water { 2.0 } else { 0.0 }));
+                out.push((l, base + (p[1] - l[1]) as f32 * 0.5 + if water { WATER_COST } else { 0.0 }));
             }
         } else if !diag {
             // jump up one block: need head room above us and an open column above the obstacle

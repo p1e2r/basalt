@@ -59,13 +59,30 @@ impl Game {
 
     /// Pick a random standable spot within `h` blocks horizontally of the mob.
     fn random_spot(&mut self, m: &Mob, h: i32) -> Option<[i32; 3]> {
-        let pr = path::Params { height: m.height().ceil() as i32, ..Default::default() };
+        let pr = path::Params { height: m.height().ceil() as i32, can_swim: false, ..Default::default() };
         for _ in 0..10 {
             let p = [m.pos[0].floor() as i32 + self.rng.gen_range(-h..=h), m.pos[1].floor() as i32 + self.rng.gen_range(-3..=3), m.pos[2].floor() as i32 + self.rng.gen_range(-h..=h)];
             let g = WorldGrid(&self.world);
             for dy in 0..6 { let q = [p[0], p[1] - dy, p[2]]; if path::standable(&g, q, &pr) { return Some(q); } }
         }
         None
+    }
+
+    /// Nearest dry standable spot (not water, not next to nothing) within `r` blocks, for an animal that is swimming.
+    fn nearest_land(&self, m: &Mob, r: i32) -> Option<[i32; 3]> {
+        let pr = path::Params { height: m.height().ceil() as i32, can_swim: false, ..Default::default() };
+        let g = WorldGrid(&self.world);
+        let (bx, by, bz) = (m.pos[0].floor() as i32, m.pos[1].floor() as i32, m.pos[2].floor() as i32);
+        let mut best: Option<(i32, [i32; 3])> = None;
+        for dx in -r..=r { for dz in -r..=r {
+            let d = dx * dx + dz * dz;
+            if best.map(|b| d >= b.0).unwrap_or(false) { continue; }
+            for dy in -2..=3 {
+                let q = [bx + dx, by + dy, bz + dz];
+                if path::standable(&g, q, &pr) { best = Some((d, q)); break; }
+            }
+        } }
+        best.map(|b| b.1)
     }
 
     pub(super) fn tick_mobs(&mut self) {
@@ -278,6 +295,12 @@ impl Game {
                 return;
             }
         } else {
+            // float: an animal in water swims back to the nearest dry land
+            if m.in_water || (m.ai.float_target.is_some() && !m.on_ground) {
+                let reached = m.ai.float_target.map(|t| (t[0] as f64 + 0.5 - m.pos[0]).abs() + (t[2] as f64 + 0.5 - m.pos[2]).abs() < 1.0).unwrap_or(true);
+                if reached { m.ai.float_target = self.nearest_land(m, 12); }
+                if let Some(t) = m.ai.float_target { m.ai.wander = None; *goal = Some([t[0] as f64 + 0.5, t[1] as f64, t[2] as f64 + 0.5]); return; }
+            } else { m.ai.float_target = None; }
             // panic
             if m.ai.panic_ticks > 0 {
                 m.ai.panic_ticks -= 1;
