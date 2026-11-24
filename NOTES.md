@@ -730,3 +730,15 @@ and dy), whose shape gave the closed forms below, then their 4 parameters by log
 - Not done: tab-list score and below_name score (basalt-client has no tab list yet; Board::slot_score(0|2, holder) has the data).
 - Client bug found on the way: the 2048x2048 UI atlas overflowed ("ui atlas full at font page 1"), dropping the ascii font
   page so every character advanced 6 px; the atlas is now 2048x4096.
+
+## Land animals and water (M5, 2026-11-24) — scenarios m5_animals_avoid_water / m5_animal_float / m5_chicken_fall
+Measured over the wire with a 24x14 walled pen, grass on x 0..14 and a flush-surface lake 10x14x3 beside it, 4 cows, pigs, sheep and chickens each
+(PersistenceRequired, tag-killed afterwards), 150 s, one position sample per animal per second:
+- Vanilla: 2.4 % of animal-samples in the lake (cow 27, pig 18, sheep 12, chicken 0 of 600 each), 0/16 in the water at the end. So vanilla animals avoid
+  water but do occasionally step in (water costs extra, not forbidden).
+- Basalt before: 61.9 % of samples in the lake, 11/16 at the end (wander targets accepted water cells). After: 0.0 %, 0/16.
+- Dropped in the lake (2 of each kind): vanilla animals ride the surface (mean depth 0.37 blocks) and only 4-5 of 8 reach the shore within 50 s (they do
+  not actively seek land); Basalt's float goal (ai.rs, `float_target`) swims them to the nearest dry standable spot within 12 blocks (8/8 in 25 s).
+- Chicken slow fall: vanilla terminal speed 0.113 blocks/tick, 40 blocks in 17.1 s; Basalt identical (gravity then y *= 0.6 while falling).
+- Path cost (path.rs `WATER_COST`) is 8 per water node; stroll/panic targets (`random_spot`) must be dry land (`can_swim: false`).
+- Natural spawning: grass block, light max(sky, block) >= 9, groups of 4 for all four kinds (weights sheep 12, pig 10, chicken 10, cow 8).
