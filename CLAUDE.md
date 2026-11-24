@@ -242,7 +242,9 @@ The old `tools/*.sh` scripts are thin wrappers around the same tasks, so existin
    Agent worktrees share one build folder: .claude/worktrees/.cargo/config.toml (untracked) sets build.target-dir to the
    main checkout's target/. In a new worktree, `ln -s ../../../target target` so the harness finds target/release.
    Caveat: worktrees building different code at the same time overwrite each other's binaries in the shared folder —
-   build and test one at a time, or point BASALT_SERVER (and --client) at copies of your own binaries.
+   build and test one at a time, or point BASALT_SERVER (and --client) at copies of your own binaries. The config
+   applies to agents already running too (it did on 2026-11-24 and clobbered the main binaries): only enable it
+   (rename config.toml.off -> config.toml) when no agent is running, and create new worktrees after that.
 7. CI: .github/workflows/build.yml builds release binaries (server, client, probe, check) on windows-latest
    (x86_64-pc-windows-msvc), macos-14 (aarch64-apple-darwin) and ubuntu-latest, runs `cargo test --workspace`
    and uploads the binaries; check.yml runs the harness on Linux. Both generate ./data with `cargo xtask extract-data`.
