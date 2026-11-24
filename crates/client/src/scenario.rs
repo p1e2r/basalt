@@ -14,7 +14,7 @@ use winit::keyboard::KeyCode;
 const W: u32 = 854;
 const H: u32 = 480;
 
-pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer", "falling_block", "sprint", "xp_bar", "titles", "nether", "enchanting_screen", "anvil_screen", "grindstone_screen", "smithing_screen", "brewing_screen", "font_widths", "grass_overlay", "item_drop_smooth", "pickup_anim"];
+pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer", "falling_block", "sprint", "xp_bar", "titles", "nether", "enchanting_screen", "anvil_screen", "grindstone_screen", "smithing_screen", "brewing_screen", "font_widths", "grass_overlay", "item_drop_smooth", "pickup_anim", "chat_keys"];
 
 enum Outcome { Pass(String), Skip(String) }
 
@@ -31,6 +31,7 @@ impl Ctx<'_> {
 }
 
 pub fn run(args: &Args, assets: Arc<Assets>, name: &str) -> Result<bool> {
+    std::env::set_var("BASALT_NO_OS_CLIPBOARD", "1");
     let dir = std::env::temp_dir().join(format!("basalt-scenario-{}", std::process::id()));
     std::env::set_var("BASALT_CONFIG_DIR", &dir);
     let ctx = Ctx { args, assets, rules: crate::load_rules(args), run: std::process::id() };
@@ -40,7 +41,7 @@ pub fn run(args: &Args, assets: Arc<Assets>, name: &str) -> Result<bool> {
         let t = Instant::now();
         let r = match s {
             "edge_chunks" => edge_chunks(&ctx), "inventory" => inventory(&ctx), "crafting_table" => crafting_table(&ctx), "death" => death(&ctx),
-            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "falling_block" => falling_block(&ctx), "sprint" => sprint(&ctx), "xp_bar" => xp_bar(&ctx), "titles" => titles(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx), "nether" => nether(&ctx), "enchanting_screen" => enchanting_screen(&ctx), "anvil_screen" => anvil_screen(&ctx), "grindstone_screen" => grindstone_screen(&ctx), "smithing_screen" => smithing_screen(&ctx), "brewing_screen" => brewing_screen(&ctx), "font_widths" => font_widths(&ctx), "grass_overlay" => grass_overlay(&ctx), "item_drop_smooth" => item_drop_smooth(&ctx), "pickup_anim" => pickup_anim(&ctx),
+            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "falling_block" => falling_block(&ctx), "sprint" => sprint(&ctx), "xp_bar" => xp_bar(&ctx), "titles" => titles(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx), "nether" => nether(&ctx), "enchanting_screen" => enchanting_screen(&ctx), "anvil_screen" => anvil_screen(&ctx), "grindstone_screen" => grindstone_screen(&ctx), "smithing_screen" => smithing_screen(&ctx), "brewing_screen" => brewing_screen(&ctx), "font_widths" => font_widths(&ctx), "grass_overlay" => grass_overlay(&ctx), "item_drop_smooth" => item_drop_smooth(&ctx), "pickup_anim" => pickup_anim(&ctx), "chat_keys" => chat_keys(&ctx),
             other => Err(anyhow!("unknown scenario {other} (known: {})", ALL.join(", "))),
         };
         let secs = t.elapsed().as_secs_f32();
@@ -930,6 +931,63 @@ fn break_particles(c: &Ctx) -> Result<Outcome> {
     wait(&mut g, 2.5)?;
     if !g.particles.is_empty() { bail!("{} particles still alive after 2.5 s", g.particles.len()); }
     Ok(Outcome::Pass(format!("{dig_max} while digging, {after} on break, all gone after 2.5 s")))
+}
+
+/// Chat box keys like vanilla: Up/Down through the session history (Down past the newest brings
+/// the draft back), Left/Right/Home/End with Shift selection, Ctrl word jumps, Backspace/Delete,
+/// Ctrl+A/C/X/V, Tab completion, PageUp/PageDown scrolling of the open chat.
+fn chat_keys(c: &Ctx) -> Result<Outcome> {
+    let mut g = c.game("chat")?;
+    join(&mut g)?;
+    let press = |g: &mut Game, k: KeyCode| { g.key(k, true, None); g.key(k, false, None); };
+    let chord = |g: &mut Game, m: KeyCode, k: KeyCode| { g.key(m, true, None); g.key(k, true, None); g.key(k, false, None); g.key(m, false, None); };
+    let typed = |g: &mut Game, t: &str| { for ch in t.chars() { let s = ch.to_string(); g.key(KeyCode::KeyA, true, Some(&s)); g.key(KeyCode::KeyA, false, None); } };
+    let open = |g: &mut Game| { g.key(KeyCode::KeyT, true, None); g.key(KeyCode::KeyT, false, None); };
+    // send three things
+    for m in ["hello one", "/time query daytime", "hello three"] { open(&mut g); typed(&mut g, m); press(&mut g, KeyCode::Enter); step(&mut g)?; }
+    if g.chat_hist != ["hello one", "/time query daytime", "hello three"] { bail!("history {:?}", g.chat_hist); }
+    // history: Up x2 -> the command, Down -> newest, Down -> the draft
+    open(&mut g); typed(&mut g, "draft");
+    press(&mut g, KeyCode::ArrowUp);
+    if g.chat_input.as_deref() != Some("hello three") { bail!("Up: {:?}", g.chat_input); }
+    press(&mut g, KeyCode::ArrowUp);
+    if g.chat_input.as_deref() != Some("/time query daytime") { bail!("Up Up: {:?}", g.chat_input); }
+    press(&mut g, KeyCode::ArrowDown); press(&mut g, KeyCode::ArrowDown);
+    if g.chat_input.as_deref() != Some("draft") { bail!("Down past the newest should restore the draft, got {:?}", g.chat_input); }
+    // editing: Home, insert, End; Shift+Left x3 then Ctrl+X, Ctrl+V at the start
+    g.chat_input = Some("abc def".into()); g.chat_cursor = None; g.chat_sel = None;
+    press(&mut g, KeyCode::Home); typed(&mut g, "X");
+    if g.chat_input.as_deref() != Some("Xabc def") { bail!("Home+type: {:?}", g.chat_input); }
+    press(&mut g, KeyCode::End);
+    for _ in 0..3 { chord(&mut g, KeyCode::ShiftLeft, KeyCode::ArrowLeft); }
+    chord(&mut g, KeyCode::ControlLeft, KeyCode::KeyX);
+    if g.chat_input.as_deref() != Some("Xabc ") { bail!("Shift+Left x3, Ctrl+X: {:?}", g.chat_input); }
+    press(&mut g, KeyCode::Home); chord(&mut g, KeyCode::ControlLeft, KeyCode::KeyV);
+    if g.chat_input.as_deref() != Some("defXabc ") { bail!("Ctrl+V at the start: {:?}", g.chat_input); }
+    // Ctrl+Right jumps a word, Backspace deletes before the cursor, Delete after
+    press(&mut g, KeyCode::Home); chord(&mut g, KeyCode::ControlLeft, KeyCode::ArrowRight); press(&mut g, KeyCode::Backspace);
+    if g.chat_input.as_deref() != Some("defXabc") { bail!("Ctrl+Right then Backspace: {:?}", g.chat_input); }
+    press(&mut g, KeyCode::Home); press(&mut g, KeyCode::Delete);
+    if g.chat_input.as_deref() != Some("efXabc") { bail!("Delete at the start: {:?}", g.chat_input); }
+    // Ctrl+A then typing replaces everything; Ctrl+C keeps the text
+    chord(&mut g, KeyCode::ControlLeft, KeyCode::KeyA); chord(&mut g, KeyCode::ControlLeft, KeyCode::KeyC);
+    if g.chat_input.as_deref() != Some("efXabc") { bail!("Ctrl+C changed the text: {:?}", g.chat_input); }
+    typed(&mut g, "z");
+    if g.chat_input.as_deref() != Some("z") { bail!("typing over Ctrl+A: {:?}", g.chat_input); }
+    // Tab completion still works
+    g.chat_input = Some("/gamem".into()); g.chat_cursor = None; g.update_suggestions();
+    wait_until(&mut g, 2.0, |g| !g.sug.list.is_empty())?;
+    press(&mut g, KeyCode::Tab);
+    if g.chat_input.as_deref() != Some("/gamemode") { bail!("Tab: {:?}", g.chat_input); }
+    press(&mut g, KeyCode::Escape);
+    // PageUp/PageDown scroll the open chat (needs more lines than fit)
+    for i in 0..30 { g.chat.push((format!("line {i}"), Instant::now())); }
+    open(&mut g); press(&mut g, KeyCode::PageUp);
+    if g.chat_scroll == 0 { bail!("PageUp did not scroll"); }
+    press(&mut g, KeyCode::PageDown);
+    if g.chat_scroll != 0 { bail!("PageDown did not scroll back ({})", g.chat_scroll); }
+    press(&mut g, KeyCode::Escape);
+    Ok(Outcome::Pass("history (incl. draft), Home/End, Shift selection, Ctrl word jumps, Backspace/Delete, Ctrl+A/C/X/V, Tab, PageUp/PageDown".into()))
 }
 
 /// Picking an item up: take_item_entity makes the item fly into the player over 3 ticks (a copy is

@@ -215,6 +215,16 @@ pub struct Game {
     name: String,
     chat: Vec<(String, Instant)>,
     chat_input: Option<String>,
+    /// chat box editing: cursor (byte index; None = at the end), selection anchor, session history
+    /// (newest last, at most 100), the history entry being shown, the draft kept while browsing,
+    /// scroll offset of the open chat (lines), and the clipboard used when the OS one isn't reachable
+    chat_cursor: Option<usize>,
+    chat_sel: Option<usize>,
+    chat_hist: Vec<String>,
+    chat_hist_pos: Option<usize>,
+    chat_draft: String,
+    chat_scroll: usize,
+    clipboard: String,
     /// server command tree (clientbound `commands`) and the chat box's suggestion popup
     cmd_tree: Option<suggest::Tree>,
     sug: Sug,
@@ -319,7 +329,7 @@ impl Game {
         let mut g = Game {
             gpu, assets, rules, ui, entity_atlas, biomes, dim_types: Vec::new(), dim: None, world: World::new(-64, 384), pickups: Vec::new(), last_take: 0, pop: [0; 9], player: Player::new(), mesher,
             dirty: HashMap::new(), in_flight: HashSet::new(), events: rx, out: otx, entities: HashMap::new(), player_names: HashMap::new(), board: Default::default(), my_eid: 0, name: o.name,
-            chat: Vec::new(), chat_input: None, cmd_tree: None, sug: Sug::default(), hp: 20.0, food: 20, xp: (0.0, 0), enchantments: Vec::new(), title: (String::new(), String::new(), -1, [10, 70, 20]), actionbar: (String::new(), 0), hotbar: Default::default(), held: 0, inventory: vec![ItemStack::default(); 46], inv_state: 0, carried: ItemStack::default(), day_time: 6000,
+            chat: Vec::new(), chat_input: None, chat_cursor: None, chat_sel: None, chat_hist: Vec::new(), chat_hist_pos: None, chat_draft: String::new(), chat_scroll: 0, clipboard: String::new(), cmd_tree: None, sug: Sug::default(), hp: 20.0, food: 20, xp: (0.0, 0), enchantments: Vec::new(), title: (String::new(), String::new(), -1, [10, 70, 20]), actionbar: (String::new(), 0), hotbar: Default::default(), held: 0, inventory: vec![ItemStack::default(); 46], inv_state: 0, carried: ItemStack::default(), day_time: 6000,
             spawned: false, loaded_sent: false, connected: false, keys: HashSet::new(), mouse: [false; 2], mouse_pos: (0.0, 0.0), slider_drag: None, last_tick: Instant::now(),
             last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, sprint_sent: false, sprinting: false, sprint_trigger: 0, fwd_was: false, sprint_key_was: false, sprint_latch: false, jump_tick: None, particles: Default::default(), equip: (1.0, 1.0), equip_for: -1, shown_item: -1, attack_ticks: 100, walk_dist: (0.0, 0.0), view_bob: (0.0, 0.0), self_hurt: 0, held_name: (String::new(), 0), splash: String::new(), menu_t0: Instant::now(), pings: HashMap::new(), ping_chan: mpsc::channel(), icon_slots: HashMap::new(), ping_rounds: 0, worlds: Vec::new(), integrated: None, sp_world: None, step_dist: 0.0,
             last_place: Instant::now(), debug: false, disconnected: None, death_msg: None, respawn_at: None, auto_respawn: o.auto_respawn,
@@ -1025,22 +1035,105 @@ impl Game {
         self.sug.sel = sel; self.sug.cycling = true; self.sug.for_text = buf.clone();
     }
 
+    /// The chat box's keys, like vanilla's: history (Up/Down; the suggestion list takes them while
+    /// it's shown), Tab completion, PageUp/PageDown scrolling, Left/Right/Home/End with Shift
+    /// selection and Ctrl/Cmd word jumps, Backspace/Delete, Ctrl/Cmd+A/C/V/X.
+    fn chat_key(&mut self, code: KeyCode, text: Option<&str>) {
+        let shift = self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight);
+        let ctrl = self.keys.contains(&KeyCode::ControlLeft) || self.keys.contains(&KeyCode::ControlRight) || self.keys.contains(&KeyCode::SuperLeft) || self.keys.contains(&KeyCode::SuperRight);
+        let Some(buf) = self.chat_input.clone() else { return };
+        let len = buf.len();
+        let cur = self.chat_cursor.unwrap_or(len).min(len);
+        let sel = self.chat_sel.filter(|a| *a != cur && *a <= len);
+        let prev = |i: usize| buf[..i].char_indices().next_back().map(|(j, _)| j).unwrap_or(0);
+        let next = |i: usize| buf[i..].chars().next().map(|c| i + c.len_utf8()).unwrap_or(len);
+        let word_left = |i: usize| { let t = buf[..i].trim_end_matches(' '); t.rfind(' ').map(|j| j + 1).unwrap_or(0) };
+        let word_right = |i: usize| { let rest = &buf[i..]; let skip = rest.find(' ').unwrap_or(rest.len()); let after = &rest[skip..]; i + skip + (after.len() - after.trim_start_matches(' ').len()) };
+        let set = |g: &mut Game, text: String, cursor: usize, anchor: Option<usize>| { g.chat_cursor = Some(cursor); g.chat_sel = anchor; g.chat_input = Some(text); };
+        let mv = |g: &mut Game, to: usize| { let anchor = if shift { Some(sel.unwrap_or(cur)) } else { None }; g.chat_cursor = Some(to); g.chat_sel = anchor; };
+        let cut_sel = |b: &str| -> Option<(String, usize)> { let a = sel?; let (lo, hi) = (a.min(cur), a.max(cur)); Some((format!("{}{}", &b[..lo], &b[hi..]), lo)) };
+        match code {
+            KeyCode::Escape => { self.chat_input = None; self.chat_scroll = 0; self.chat_hist_pos = None; return; }
+            KeyCode::Enter | KeyCode::NumpadEnter => {
+                let m = buf.trim().to_string();
+                self.chat_input = None; self.chat_cursor = None; self.chat_sel = None; self.chat_scroll = 0; self.chat_hist_pos = None;
+                if !m.is_empty() {
+                    if self.chat_hist.last() != Some(&m) { self.chat_hist.push(m.clone()); }
+                    if self.chat_hist.len() > 100 { self.chat_hist.remove(0); }
+                    self.send_chat(&m);
+                }
+                return;
+            }
+            KeyCode::Tab => { let back = shift; self.complete_suggestion(if back { -1 } else { 1 }); self.chat_cursor = None; self.chat_sel = None; return; }
+            KeyCode::ArrowDown | KeyCode::ArrowUp if !self.sug.list.is_empty() && buf.starts_with('/') && self.chat_hist_pos.is_none() => {
+                let n = self.sug.list.len() as isize; let d = if code == KeyCode::ArrowDown { 1 } else { -1 };
+                self.sug.sel = (self.sug.sel as isize + d).rem_euclid(n) as usize; return;
+            }
+            KeyCode::ArrowUp | KeyCode::ArrowDown => {
+                if self.chat_hist.is_empty() { return; }
+                let n = self.chat_hist.len();
+                let pos = match (code, self.chat_hist_pos) {
+                    (KeyCode::ArrowUp, None) => { self.chat_draft = buf.clone(); Some(n - 1) }
+                    (KeyCode::ArrowUp, Some(i)) => Some(i.saturating_sub(1)),
+                    (_, Some(i)) if i + 1 < n => Some(i + 1),
+                    (_, Some(_)) => None,
+                    (_, None) => return,
+                };
+                self.chat_hist_pos = pos;
+                let t = match pos { Some(i) => self.chat_hist[i].clone(), None => std::mem::take(&mut self.chat_draft) };
+                let l = t.len();
+                set(self, t, l, None);
+            }
+            KeyCode::PageUp => { self.chat_scroll = (self.chat_scroll + 19).min(self.chat.len().saturating_sub(20)); return; }
+            KeyCode::PageDown => { self.chat_scroll = self.chat_scroll.saturating_sub(19); return; }
+            KeyCode::ArrowLeft => { let to = match sel { Some(a) if !shift => a.min(cur), _ if ctrl => word_left(cur), _ => prev(cur) }; mv(self, to); return; }
+            KeyCode::ArrowRight => { let to = match sel { Some(a) if !shift => a.max(cur), _ if ctrl => word_right(cur), _ => next(cur) }; mv(self, to); return; }
+            KeyCode::Home => { mv(self, 0); return; }
+            KeyCode::End => { mv(self, len); return; }
+            KeyCode::Backspace | KeyCode::Delete => {
+                if let Some((t, at)) = cut_sel(&buf) { set(self, t, at, None); }
+                else if code == KeyCode::Backspace && cur > 0 { let from = if ctrl { word_left(cur) } else { prev(cur) }; set(self, format!("{}{}", &buf[..from], &buf[cur..]), from, None); }
+                else if code == KeyCode::Delete && cur < len { let to = if ctrl { word_right(cur) } else { next(cur) }; set(self, format!("{}{}", &buf[..cur], &buf[to..]), cur, None); }
+            }
+            KeyCode::KeyA if ctrl => { self.chat_sel = Some(0); self.chat_cursor = Some(len); return; }
+            KeyCode::KeyC | KeyCode::KeyX if ctrl => {
+                if let Some(a) = sel {
+                    let (lo, hi) = (a.min(cur), a.max(cur));
+                    self.clipboard = buf[lo..hi].to_string();
+                    clipboard_set(&self.clipboard);
+                    if code == KeyCode::KeyX { set(self, format!("{}{}", &buf[..lo], &buf[hi..]), lo, None); } else { return; }
+                } else { return; }
+            }
+            KeyCode::KeyV if ctrl => {
+                let paste: String = clipboard_get().unwrap_or_else(|| self.clipboard.clone()).chars().filter(|c| !c.is_control()).collect();
+                let (base, at) = cut_sel(&buf).unwrap_or((buf.clone(), cur));
+                let room = 256usize.saturating_sub(base.len());
+                let mut p = String::new();
+                for c in paste.chars() { if p.len() + c.len_utf8() > room { break; } p.push(c); }
+                let pl = p.len();
+                set(self, format!("{}{}{}", &base[..at], p, &base[at..]), at + pl, None);
+            }
+            _ => {
+                let Some(t) = text else { return };
+                let ins: String = t.chars().filter(|c| !c.is_control()).collect();
+                if ins.is_empty() || ctrl { return; }
+                let (base, at) = cut_sel(&buf).unwrap_or((buf.clone(), cur));
+                if base.len() + ins.len() > 256 { return; }
+                let il = ins.len();
+                set(self, format!("{}{}{}", &base[..at], ins, &base[at..]), at + il, None);
+            }
+        }
+        // typing leaves history browsing; the box at its end follows the text again
+        if !matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown) { self.chat_hist_pos = None; }
+        if self.chat_cursor == Some(self.chat_input.as_ref().map(|b| b.len()).unwrap_or(0)) && self.chat_sel.is_none() { self.chat_cursor = None; }
+        self.update_suggestions();
+    }
+
     pub fn key(&mut self, code: KeyCode, pressed: bool, text: Option<&str>) {
         if pressed { self.keys.insert(code); } else { self.keys.remove(&code); }
         if !pressed { return; }
-        if let Some(buf) = &mut self.chat_input {
-            match code {
-                KeyCode::Escape => self.chat_input = None,
-                KeyCode::Enter | KeyCode::NumpadEnter => { let m = self.chat_input.take().unwrap(); self.send_chat(&m); }
-                KeyCode::Backspace => { buf.pop(); }
-                KeyCode::Tab => { let back = self.keys.contains(&KeyCode::ShiftLeft); self.complete_suggestion(if back { -1 } else { 1 }); return; }
-                KeyCode::ArrowDown | KeyCode::ArrowUp if !self.sug.list.is_empty() => {
-                    let n = self.sug.list.len() as isize; let d = if code == KeyCode::ArrowDown { 1 } else { -1 };
-                    self.sug.sel = (self.sug.sel as isize + d).rem_euclid(n) as usize; return;
-                }
-                _ => if let Some(t) = text { for c in t.chars() { if !c.is_control() && buf.len() < 256 { buf.push(c); } } },
-            }
-            self.update_suggestions();
+        if self.chat_input.is_some() {
+            self.chat_key(code, text);
             return;
         }
         if code == KeyCode::F11 { self.cfg.fullscreen = !self.cfg.fullscreen; self.cfg.save(); self.fullscreen_changed = true; return; }
@@ -1050,8 +1143,8 @@ impl Game {
             None => {}
         }
         match code {
-            KeyCode::KeyT => { self.chat_input = Some(String::new()); self.update_suggestions(); }
-            KeyCode::Slash => { self.chat_input = Some("/".into()); self.update_suggestions(); }
+            KeyCode::KeyT => { self.chat_input = Some(String::new()); self.chat_cursor = None; self.chat_sel = None; self.chat_hist_pos = None; self.chat_scroll = 0; self.update_suggestions(); }
+            KeyCode::Slash => { self.chat_input = Some("/".into()); self.chat_cursor = None; self.chat_sel = None; self.chat_hist_pos = None; self.chat_scroll = 0; self.update_suggestions(); }
             KeyCode::F3 => self.debug = !self.debug,
             KeyCode::KeyE => self.open_inventory(),
             KeyCode::KeyQ => {
@@ -1272,7 +1365,21 @@ impl Game {
         let mut y = h - 40.0 * s;
         if let Some(buf) = &self.chat_input {
             a.rect(ui, 2.0 * s, h - 14.0 * s, w - 4.0 * s, 12.0 * s, [0, 0, 0, 128]);
-            a.text(ui, &format!("{buf}_"), 4.0 * s, h - 12.0 * s, s, [255; 4]);
+            // selection highlight, the text, then the cursor: "_" at the end, a bar inside the text
+            let len = buf.len();
+            let cur = self.chat_cursor.unwrap_or(len).min(len);
+            if let Some(a0) = self.chat_sel.filter(|a0| *a0 != cur && *a0 <= len) {
+                let (lo, hi) = (a0.min(cur), a0.max(cur));
+                let x0 = 4.0 * s + a.text_width(&buf[..lo], s);
+                let x1 = 4.0 * s + a.text_width(&buf[..hi], s);
+                a.rect(ui, x0, h - 13.0 * s, x1 - x0, 10.0 * s, [0, 0, 255, 255]);
+            }
+            a.text(ui, buf, 4.0 * s, h - 12.0 * s, s, [255; 4]);
+            let blink = (self.ticks / 6).is_multiple_of(2);
+            if blink {
+                let cx = 4.0 * s + a.text_width(&buf[..cur], s);
+                if cur == len { a.text(ui, "_", cx, h - 12.0 * s, s, [255; 4]); } else { a.rect(ui, cx, h - 13.0 * s, s, 10.0 * s, [208, 208, 208, 255]); }
+            }
             // suggestion popup above the input line, anchored at the word being replaced
             if !self.sug.list.is_empty() && buf.starts_with('/') {
                 const ROWS: usize = 10;
@@ -1288,7 +1395,7 @@ impl Game {
             }
         }
         if in_game {
-            for (msg, t) in self.chat.iter().rev().take(if open { 20 } else { 10 }) {
+            for (msg, t) in self.chat.iter().rev().skip(if open { self.chat_scroll } else { 0 }).take(if open { 20 } else { 10 }) {
                 let age = t.elapsed().as_secs_f32();
                 if !open && age > 10.0 { break; }
                 let alpha = if open { 255 } else { ((10.0 - age).min(1.0) * 255.0) as u8 };
@@ -1783,4 +1890,30 @@ fn attack_cooldown(a: &Assets, item: i32) -> f32 {
     let speed = if n.ends_with("_sword") { 1.6 } else if n.ends_with("_pickaxe") { 1.2 } else if n.ends_with("_shovel") { 1.0 }
         else if n.ends_with("_axe") { 0.9 } else if n.ends_with("_hoe") { 2.0 } else if n == "trident" { 1.1 } else if n == "mace" { 0.6 } else { 4.0 };
     20.0 / speed
+}
+
+/// The OS clipboard where a command-line tool provides it (macOS pbcopy/pbpaste, Linux
+/// wl-copy/xclip, Windows clip/powershell); the chat box falls back to its own copy otherwise.
+fn clipboard_set(text: &str) {
+    use std::io::Write;
+    // scenarios must not overwrite the user's clipboard
+    if std::env::var_os("BASALT_NO_OS_CLIPBOARD").is_some() { return; }
+    let cmds: &[&[&str]] = if cfg!(target_os = "macos") { &[&["pbcopy"]] } else if cfg!(windows) { &[&["clip"]] } else { &[&["wl-copy"], &["xclip", "-selection", "clipboard"]] };
+    for c in cmds {
+        if let Ok(mut ch) = std::process::Command::new(c[0]).args(&c[1..]).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
+            if let Some(mut i) = ch.stdin.take() { let _ = i.write_all(text.as_bytes()); }
+            let _ = ch.wait();
+            return;
+        }
+    }
+}
+fn clipboard_get() -> Option<String> {
+    if std::env::var_os("BASALT_NO_OS_CLIPBOARD").is_some() { return None; }
+    let cmds: &[&[&str]] = if cfg!(target_os = "macos") { &[&["pbpaste"]] } else if cfg!(windows) { &[&["powershell", "-NoProfile", "-Command", "Get-Clipboard"]] } else { &[&["wl-paste", "-n"], &["xclip", "-selection", "clipboard", "-o"]] };
+    for c in cmds {
+        if let Ok(o) = std::process::Command::new(c[0]).args(&c[1..]).output() {
+            if o.status.success() { return Some(String::from_utf8_lossy(&o.stdout).trim_end_matches(['\r', '\n']).to_string()); }
+        }
+    }
+    None
 }
