@@ -13,7 +13,8 @@
 #   jigsaw pieces 100 %, and block parity inside the piece boxes at least BLOCK_FLOOR per type (terrain
 #   adaptation, 2026-11-24: villages / outposts 98.5, ancient cities 95, trial chambers 99, igloos and
 #   swamp huts 97, desert pyramids 75 (98.4-99.9 unless vanilla sinks the box), jungle temples 85,
-#   mineshafts 86 (pieces exact, per-block randoms statistical), mesa mineshafts 10 (y not fitted); a miss is
+#   mineshafts 86 (pieces exact, per-block randoms statistical), mesa mineshafts 10 (y not fitted), strongholds 74
+#   (pieces exact, shell brick draws fitted), monuments 70 (measured building, rooms not fitted); a miss is
 #   the mismatch class `blocks-<type>`). Known gaps: crates/check/known-divergences.txt lines `structures <type>`.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -32,15 +33,19 @@ mkdir -p "$OUT"
 # a swamp hut (42), 4x4 chunks. Sites with a fifth field share one vanilla world with several small
 # force-loaded squares (tools/structure-sites.sh SEED NAME R CX,CZ..., cached in
 # vanilla/structures/<seed>_<name>): desert pyramids (incl. orientations 0/2 and one of the 3/9 boxes
-# vanilla sinks 1-2 blocks) and jungle temples (incl. orientation 1); one mesa mineshaft (12345).
+# vanilla sinks 1-2 blocks) and jungle temples (incl. orientation 1); one mesa mineshaft (12345); three whole
+# strongholds (shblocks, 16x16 chunks each) and four monuments (monblocks, 6x6 chunks each).
 TEMPLES_12345="-223,-312 -237,-312 -319,-303 -94,3 -105,12 -113,-20 -110,-55 -113,72 -146,66"
 TEMPLES_42="-85,-109 197,149 -126,-232 -115,246 -140,-234 244,148 -84,181 9,-209 82,228"
 TEMPLES_1="5,112 -150,19 -153,49"
 MESA_12345="-168,110"
+SHBLOCKS_12345="-35,-103 110,23 293,-3"
+MONBLOCKS_12345="38,-115 138,-16 110,-85 77,-119 148,-47 37,-152 140,-72 15,-157 75,-148 166,-157 -153,198 -247,-46 235,108 149,-219 256,-84 -168,211"
 SITES=("12345 32 0 0" "42 32 0 0" "1 32 0 0" "12345 8 10 55" "12345 8 -146 37" "12345 8 -66 -98" "12345 8 91 75" "12345 8 75 -23" "12345 8 17 -60" "12345 2 171 6" "42 2 144 -51"
   "12345 2 -223 -312 temples" "42 2 -115 246 temples" "42 2 -140 -234 temples" "42 2 -85 -109 temples"
   "12345 2 -110 -55 temples" "12345 2 -113 72 temples" "42 2 82 228 temples" "1 2 -150 19 temples"
-  "12345 6 -168 110 mesa")
+  "12345 6 -168 110 mesa" "12345 8 -35 -103 shblocks" "12345 8 110 23 shblocks" "12345 8 293 -3 shblocks"
+  "12345 3 38 -115 monblocks" "12345 3 148 -47 monblocks" "12345 3 -168 211 monblocks" "12345 3 235 108 monblocks")
 [ $QUICK = 1 ] && SITES=("12345 8 10 55" "42 32 0 0")
 KNOWN=${CHECK_KNOWN:-crates/check/known-divergences.txt}
 cargo build --release -q -p basalt-worldgen --example structures 2>&1 | tail -5
@@ -53,7 +58,12 @@ for site in "${SITES[@]}"; do
   [ "$CX" != 0 ] || [ "$CZ" != 0 ] && dir=vanilla/structures/${seed}_${CX}_${CZ}
   if [ -n "$multi" ]; then
     dir=vanilla/structures/${seed}_$multi
-    if [ "$multi" = mesa ]; then eval "list=\$MESA_$seed"; else eval "list=\$TEMPLES_$seed"; fi
+    case $multi in
+      mesa) eval "list=\$MESA_$seed" ;;
+      shblocks) eval "list=\$SHBLOCKS_$seed" ;;
+      monblocks) eval "list=\$MONBLOCKS_$seed" ;;
+      *) eval "list=\$TEMPLES_$seed" ;;
+    esac
     gen=(tools/structure-sites.sh "$seed" "$multi" "$R" $list)
   else
     gen=(tools/structure-world.sh "$seed" "$R" "$CX" "$CZ")
@@ -63,13 +73,23 @@ for site in "${SITES[@]}"; do
   fi
   cases=$((cases+1))
   log=$OUT/structure-parity-$seed-$CX-$CZ.txt
-  # Blocks are measured where Basalt places pieces (jigsaw + template structures).
-  CENTER=$CX,$CZ BLOCK_TYPES=${BLOCK_TYPES:-village,pillager,trail,trial,ancient,shipwreck,ruined,ocean,igloo,swamp,desert,jungle} MAX_CHUNKS=${MAX_CHUNKS:-150} \
+  # Blocks are measured where Basalt places pieces (jigsaw + template structures). The stronghold /
+  # monument squares measure only their own type (other structures there are cut by the square).
+  bt=${BLOCK_TYPES:-village,pillager,trail,trial,ancient,shipwreck,ruined,ocean,igloo,swamp,desert,jungle,monument}
+  [ "$multi" = shblocks ] && bt=none
+  [ "$multi" = monblocks ] && bt=monument
+  CENTER=$CX,$CZ BLOCK_TYPES=$bt MAX_CHUNKS=${MAX_CHUNKS:-150} \
     ./target/release/examples/structures compare "$dir/world/dimensions/minecraft/overworld/region" "$R" "$seed" > "$log" 2>&1
   # Mineshafts span many chunks: measured in their own pass (own chunk cap) on the large sites,
   # so they don't take the chunk budget of the other types.
   if [ "$R" -ge 32 ] || [ "$multi" = mesa ]; then
     CENTER=$CX,$CZ ONLY=mineshaft BLOCK_TYPES=mineshaft MAX_CHUNKS=${MS_CHUNKS:-120} \
+      ./target/release/examples/structures compare "$dir/world/dimensions/minecraft/overworld/region" "$R" "$seed" 2>&1 \
+      | grep "^BLOCKS" >> "$log"
+  fi
+  # Strongholds: their own pass over the whole square (one stronghold per shblocks site).
+  if [ "$multi" = shblocks ]; then
+    CENTER=$CX,$CZ ONLY=stronghold BLOCK_TYPES=stronghold MAX_CHUNKS=1000 \
       ./target/release/examples/structures compare "$dir/world/dimensions/minecraft/overworld/region" "$R" "$seed" 2>&1 \
       | grep "^BLOCKS" >> "$log"
   fi
@@ -88,14 +108,15 @@ for l in open(log):
     if not m: continue
     t, v, b, mt, a, n = m.group(1), *map(int, m.groups()[1:])
     sv += v; sm += mt; sx += b - mt
-    jig = t.startswith(("village", "pillager", "trail", "trial", "ancient"))
+    jig = t.startswith(("village", "pillager", "trail", "trial", "ancient", "stronghold", "monument", "mansion"))
     if jig: pm += a; pn += n
     ok = mt == v and b == mt and (not jig or a == n)
     if not ok:
         bad.append(t)
         if t not in kn: new.append(t)
 FLOOR = {"village": 98.5, "pillager": 98.5, "ancient": 95.0, "trial": 99.0, "igloo": 97.0, "swamp": 97.0,
-         "desert": 75.0, "jungle": 85.0, "mineshaft_mesa": 10.0, "mineshaft": 86.0}
+         "desert": 75.0, "jungle": 85.0, "mineshaft_mesa": 10.0, "mineshaft": 86.0,
+         "stronghold": 74.0, "monument": 70.0}
 for l in open(log):
     m = re.match(r"BLOCKS (\S+)\s+([\d.]+)% of (\d+)", l)
     if not m or int(m.group(3)) < 200: continue

@@ -327,6 +327,20 @@ fn main() -> Result<()> {
                     if !g.is_structure_chunk(set, cx, cz) {
                         continue;
                     }
+                    if std::env::var_os("SCAN_NEAR").is_some() {
+                        // candidates with a biome of the structure within 24 blocks (measuring)
+                        let near = (-24..=40).step_by(8).any(|dx| {
+                            (-24..=40).step_by(8).any(|dz| {
+                                let (x, z) = (cx * 16 + dx, cz * 16 + dz);
+                                let y = g.first_free(x, z, false);
+                                s.defs[def].biomes[g.biome_at(x, y, z) as usize]
+                            })
+                        });
+                        if near {
+                            out.push((cx * cx + cz * cz, cx, cz));
+                        }
+                        continue;
+                    }
                     if let Some(st) = g.select_start(set, cx, cz, false) {
                         if st.def == def {
                             out.push((cx * cx + cz * cz, cx, cz));
@@ -523,6 +537,174 @@ fn main() -> Result<()> {
                 println!("{line}");
             }
         }
+        "pcells" => {
+            // pcells REGION R SEED ID: per saved piece of structure ID (procedural: stronghold,
+            // monument, mansion) in the square, its fields and the vanilla blocks of the cells of its
+            // box inside fully generated chunks in the piece frame (x across, z along `O`; states
+            // turned into that frame) + whether Basalt's terrain without structures has the same
+            // block there. JSON lines {"id","O","BB",fields..,"cells":[[x,y,z,state,terrain]..]}
+            use basalt_worldgen::structure::place::transform_state;
+            use basalt_worldgen::structure::template::Rotation;
+            let seed: i64 = args[4].parse()?;
+            std::env::set_var("BASALT_NO_STRUCTURES", "1");
+            let g0 = basalt_worldgen::Generator::new(seed);
+            std::env::remove_var("BASALT_NO_STRUCTURES");
+            let (ox, oz) = center();
+            let (_, _, have) = vanilla_starts_ex(dir, r)?;
+            let mut cache: HashMap<(i32, i32), Option<(Vec<u16>, Vec<u16>)>> = HashMap::new();
+            for cx in ox - r..ox + r {
+                for cz in oz - r..oz + r {
+                    let Some(root) = read_nbt(dir, cx, cz)? else {
+                        continue;
+                    };
+                    let Some(Tag::Compound(starts)) =
+                        root.get("structures").and_then(|s| s.get("starts"))
+                    else {
+                        continue;
+                    };
+                    for (id, st) in starts {
+                        if id.trim_start_matches("minecraft:") != args[5] {
+                            continue;
+                        }
+                        for c in st
+                            .get("Children")
+                            .and_then(|c| c.as_list())
+                            .map(|l| l.as_slice())
+                            .unwrap_or(&[])
+                        {
+                            let Tag::Compound(m) = c else { continue };
+                            let Some(Tag::IntArray(bb)) = c.get("BB") else {
+                                continue;
+                            };
+                            let o = c.get("O").and_then(|x| x.as_i64()).unwrap_or(0) as u8;
+                            let mut obj = serde_json::Map::new();
+                            for (k, v) in m {
+                                match v {
+                                    Tag::Byte(b) => {
+                                        obj.insert(k.clone(), (*b as i64).into());
+                                    }
+                                    Tag::Int(b) => {
+                                        obj.insert(k.clone(), (*b as i64).into());
+                                    }
+                                    Tag::String(b) => {
+                                        obj.insert(k.clone(), b.clone().into());
+                                    }
+                                    Tag::IntArray(b) => {
+                                        obj.insert(k.clone(), b.clone().into());
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            let (w, d) = if o == 1 || o == 3 {
+                                (bb[5] - bb[2] + 1, bb[3] - bb[0] + 1)
+                            } else {
+                                (bb[3] - bb[0] + 1, bb[5] - bb[2] + 1)
+                            };
+                            let mut cells = Vec::new();
+                            for lx in 0..w {
+                                for lz in 0..d {
+                                    let (x, z) = match o {
+                                        0 => (bb[0] + lx, bb[2] + lz),
+                                        2 => (bb[0] + lx, bb[5] - lz),
+                                        3 => (bb[0] + lz, bb[2] + lx),
+                                        _ => (bb[3] - lz, bb[2] + lx),
+                                    };
+                                    let key = (x >> 4, z >> 4);
+                                    if !have.contains(&key) {
+                                        continue;
+                                    }
+                                    let e = cache.entry(key).or_insert_with(|| {
+                                        let v = vanilla_blocks(dir, key.0, key.1).ok()??;
+                                        let b = g0.generate_chunk(key.0, key.1);
+                                        let mut t = vec![0u16; 384 * 256];
+                                        for yy in -64..320 {
+                                            for zz in 0..16 {
+                                                for xx in 0..16 {
+                                                    t[(((yy + 64) as usize) << 8)
+                                                        | (zz << 4)
+                                                        | xx] = b.get(xx, yy, zz);
+                                                }
+                                            }
+                                        }
+                                        Some((v, t))
+                                    });
+                                    let Some((v, t)) = e else { continue };
+                                    for y in bb[1]..=bb[4] {
+                                        let i = (((y + 64) as usize) << 8)
+                                            | (((z & 15) as usize) << 4)
+                                            | (x & 15) as usize;
+                                        let vs = v[i];
+                                        let ls = match o {
+                                            0 => vs,
+                                            2 => transform_state(vs, Rotation::Cw180, true),
+                                            3 => transform_state(vs, Rotation::Ccw90, true),
+                                            _ => transform_state(vs, Rotation::Ccw90, false),
+                                        };
+                                        cells.push(serde_json::json!([
+                                            lx,
+                                            y - bb[1],
+                                            lz,
+                                            basalt_data::BlockState(ls as u32).to_string(),
+                                            (t[i] == vs) as i32
+                                        ]));
+                                    }
+                                }
+                            }
+                            obj.insert("cells".into(), cells.into());
+                            obj.insert("w".into(), w.into());
+                            obj.insert("d".into(), d.into());
+                            println!("{}", serde_json::Value::Object(obj));
+                        }
+                    }
+                }
+            }
+        }
+        "shdump" => {
+            // shdump STRUCT SEED CX,CZ...: Basalt's pieces of a procedural structure (stronghold /
+            // monument / mansion) started in those chunks, as JSON lines like `json`'s Children
+            use basalt_worldgen::structure::PieceKind;
+            let seed: i64 = args[3].parse()?;
+            let g = basalt_worldgen::Generator::new(seed);
+            let s = g.structures().unwrap();
+            let def = *s.by_name.get(args[2].as_str()).expect("structure");
+            for c in &args[4..] {
+                let v: Vec<i32> = c.split(',').map(|x| x.parse().unwrap()).collect();
+                let Some(st) = g.try_start(def, v[0], v[1], true) else {
+                    println!("{{\"cx\":{},\"cz\":{},\"Children\":[]}}", v[0], v[1]);
+                    continue;
+                };
+                let mut ch = Vec::new();
+                for p in &st.pieces {
+                    let b = p.bb;
+                    let bb = [b.min[0], b.min[1], b.min[2], b.max[0], b.max[1], b.max[2]];
+                    if let PieceKind::Stronghold { piece } = &p.kind {
+                        ch.push(serde_json::json!({"id": format!("minecraft:{}", piece.kind.id()), "BB": bb, "O": piece.o, "GD": piece.depth, "k": format!("{:?}", piece.kind)}));
+                    } else {
+                        ch.push(serde_json::json!({"id": "?", "BB": bb}));
+                    }
+                }
+                println!(
+                    "{}",
+                    serde_json::json!({"cx": v[0], "cz": v[1], "Children": ch})
+                );
+            }
+        }
+        "rings" => {
+            // rings SET SEED: chunk positions of a concentric-rings set (dir argument = set name)
+            let seed: i64 = args[3].parse()?;
+            let g = basalt_worldgen::Generator::new(seed);
+            let s = g.structures().unwrap();
+            let si = s
+                .sets
+                .iter()
+                .position(|x| x.name.ends_with(&args[2]))
+                .unwrap();
+            let t = std::time::Instant::now();
+            for (x, z) in g.ring_positions(si).iter() {
+                println!("{x} {z}");
+            }
+            eprintln!("{:?}", t.elapsed());
+        }
         "locate" => {
             // locate ID X,Z SEED   (dir argument = id)
             let seed: i64 = args[4].parse()?;
@@ -594,6 +776,58 @@ fn main() -> Result<()> {
                     all[0],
                     all[all.len() / 2]
                 );
+            }
+        }
+        "chunkrand" => {
+            // chunkrand SEED CX,CZ NAME N: the first N nextFloat of the placement random a structure's
+            // pieces get in chunk CX,CZ (decoration seed + the structure's index in its step)
+            use basalt_worldgen::random::{
+                set_decoration_seed, set_feature_seed, BitXoroshiro, Rng,
+            };
+            let seed: i64 = args[2].parse()?;
+            let g = basalt_worldgen::Generator::new(seed);
+            let s = g.structures().unwrap();
+            let v: Vec<i32> = args[3].split(',').map(|x| x.parse().unwrap()).collect();
+            let def = *s.by_name.get(args[4].as_str()).expect("structure");
+            let step = s.defs[def].step;
+            let idx = s.defs[..def].iter().filter(|d| d.step == step).count() as i32;
+            let mut r = BitXoroshiro::new(0);
+            let deco = set_decoration_seed(&mut r, seed, v[0] * 16, v[1] * 16);
+            set_feature_seed(&mut r, deco, idx, step as i32);
+            let n: usize = args[5].parse()?;
+            let f: Vec<String> = (0..n).map(|_| format!("{:.4}", r.next_float())).collect();
+            println!("{}", f.join(" "));
+        }
+        "mfeat" => {
+            // mfeat SEED CX,CZ...: start rotation draw + WG surface heights around a chunk (rows z
+            // -16..32 step 8, columns x -16..32 step 8 from the chunk corner) + the biome there
+            use basalt_worldgen::random::{set_large_feature_seed, JavaRandom, Rng};
+            let seed: i64 = args[2].parse()?;
+            let g = basalt_worldgen::Generator::new(seed);
+            for c in &args[3..] {
+                let v: Vec<i32> = c.split(',').map(|x| x.parse().unwrap()).collect();
+                let mut rr = JavaRandom::new(0);
+                set_large_feature_seed(&mut rr, seed, v[0], v[1]);
+                let rot = rr.next_int_bounded(4);
+                let mut hs = Vec::new();
+                for dz in (-16..=32).step_by(8) {
+                    let mut row = Vec::new();
+                    for dx in (-16..=32).step_by(8) {
+                        row.push(g.first_free(v[0] * 16 + dx, v[1] * 16 + dz, false));
+                    }
+                    hs.push(row);
+                }
+                println!("{c} rot={rot} {:?}", hs);
+                for dz in (-16..=32).step_by(8) {
+                    let mut row = String::new();
+                    for dx in (-16..=32).step_by(8) {
+                        let (x, z) = (v[0] * 16 + dx, v[1] * 16 + dz);
+                        let y = g.first_free(x, z, false) - 1;
+                        let b = &g.biome_names[g.biome_at(x, y, z) as usize];
+                        row += &format!(" {:>12}", b.trim_start_matches("minecraft:"));
+                    }
+                    println!("   {row}");
+                }
             }
         }
         "h" => {
