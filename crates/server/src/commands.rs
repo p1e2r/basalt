@@ -18,6 +18,7 @@ pub const IMPLEMENTED: &[&str] = &[
     "ban",
     "ban-ip",
     "banlist",
+    "bossbar",
     "clear",
     "clone",
     "damage",

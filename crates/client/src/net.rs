@@ -39,6 +39,8 @@ pub enum Event {
     /// player_rotation (/rotate): yaw, yaw relative, pitch, pitch relative
     Rotate { yaw: f32, ry: bool, pitch: f32, rp: bool },
     Chat(String),
+    /// scoreboard / boss bar packets
+    Board(crate::board::Update),
     Health { hp: f32, food: i32 },
     GameMode(u8),
     Time { game: i64, day: i64 },
@@ -302,6 +304,33 @@ fn handle_play(id: i32, data: &[u8], tx: &Sender<Event>, players: &mut HashMap<U
             Event::Suggestions { id, start, len, list }
         }
         cb::DISGUISED_CHAT => Event::Chat(crate::lang::styled(&r.nbt()?)),
+        cb::SET_OBJECTIVE => {
+            use crate::board::Update;
+            let name = r.str()?; let mode = r.u8()?;
+            if mode == 1 { Event::Board(Update::Objective { name, mode, title: String::new(), render: 0 }) }
+            else { let title = crate::lang::styled(&r.nbt()?); let render = r.varint()?; Event::Board(Update::Objective { name, mode, title, render }) }
+        }
+        cb::SET_DISPLAY_OBJECTIVE => { let slot = r.varint()?; let name = r.str()?; Event::Board(crate::board::Update::Display { slot, name }) }
+        cb::SET_SCORE => {
+            let holder = r.str()?; let objective = r.str()?; let value = r.varint()?;
+            let display = if r.bool()? { Some(crate::lang::styled(&r.nbt()?)) } else { None };
+            let fmt = read_number_format(&mut r)?;
+            Event::Board(crate::board::Update::Score { holder, objective, value, display, fmt })
+        }
+        cb::RESET_SCORE => { let holder = r.str()?; let objective = if r.bool()? { Some(r.str()?) } else { None }; Event::Board(crate::board::Update::Reset { holder, objective }) }
+        cb::BOSS_EVENT => {
+            use crate::board::{BossOp, Update};
+            let uuid = r.uuid()?;
+            let op = match r.varint()? {
+                0 => { let name = crate::lang::styled(&r.nbt()?); let progress = r.f32()?; let color = r.varint()?; let overlay = r.varint()?; let flags = r.u8()?; BossOp::Add { name, progress, color, overlay, flags } }
+                1 => BossOp::Remove,
+                2 => BossOp::Progress(r.f32()?),
+                3 => BossOp::Name(crate::lang::styled(&r.nbt()?)),
+                4 => { let color = r.varint()?; let overlay = r.varint()?; BossOp::Style { color, overlay } }
+                _ => BossOp::Flags(r.u8()?),
+            };
+            Event::Board(Update::Boss { uuid, op })
+        }
         cb::SET_HEALTH => { let hp = r.f32()?; let food = r.varint()?; Event::Health { hp, food } }
         cb::SET_EXPERIENCE => { let progress = r.f32()?; let level = r.varint()?; let total = r.varint()?; Event::Experience { progress, level, total } }
         cb::GAME_EVENT => { let e = r.u8()?; let v = r.f32()?; if e == 3 { Event::GameMode(v as u8) } else { return Ok(()) } }
@@ -402,6 +431,13 @@ fn handle_play(id: i32, data: &[u8], tx: &Sender<Event>, players: &mut HashMap<U
     };
     tx.send(ev).ok();
     Ok(())
+}
+
+/// Optional score number format: absent = the number, 0 blank, 1 styled (number kept), 2 fixed text.
+fn read_number_format(r: &mut Reader) -> Result<crate::board::Fmt> {
+    use crate::board::Fmt;
+    if !r.bool()? { return Ok(Fmt::Default); }
+    Ok(match r.varint()? { 0 => Fmt::Blank, 1 => { r.nbt()?; Fmt::Default } _ => Fmt::Fixed(crate::lang::styled(&r.nbt()?)) })
 }
 
 /// Decode a chunk on the caller's thread.

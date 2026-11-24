@@ -706,3 +706,27 @@ and dy), whose shape gave the closed forms below, then their 4 parameters by log
   99.58), pillager_outpost 90.53 -> 99.72 (93.50 -> 99.85), ancient_city 13.5 -> 96.6 (halo 58.9 -> 94.4; the rest is
   sculk). Snowy/taiga sites were not used for fitting. Encapsulate (trial chambers, already 99.7 %) and bury not fitted.
 - Turn off with env BASALT_NO_BEARD (measuring); `HALO=n` in `structures compare` reports the halo rows.
+
+## Scoreboard and boss bar HUD (client) and /bossbar (server), measured 2026-11-24
+- boss_event (clientbound): UUID, varint action. 0 add: name NBT, f32 progress, varint colour, varint overlay, u8 flags;
+  1 remove; 2 progress f32; 3 name NBT; 4 style (varint colour, varint overlay); 5 flags u8. Colours pink 0 blue 1 red 2
+  green 3 yellow 4 purple 5 white 6; overlays progress, notched_6, notched_10, notched_12, notched_20 = 0..4.
+  Vanilla sends progress = value/max only when the clamped fraction changed (max 100 -> 20 with value 500 sends nothing);
+  `set visible false` sends remove, `true` a full add; `set players` with no targets removes everyone. Value above max clamps to progress 1.
+- custom_boss_events.dat: data{"ns:id": {Name, Color, Overlay, Value, Max, Visible, Players}} with every default field
+  left out (Value 0, Max 100, white, progress, no players; Visible is written only when true). Players are int-array UUIDs.
+- Replies: commands.bossbar.* (create.success/failed, unknown, remove.success, list.bars.some/none, get.*, set.*.success,
+  set.*.unchanged, set.visible.success.*, set.visibility.unchanged.*, set.players.success.*); the bar name argument is
+  wrapped in chat.square_brackets. m13_bossbar diffs all 41 steps (reply + packets) against vanilla.
+- Client sidebar (client_visual scenes scoreboard_sidebar / scoreboard_full, identical geometry): entries sorted by score
+  desc then name (case-insensitive), `#` holders hidden, at most 15 (highest kept); GUI px at scale 1: line 9; bottom =
+  floor(h/2 + n*9/3); text left = w - maxwidth - 3, maxwidth = max(title, name + width(": ") + score); black backgrounds
+  from left-2 to w-1: header (9 high, ending 1 above the first entry) alpha 102, body alpha 76; title centred, white, no
+  shadow; names white no shadow; scores right-aligned to w-1, 0xFF5555, no shadow.
+- Client boss bars (scene bossbars): x = (w-182)/2, first bar y 12, name centred 9 px above, 19 px per bar, stop when
+  y >= h/3; sprites boss_bar/<colour>_background + _progress cropped to round(progress*182) px (0.5 -> 91, 0.25 -> 46),
+  notched overlay on top of both. Captures of the real client are colour-managed by macOS, so saturated colours differ
+  slightly from basalt's raw output; geometry and white text match.
+- Not done: tab-list score and below_name score (basalt-client has no tab list yet; Board::slot_score(0|2, holder) has the data).
+- Client bug found on the way: the 2048x2048 UI atlas overflowed ("ui atlas full at font page 1"), dropping the ascii font
+  page so every character advanced 6 px; the atlas is now 2048x4096.

@@ -9,6 +9,8 @@ use basalt_data::{registries as reg, BlockState};
 use basalt_nbt::Tag;
 use basalt_protocol::{ids::play::clientbound as cb, text, Writer};
 
+#[path = "bossbar.rs"]
+pub(super) mod bossbar;
 #[path = "data.rs"]
 mod data;
 #[path = "score.rs"]
@@ -607,6 +609,7 @@ impl Game {
             }
             path if path.starts_with("time") => self.cmd_time(eid, p, path)?,
             path if path.starts_with("scoreboard ") => self.cmd_scoreboard(eid, p)?,
+            path if path.starts_with("bossbar ") => self.cmd_bossbar(eid, p)?,
             path if path.starts_with("data get ") => self.cmd_data_get(eid, p)?,
             path if path.starts_with("particle name") => self.cmd_particle(eid, p)?,
             path if path.starts_with("stopsound targets") => {

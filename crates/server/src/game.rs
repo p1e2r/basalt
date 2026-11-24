@@ -165,6 +165,8 @@ pub struct Game {
     random_tick_speed: i32,
     /// /scoreboard state (data/minecraft/scoreboard.dat)
     scoreboard: cmd::score::Scoreboard,
+    /// /bossbar state (data/minecraft/custom_boss_events.dat)
+    bossbars: cmd::bossbar::BossBars,
     /// game mode new players get (/defaultgamemode, --gamemode)
     default_gamemode: u8,
     /// 0 peaceful, 1 easy, 2 normal, 3 hard (saved in basalt.json; Basalt's default is Easy)
@@ -225,7 +227,7 @@ impl Game {
         let player_type = registry_id(reg::ENTITY_TYPE, "player").unwrap_or(0);
         let data = sh.data.clone();
         let sh_difficulty = sh.cfg.difficulty;
-        let mut g = Game { sh, world: s.world, gen: s.gen, players: s.players, tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir, data, commands_body: None, weather: Weather::default(), items: s.items, mobs: s.mobs, arrows: s.arrows, fallers: s.fallers, gravity_checks: s.gravity_checks, random_tick_speed: 3, scoreboard: Default::default(), default_gamemode: 0, difficulty: sh_difficulty, orbs: s.orbs, bes: s.bes, path_budget: 0, no_spawning: false, rng: rand::rngs::StdRng::from_entropy(), cur: dim::OVERWORLD, parked: states, cmd_dim: None, portals: s.portals, portal_quiet: false };
+        let mut g = Game { sh, world: s.world, gen: s.gen, players: s.players, tick: 0, day_time: 1000, spawn: [0.5, 0.0, 0.5], player_type, dir, data, commands_body: None, weather: Weather::default(), items: s.items, mobs: s.mobs, arrows: s.arrows, fallers: s.fallers, gravity_checks: s.gravity_checks, random_tick_speed: 3, scoreboard: Default::default(), bossbars: Default::default(), default_gamemode: 0, difficulty: sh_difficulty, orbs: s.orbs, bes: s.bes, path_budget: 0, no_spawning: false, rng: rand::rngs::StdRng::from_entropy(), cur: dim::OVERWORLD, parked: states, cmd_dim: None, portals: s.portals, portal_quiet: false };
         g.no_spawning = g.sh.cfg.no_spawning;
         g.default_gamemode = g.sh.cfg.gamemode;
         g.commands_body = crate::commands::build_packet(&g.sh.cfg.data_dir, crate::commands::IMPLEMENTED);
@@ -247,6 +249,7 @@ impl Game {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) { self.day_time = v["day_time"].as_i64().unwrap_or(1000); self.difficulty = v["difficulty"].as_u64().unwrap_or(self.sh.cfg.difficulty as u64).min(3) as u8; }
         }
         self.scoreboard = cmd::score::Scoreboard::load(d);
+        self.bossbars = cmd::bossbar::BossBars::load(d);
         // vanilla level files (level.dat + data/minecraft/*.dat) win when present
         let l = crate::level::load(d);
         if let Some(t) = l.day_time { self.day_time = t; }
@@ -267,6 +270,7 @@ impl Game {
         let _ = std::fs::create_dir_all(d.join("players"));
         let _ = std::fs::write(d.join("basalt.json"), serde_json::json!({ "day_time": self.day_time, "seed": self.sh.cfg.seed, "difficulty": self.difficulty }).to_string());
         self.scoreboard.save(d);
+        self.bossbars.save(d);
         // and vanilla's level files, so a vanilla 26.2 server can open the world (unknown tags kept)
         let sp = self.spawn;
         crate::level::save(d, &crate::level::Level { seed: Some(self.sh.cfg.seed), spawn: Some([sp[0].floor() as i32, sp[1].floor() as i32, sp[2].floor() as i32]), difficulty: Some(self.difficulty),
@@ -548,6 +552,7 @@ impl Game {
         p.send(self.set_time_packet());
         p.send(self.world_spawn_packet());
         for w in self.scoreboard.join_packets() { p.send(w); }
+        for w in self.bossbars.join_packets(p.uuid) { p.send(w); }
         let mut w = Writer::with_id(cb::GAME_EVENT); w.u8(13).f32(0.0); p.send(w);
         if self.cur == dim::OVERWORLD && self.weather.rain > 0.0 {
             for (id, v) in [(1u8, 0.0f32), (7, self.weather.rain), (8, self.weather.thunder)] { let mut w = Writer::with_id(cb::GAME_EVENT); w.u8(id).f32(v); p.send(w); }

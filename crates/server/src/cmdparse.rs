@@ -464,6 +464,41 @@ fn parse_arg(parser: &str, props: &Value, s: &str, p: usize, res: Resources) -> 
         }
         "resource_location" => read_id(s, p)?.1,
         "nbt_compound_tag" => parse_snbt_compound(s, p)?,
+        // JSON/SNBT text component: a quoted string, a balanced {..} / [..] (spaces allowed inside), else a word
+        "component" => match peek(s, p) {
+            Some('"') => read_quoted(s, p)?,
+            Some(open @ ('{' | '[')) => {
+                let (mut depth, mut i) = (0i32, p);
+                let mut quote = false;
+                let mut esc = false;
+                let mut end = None;
+                for c in s[p..].chars() {
+                    i += c.len_utf8();
+                    if quote {
+                        if esc {
+                            esc = false;
+                        } else if c == '\\' {
+                            esc = true;
+                        } else if c == '"' {
+                            quote = false;
+                        }
+                    } else if c == '"' {
+                        quote = true;
+                    } else if c == '{' || c == '[' {
+                        depth += 1;
+                    } else if c == '}' || c == ']' {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = Some(i);
+                            break;
+                        }
+                    }
+                }
+                let _ = open;
+                end.ok_or_else(|| CmdError::new("argument.component.invalid", &[&s[p..]]))?
+            }
+            _ => word_end(s, p),
+        },
         "entity_anchor" => {
             let e = take_while(s, p, unquoted_char);
             if !matches!(&s[p..e], "feet" | "eyes") {

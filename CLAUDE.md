@@ -152,6 +152,7 @@ Read NOTES.md for verified packet formats.
       client: sky-less dimensions (fog colour background, ambient light, dimension fog), client scenario `nether`.
       Todo: End, structures (fortress, bastion), nether mobs, portal POI files (Basalt keeps basalt-portals.json),
       portal sounds/nausea in the client, entity travel through portals, the overworld region folder is still `region/`.
+- [~] M13 partial: /scoreboard (objectives, players, operation) + /bossbar (add/remove/list/get/set; game/bossbar.rs, custom_boss_events.dat) match vanilla (m13_scoreboard, m13_bossbar); basalt-client draws the sidebar and boss bars (crates/client/src/board.rs) with geometry identical to the real client in client_visual scenes scoreboard_sidebar / scoreboard_full / bossbars (also fixed the UI atlas overflow that dropped the ascii font page); todo: tab list (+ list-slot score), below_name score, teams
 - [ ] M9 redstone
 - [~] M10 enchant/anvil/grindstone/smithing/brewing (server game/{station,stackx}.rs + container.rs Kind::{Enchant,Anvil,Grind,Smith,Brewing}, crates/game ench.rs data-driven
       enchantment rules; basalt-client screens). Differential vs vanilla (2026-11-24): m10_menus, m10_enchant_table, m10_anvil_cases (17 cases, results+cost identical), m10_anvil_take,
