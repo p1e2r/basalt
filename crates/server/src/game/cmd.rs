@@ -993,6 +993,11 @@ impl Game {
                 if (keep && !BlockState(old).is_air()) || old == state {
                     return Err(err("commands.setblock.failed", &[]));
                 }
+                // destroy: the old block drops its loot table (empty hand, tool requirement ignored)
+                if p.path.last().map(|l| l == "destroy").unwrap_or(false) && !BlockState(old).is_air() {
+                    let items = self.tool_less_drops(BlockState(old), b);
+                    self.drop_at_block(b, items);
+                }
                 // reshaped for its neighbours and with neighbour updates, like vanilla's /setblock
                 self.set_block_shaped(b[0], b[1], b[2], state);
                 self.ok(
@@ -1853,6 +1858,7 @@ impl Game {
         }
         let air = block_default("air").unwrap_or(0);
         let mut changed = 0;
+        let mut cells: Vec<[i32; 3]> = Vec::new();
         for x in lo[0]..=hi[0] {
             for y in lo[1]..=hi[1] {
                 for z in lo[2]..=hi[2] {
@@ -1900,10 +1906,19 @@ impl Game {
                     if new == old {
                         continue;
                     }
+                    if mode == "destroy" && !BlockState(old).is_air() {
+                        let items = self.tool_less_drops(BlockState(old), [x, y, z]);
+                        self.drop_at_block([x, y, z], items);
+                    }
                     self.set_block(x, y, z, new);
+                    cells.push([x, y, z]);
                     changed += 1;
                 }
             }
+        }
+        // like vanilla, neighbours update once every cell is set: dependants of removed blocks pop
+        for c in cells {
+            self.update_neighbors(c, 0);
         }
         if changed == 0 {
             return Err(err("commands.fill.failed", &[]));

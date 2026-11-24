@@ -215,6 +215,22 @@ impl GameData {
         loot::eval_table(self, &table, &ctx, Some(BlockState(state)), rng)
     }
 
+    /// `block_drops` for a block whose table checks its vertical neighbours (tall grass): `below`/`above` are the
+    /// states of the cells under and over it at the time it breaks. The caller decides whether the tool may harvest
+    /// (a block that pops off its support drops its table whatever the held tool).
+    pub fn block_drops_around(&self, state: u32, held: Option<i32>, below: u32, above: u32, rng: &mut impl rand::Rng) -> Vec<(i32, i32)> {
+        let ctx = LootContext { tool: held, around: Some((below, above)), ..Default::default() };
+        let table = format!("blocks/{}", BlockState(state).name());
+        loot::eval_table(self, &table, &ctx, Some(BlockState(state)), rng)
+    }
+
+    /// Drops of a block that goes without a player or tool: popped off its support, `/setblock .. destroy`.
+    pub fn block_drops_popped(&self, state: u32, below: u32, above: u32, rng: &mut impl rand::Rng) -> Vec<(i32, i32)> {
+        let ctx = LootContext { around: Some((below, above)), no_entity: true, ..Default::default() };
+        let table = format!("blocks/{}", BlockState(state).name());
+        loot::eval_table(self, &table, &ctx, Some(BlockState(state)), rng)
+    }
+
     /// Drops of a block destroyed by an explosion of `radius` (survives_explosion / explosion_decay).
     pub fn explosion_drops(&self, state: u32, radius: f32, rng: &mut impl rand::Rng) -> Vec<(i32, i32)> {
         if !BlockState::is_valid(state) {

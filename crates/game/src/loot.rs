@@ -23,6 +23,11 @@ pub struct LootContext {
     pub explosion_radius: Option<f32>,
     /// State of the entity the table runs for (`entity_properties` with `entity: this`).
     pub this_entity: Option<EntityProps>,
+    /// Block states directly below / above the block a block table runs for (`location_check` with an offsetY).
+    pub around: Option<(u32, u32)>,
+    /// The block goes without anything breaking it (popped off its support, `/setblock .. destroy`): tables that
+    /// test the breaking entity (snow layers) drop nothing.
+    pub no_entity: bool,
 }
 
 /// The parts of an entity's state that entity loot tables test.
@@ -65,7 +70,14 @@ struct Ctx<'a> {
 pub(crate) fn eval_table<R: Rng + ?Sized>(gd: &GameData, table: &str, lc: &LootContext, state: Option<BlockState>, rng: &mut R) -> Vec<(i32, i32)> {
     let ctx = Ctx { gd, lc, state, depth: 0 };
     let mut raw = Vec::new();
-    if let Some(t) = gd.loot_tables.get(short(table)) {
+    // wall variants (wall_torch, oak_wall_sign, ...) have no table of their own: they drop like the standing block
+    let name = short(table);
+    let t = gd.loot_tables.get(name).or_else(|| {
+        let (head, base) = name.split_once('/')?;
+        let alias = if base.contains("_wall_") { base.replacen("_wall_", "_", 1) } else { base.strip_prefix("wall_")?.to_string() };
+        gd.loot_tables.get(format!("{head}/{alias}").as_str())
+    });
+    if let Some(t) = t {
         run_table(&ctx, t, rng, &mut raw);
     }
     // Merge nothing; split oversize stacks by max stack size like vanilla does.
@@ -314,6 +326,7 @@ fn cond<R: Rng + ?Sized>(ctx: &Ctx, c: &Value, rng: &mut R) -> bool {
         "any_of" | "alternative" => c["terms"].as_array().into_iter().flatten().any(|t| cond(ctx, t, rng)),
         "all_of" => c["terms"].as_array().into_iter().flatten().all(|t| cond(ctx, t, rng)),
         "entity_properties" => entity_props(ctx, c),
+        "location_check" => location_check(ctx, c),
         "reference" => false,
         _ => false, // location_check, damage_source_properties, weather/time checks, …
     }
@@ -389,6 +402,28 @@ fn match_tool(ctx: &Ctx, p: &Value) -> bool {
     true
 }
 
+/// `location_check` for the block one above/below (offsetY +-1): block id and state properties of its predicate.
+fn location_check(ctx: &Ctx, c: &Value) -> bool {
+    let Some((below, above)) = ctx.lc.around else { return false };
+    let st = match c["offsetY"].as_i64() {
+        Some(1) => BlockState(above),
+        Some(-1) => BlockState(below),
+        _ => return false,
+    };
+    let b = &c["predicate"]["block"];
+    if let Some(name) = b["blocks"].as_str() {
+        if short(name) != st.name() {
+            return false;
+        }
+    }
+    for (k, want) in b["state"].as_object().into_iter().flatten() {
+        if want.as_str() != st.get(k) {
+            return false;
+        }
+    }
+    true
+}
+
 fn block_state_prop(ctx: &Ctx, c: &Value) -> bool {
     let Some(st) = ctx.state else { return false };
     if let Some(b) = c["block"].as_str() {
@@ -421,6 +456,9 @@ fn block_state_prop(ctx: &Ctx, c: &Value) -> bool {
 /// entities (killer equipment etc.) are false since no enchantments are modelled.
 fn entity_props(ctx: &Ctx, c: &Value) -> bool {
     if short(c["entity"].as_str().unwrap_or("this")) != "this" {
+        return false;
+    }
+    if ctx.lc.no_entity {
         return false;
     }
     let e = ctx.lc.this_entity.clone().unwrap_or_default();

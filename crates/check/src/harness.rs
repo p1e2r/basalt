@@ -43,7 +43,7 @@ fn scenario_paths(id: &str) -> Vec<&'static str> {
         ("m1_", &["crates/check/src/scenarios/m1.rs", "crates/server/src/game/track.rs"]),
         ("m2_", &["crates/check/src/scenarios/m1.rs", "crates/server/src/game/track.rs", "crates/server/src/commands.rs", "crates/server/src/cmdparse.rs", "crates/server/src/game/cmd.rs"]),
         ("m3_", &["crates/check/src/scenarios/m3.rs", "crates/worldgen/**", "crates/server/src/game/cmd.rs", "crates/server/src/commands.rs"]),
-        ("m4_", &["crates/check/src/scenarios/m4.rs", "crates/game/**", "crates/server/src/game.rs", "crates/server/src/game/{inv,items,health,combat,env,explosion}.rs"]),
+        ("m4_", &["crates/check/src/scenarios/m4.rs", "crates/check/src/scenarios/m4_blocks.rs", "crates/server/src/game/{place,support}.rs", "crates/game/**", "crates/server/src/game.rs", "crates/server/src/game/{inv,items,health,combat,env,explosion}.rs"]),
         ("m5_", &["crates/check/src/scenarios/m5.rs", "crates/game/**", "crates/server/src/game/{mob,ai,path,arrow,combat,explosion,spawn,health,track,items}.rs"]),
         ("m6_", &["crates/check/src/scenarios/m6.rs"]),
         ("m8_", &["crates/check/src/scenarios/m8.rs", "crates/worldgen/**", "crates/server/src/game/{dim,portal,cmd,place}.rs"]),
