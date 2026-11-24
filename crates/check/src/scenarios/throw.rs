@@ -660,3 +660,138 @@ pub fn throw_lingering(ctx: &mut Ctx) -> Result<()> {
     );
     Ok(())
 }
+
+fn entity_pos_eid(bot: &Bot, kind: &str, since: Instant) -> Option<(i32, [f64; 3])> {
+    let s = bot.st();
+    s.entities
+        .iter()
+        .filter(|(_, e)| e.kind == kind && e.added >= since)
+        .max_by_key(|(_, e)| e.added)
+        .map(|(k, e)| (*k, e.pos))
+}
+
+/// Bow: draw time -> speed / critical flag, arrow consumption and bow wear, a tap does nothing, arrows
+/// stuck in the wall can be picked up again.
+pub fn bow_shoot(ctx: &mut Ctx) -> Result<()> {
+    let (bot, _o) = box_arena(ctx, 8, "survival")?;
+    give(&bot, "bow", 1)?;
+    give(&bot, "arrow", 8)?;
+    hold(&bot, "bow")?;
+    let me = bot.st().pos();
+    let eid = bot.st().eid;
+    for (tag, ticks) in [("full", 24u32), ("half", 10), ("tap", 1)] {
+        let before = bot.st().count("arrow");
+        let t0 = Instant::now();
+        bot.look(0.0, 0.0);
+        bot.wait_ticks(2);
+        bot.use_item();
+        bot.wait_ticks(ticks);
+        bot.release_use();
+        bot.wait_ticks(4);
+        let e = spawned(&bot, "arrow", t0);
+        ctx.metric(&format!("bow_{tag}_shot"), e.is_some() as u8 as f64, 0.0);
+        if let Some(e) = e {
+            ctx.note(format!("{tag}: meta {:?}", e.meta));
+            let sp =
+                (e.spawn_vel[0].powi(2) + e.spawn_vel[1].powi(2) + e.spawn_vel[2].powi(2)).sqrt();
+            ctx.metric(&format!("bow_{tag}_speed"), sp, 0.15);
+            ctx.metric(&format!("bow_{tag}_dy"), e.spawn_pos[1] - me[1], 0.011);
+            ctx.metric(
+                &format!("bow_{tag}_owner"),
+                (e.data == eid) as u8 as f64,
+                0.0,
+            );
+        }
+        let snd = sounds_since(&bot, t0);
+        let sh = snd.iter().find(|s| s.0 == "entity.arrow.shoot");
+        ctx.metric(
+            &format!("bow_{tag}_sound_cat"),
+            sh.map(|s| s.1 as f64).unwrap_or(-1.0),
+            0.0,
+        );
+        ctx.metric(
+            &format!("bow_{tag}_pitch"),
+            sh.map(|s| s.3 as f64).unwrap_or(-1.0),
+            0.2,
+        );
+        ctx.metric(
+            &format!("bow_{tag}_arrows_used"),
+            (before - bot.st().count("arrow")) as f64,
+            0.0,
+        );
+    }
+    // pick the arrows up again: stand where they stuck
+    bot.wait_ticks(30);
+    let before = bot.st().count("arrow");
+    let spots: Vec<[f64; 3]> = bot
+        .st()
+        .entities
+        .values()
+        .filter(|e| e.kind == "arrow")
+        .map(|e| e.pos)
+        .collect();
+    ctx.note(format!("stuck arrows at {spots:?}"));
+    for p in &spots {
+        bot.tp([p[0], p[1] - 0.5, p[2] - 0.5])?;
+        bot.wait_ticks(8);
+    }
+    bot.wait_ticks(6);
+    ctx.metric(
+        "bow_arrows_picked_up",
+        (bot.st().count("arrow") - before) as f64,
+        0.0,
+    );
+    Ok(())
+}
+
+/// Trident throw: needs a 10-tick draw, leaves the inventory, flies at 2.5, can be picked up again.
+pub fn trident_throw(ctx: &mut Ctx) -> Result<()> {
+    let (bot, _o) = box_arena(ctx, 8, "survival")?;
+    give(&bot, "trident", 1)?;
+    hold(&bot, "trident")?;
+    let me = bot.st().pos();
+    let eid = bot.st().eid;
+    // too short: nothing happens
+    let t0 = Instant::now();
+    bot.look(0.0, 0.0);
+    bot.wait_ticks(2);
+    bot.use_item();
+    bot.wait_ticks(4);
+    bot.release_use();
+    bot.wait_ticks(4);
+    ctx.metric(
+        "trident_short_thrown",
+        spawned(&bot, "trident", t0).is_some() as u8 as f64,
+        0.0,
+    );
+    let t0 = Instant::now();
+    bot.use_item();
+    bot.wait_ticks(15);
+    bot.release_use();
+    bot.wait_ticks(4);
+    let e = spawned(&bot, "trident", t0);
+    ctx.metric("trident_thrown", e.is_some() as u8 as f64, 0.0);
+    if let Some(e) = &e {
+        let sp = (e.spawn_vel[0].powi(2) + e.spawn_vel[1].powi(2) + e.spawn_vel[2].powi(2)).sqrt();
+        ctx.metric("trident_speed", sp, 0.15);
+        ctx.metric("trident_dy", e.spawn_pos[1] - me[1], 0.011);
+        ctx.metric("trident_owner", (e.data == eid) as u8 as f64, 0.0);
+    }
+    ctx.metric("trident_left", bot.st().count("trident") as f64, 0.0);
+    ctx.metric(
+        "trident_throw_sound",
+        bot.st()
+            .entity_sounds
+            .iter()
+            .any(|s| s.0 >= t0 && sound_name(s.1) == "item.trident.throw") as u8 as f64,
+        0.0,
+    );
+    // fetch it
+    bot.wait_ticks(30);
+    if let Some((_, p)) = entity_pos_eid(&bot, "trident", t0) {
+        bot.tp([p[0], p[1] - 0.5, p[2] - 0.5])?;
+        bot.wait_ticks(10);
+    }
+    ctx.metric("trident_picked_up", bot.st().count("trident") as f64, 0.0);
+    Ok(())
+}

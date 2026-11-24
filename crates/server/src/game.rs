@@ -2,6 +2,7 @@
 mod ai;
 mod arrow;
 mod proj;
+mod bow;
 mod potion;
 mod potions;
 mod breed;
@@ -134,6 +135,8 @@ struct Player {
     portal_entry: Option<[i32; 3]>,
     /// item cooldown groups ("ender_pearl") -> game tick they end
     cooldowns: HashMap<String, u64>,
+    /// bow / trident draw in progress: (inventory slot, start tick)
+    draw: Option<(usize, u64)>,
 }
 
 impl Player {
@@ -528,7 +531,7 @@ impl Game {
             dead: false, health: 20.0, food: 20, saturation: 5.0, exhaustion: 0.0, fall_start: None, hurt_cooldown: 0, regen_timer: 0,
             using: None, sprinting: false, jump_held: false, dig_start: None, delayed_dig: None, cursor: Stack::default(), craft_result: Stack::default(),
             table_grid: [Stack::default(); 9], window: inv::Window::Inventory, next_window: 0, state_id: 0, drag: (0, Vec::new()), seen_items: HashSet::new(), cont_items: Vec::new(), ender: vec![Stack::default(); 27], st: station::St::default(), data_sent: [-1; 4], xp_level: 0, xp_progress: 0.0, xp: 0,
-            air: env::MAX_AIR, fire_ticks: 0, ticks_frozen: 0, fire_exposure: 0, effects: HashMap::new(), prev_tick_pos: [0.0; 3], seen: HashSet::new(), last_attack_tick: 0, portal_ticks: 0, portal_cooldown: 0, portal_entry: None, cooldowns: HashMap::new(),
+            air: env::MAX_AIR, fire_ticks: 0, ticks_frozen: 0, fire_exposure: 0, effects: HashMap::new(), prev_tick_pos: [0.0; 3], seen: HashSet::new(), last_attack_tick: 0, portal_ticks: 0, portal_cooldown: 0, portal_entry: None, cooldowns: HashMap::new(), draw: None,
         };
         self.load_player(&mut p);
         let d = self.saved_dim(p.uuid);
@@ -694,7 +697,7 @@ impl Game {
                 if hand == 0 { self.place(eid, [x, y, z], face.clamp(0, 5) as usize, cursor); }
                 if let Some(p) = self.players.get(&eid) { let mut w = Writer::with_id(cb::BLOCK_CHANGED_ACK); w.varint(seq); p.send(w); }
             }
-            sb::USE_ITEM => { let hand = r.varint()?; let seq = r.varint()?; let (yaw, pitch) = (r.f32().unwrap_or(0.0), r.f32().unwrap_or(0.0)); if !self.try_throw(eid, hand, yaw, pitch) { self.start_using(eid, hand); } if let Some(p) = self.players.get(&eid) { let mut w = Writer::with_id(cb::BLOCK_CHANGED_ACK); w.varint(seq); p.send(w); } }
+            sb::USE_ITEM => { let hand = r.varint()?; let seq = r.varint()?; let (yaw, pitch) = (r.f32().unwrap_or(0.0), r.f32().unwrap_or(0.0)); if !self.try_throw(eid, hand, yaw, pitch) && !self.try_draw(eid, hand) { self.start_using(eid, hand); } if let Some(p) = self.players.get(&eid) { let mut w = Writer::with_id(cb::BLOCK_CHANGED_ACK); w.varint(seq); p.send(w); } }
             sb::CHAT => {
                 let msg = r.str()?;
                 if msg.len() > 256 || msg.chars().any(|c| c.is_control()) { return Err(anyhow!("illegal chat")); }
@@ -741,7 +744,7 @@ impl Game {
                 self.throw_item(eid, Stack { item: s.item, count: n, damage: 0, ench: NO_ENCH }, false);
                 return;
             }
-            5 => { if let Some(p) = self.players.get_mut(&eid) { p.using = None; } return; }
+            5 => { if let Some(p) = self.players.get_mut(&eid) { p.using = None; } self.release_draw(eid); return; }
             6 => { // swap main/off hand
                 if let Some(p) = self.players.get_mut(&eid) { let slot = 36 + p.held; p.inv.swap(slot, 45); Self::send_window(p); }
                 return;
