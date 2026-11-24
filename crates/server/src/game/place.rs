@@ -265,6 +265,7 @@ impl Game {
             }
             "ladder" | "trip_wire_hook" => facing.map(|f| attached(f ^ 1)).unwrap_or(true),
             "pressure_plate" | "weighted_pressure_plate" => self.center_support(below, 1),
+            "redstone_wire" => self.sturdy(below, 1) || below.name() == "hopper",
             "rail" | "powered_rail" | "detector_rail" | "repeater" | "comparator" => {
                 self.sturdy(below, 1)
             }
@@ -381,7 +382,7 @@ impl Game {
             }
             "scaffolding" => self.scaffold_distance(p) < 7,
             "kelp" => {
-                self.is_water(p)
+                (self.is_water(p) || self.bs(p).name() == name)
                     && !self
                         .data
                         .tags
@@ -391,7 +392,7 @@ impl Game {
                         || below.name() == "kelp_plant")
             }
             "seagrass" | "tall_seagrass" => {
-                self.is_water(p)
+                (self.is_water(p) || self.bs(p).name() == name)
                     && !self
                         .data
                         .tags
@@ -1100,7 +1101,34 @@ impl Game {
         })
     }
 
+    /// What a removed block leaves behind: water for waterlogged blocks and the plants that live in water.
+    pub(super) fn empty_state(s: BlockState) -> u32 {
+        let wet = s.get("waterlogged") == Some("true")
+            || matches!(
+                s.name(),
+                "seagrass" | "tall_seagrass" | "kelp" | "kelp_plant" | "bubble_column"
+            );
+        if wet {
+            block_default("water").unwrap_or(0)
+        } else {
+            0
+        }
+    }
+
+    /// Drops of a block that is removed without a tool (popped off, `/setblock .. destroy`): its loot table with an
+    /// empty hand, whether or not the block needs a tool, looking at the cells above/below for `location_check`.
+    pub(super) fn tool_less_drops(&mut self, s: BlockState, q: [i32; 3]) -> Vec<(i32, i32)> {
+        let below = self.world.get_block(q[0], q[1] - 1, q[2]);
+        let above = self.world.get_block(q[0], q[1] + 1, q[2]);
+        self.data
+            .block_drops_popped(s.0, below, above, &mut self.rng)
+    }
+
     /// After the block at `p` changed: re-shape / break the six neighbours (cascading a few levels).
+    /// A neighbour that loses its support pops: it is removed and drops its loot table (measured on vanilla 26.2,
+    /// m4_support_break). Double blocks follow vanilla's asymmetry (m4_double_block_break): an upper half whose lower
+    /// half is gone is removed without a drop; a lower half whose upper half is gone pops with its drops (tall
+    /// seagrass keeps its lower half).
     pub(super) fn update_neighbors(&mut self, p: [i32; 3], depth: u32) {
         if depth > 6 {
             return;
@@ -1112,18 +1140,36 @@ impl Game {
                 continue;
             }
             let mut n = self.reshape(s, q);
+            // Some(drops?) = the neighbour goes away
+            let mut pop: Option<bool> = None;
             if !self.survives(n, q) {
                 let hit = match self.support_dirs(s) {
                     None => true,
                     Some(v) => v.contains(&(d ^ 1)),
                 };
                 if hit {
-                    n = BlockState(if n.get("waterlogged") == Some("true") {
-                        block_default("water").unwrap_or(0)
-                    } else {
-                        0
-                    });
+                    pop = Some(true);
                 }
+            }
+            if pop.is_none() {
+                let here = self.bs(p);
+                let partner = |half: &str| {
+                    here.block().name == s.block().name && here.get("half") == Some(half)
+                };
+                match s.get("half") {
+                    Some("upper") if d == 1 && !partner("lower") => pop = Some(false),
+                    Some("lower") if d == 0 && s.name() != "tall_seagrass" && !partner("upper") => {
+                        pop = Some(true)
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(drops) = pop {
+                if drops {
+                    let items = self.tool_less_drops(s, q);
+                    self.drop_at_block(q, items);
+                }
+                n = BlockState(Self::empty_state(n));
             }
             // farmland turns to dirt when something solid sits on it
             if n.name() == "farmland" && d == 0 && self.is_solid_material(self.bs(p)) {

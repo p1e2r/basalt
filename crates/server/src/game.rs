@@ -809,22 +809,26 @@ impl Game {
     /// tool wear, drops, the other half of a door.
     fn finish_dig(&mut self, eid: i32, b: [i32; 3], old: u32, creative: bool, held: Option<i32>) {
         self.container_broken(b, old);
-        self.set_block(b[0], b[1], b[2], 0);
+        let below = self.world.get_block(b[0], b[1] - 1, b[2]);
+        let above = self.world.get_block(b[0], b[1] + 1, b[2]);
+        let os = BlockState(old);
+        // creative: breaking the upper half of a double block takes the lower half away first, without a drop
+        if creative && os.get("half") == Some("upper") && os.name() != "tall_seagrass" && BlockState(below).block().name == os.block().name && BlockState(below).get("half") == Some("lower") {
+            self.set_block(b[0], b[1] - 1, b[2], Self::empty_state(BlockState(below)));
+        }
+        self.set_block(b[0], b[1], b[2], Self::empty_state(os));
         // world event 2001: block break particles + sound for others
         self.broadcast_chunk((b[0] >> 4, b[2] >> 4), Some(eid), || { let mut w = Writer::with_id(cb::LEVEL_EVENT); w.i32(2001).position(b[0], b[1], b[2]).i32(old as i32).bool(false); w });
         if !creative {
             if let Some(p) = self.players.get_mut(&eid) { p.exhaustion += 0.005; }
-            if basalt_game::hardness(BlockState(old).name()) > 0.0 { self.wear_held(eid, 1); }
+            if basalt_game::hardness(os.name()) > 0.0 { self.wear_held(eid, 1); }
             let harvest = self.data.can_harvest(old, held);
-            let drops = if harvest { self.data.block_drops(old, held, false, 0, &mut self.rng) } else { Vec::new() };
+            let drops = if harvest { self.data.block_drops_around(old, held, below, above, &mut self.rng) } else { Vec::new() };
             self.drop_at_block(b, drops);
             if harvest { let xp = xporb::ore_xp(old, &mut self.rng); if xp > 0 { self.spawn_xp([b[0] as f64 + 0.5, b[1] as f64 + 0.5, b[2] as f64 + 0.5], xp); } }
-            // doors: the other half goes too
-            if BlockState(old).get("half").is_some() && (BlockState(old).block().kind == "door" || BlockState(old).name().ends_with("_door")) {
-                let oy = if BlockState(old).get("half") == Some("upper") { -1 } else { 1 };
-                if BlockState(self.world.get_block(b[0], b[1] + oy, b[2])).block().name == BlockState(old).block().name { self.set_block(b[0], b[1] + oy, b[2], 0); }
-            }
         }
+        // whatever depended on this block (plants, torches, the other half of a door or tall plant) pops or goes
+        self.update_neighbors(b, 0);
     }
 
     /// Use up durability of the held tool (swords take 2 for blocks); breaks it at max damage.

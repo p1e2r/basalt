@@ -6,6 +6,7 @@ pub mod env;
 pub mod m1;
 pub mod m3;
 pub mod m4;
+pub mod m4_blocks;
 pub mod m5;
 pub mod m6;
 pub mod m10;
@@ -50,6 +51,8 @@ pub static ALL: &[Spec] = &[
     spec!("M3", "m3_locate_structure", m3::locate, Generated, Both, true, "/locate structure (ids + a tag) from near spawn: position, distance and reply key vs vanilla (seed 12345)"),
     spec!("M3", "m3_worldgen_spawn", m3::worldgen_columns, Generated, BasaltOnly, false, "bot-observed terrain at spawn columns = vanilla region files (seed 12345)"),
     spec!("M4", "m4_dig_timing", m4::dig_timing, Flat, Both, true, "survival dig with tool timing; too-fast break rejected"),
+    spec!("M4", "m4_double_block_break", m4_blocks::double_block_break, Flat, Both, true, "breaking either half of a double block (plants, doors, seagrass) removes the other; drops, creative, /setblock + /fill"),
+    spec!("M4", "m4_support_break", m4_blocks::support_break, Flat, Both, true, "blocks that lose their support pop with their drops (dig / creative / setblock / fill / cascades)"),
     spec!("M4", "m4_drops_pickup", m4::drops_pickup, Flat, Both, true, "broken block drops an item entity which is picked up"),
     spec!("M4", "m4_tool_durability", m4::durability, Flat, Both, true, "pickaxe loses 1 per block, sword 2"),
     spec!("M4", "m4_q_drop", m4::q_drop, Flat, Both, true, "Q drops one, ctrl-Q the stack; item entities carry the stack"),

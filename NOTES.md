@@ -440,6 +440,34 @@ Placement went from 178/300 differing cases (seed 1) to 25 (all but 2 are flowin
   cells); if anything fits there the rest stays in the source slot (no fallback to the other inventory section). Shield (offhand
   equippable) shift-clicks into the offhand slot first.
 
+## Double blocks and support pops (2026-11-24) — scenarios m4_double_block_break, m4_support_break (matched against vanilla 26.2 on the wire)
+Code: `Game::update_neighbors` (place.rs), `finish_dig` (game.rs), `/setblock` + `/fill` (cmd.rs), `block_drops_popped` + `location_check` (crates/game loot).
+- **Double blocks** (`half=lower|upper`: tall flowers, tall/large grass+fern, pitcher plant, small dripleaf, doors, tall seagrass):
+  breaking either half removes both in the same tick. The asymmetry that explains every measured drop count: an *upper* half whose
+  lower half is gone is removed **silently** (no drop); a *lower* half whose upper half is gone **pops with its loot table**.
+  Survival dig of the lower half = lower's own drop (upper silent); dig of the upper half = upper's own loot (usually nothing, the
+  tables say `half=lower`) plus the lower half popping (so 1 sunflower / 1 door either way). Tall grass / large fern tables use
+  `location_check` (lower pool needs the upper half above it, upper pool the lower below): shears give 2 short_grass/fern whichever
+  half is dug, by hand only the 12.5 % seeds. Creative: no drops at all; digging the upper half takes the lower one away first.
+  Tall seagrass is the exception: its table has no half condition (shears: 2 seagrass per dig), digging the lower half also
+  removes the upper (both become water source), digging the upper half leaves the lower half standing, and creative upper dig
+  does not touch the lower half either. Iron door by hand: upper dug -> 1 iron_door (the lower half pops, loot has no tool condition).
+- **Support pops**: a block whose support goes (dirt under flowers/saplings/ferns/mushrooms/crops, floor under torches, carpets,
+  rails, redstone dust, pressure plates, standing signs, buttons/levers on floor/wall/ceiling, wall torches/signs, hanging signs,
+  snow layers, cactus/sugar cane (+ chain), doors) is removed in the same tick and drops its loot table **with an empty hand and
+  no breaking entity** (tool requirements ignored, tables testing `entity_properties this` fail: popped snow layers drop nothing,
+  tall_grass by hand only seeds). Same for creative digs and for `/setblock`/`/fill` in plain `replace` mode (torch under
+  `setblock ~ ~-1 ~ air` drops a torch). Cactus/cane stacks cascade one block per tick on vanilla (Basalt: same tick, same drops).
+- `/setblock .. destroy` and `/fill .. destroy` first drop the old block's loot table with an empty hand (stone drops cobblestone),
+  then place; `replace` does not drop the replaced block. `/fill` sets every cell first, then updates neighbours (filling both halves
+  of a plant with air drops nothing).
+- Wall variants have no loot table of their own and drop like the standing block (wall_torch -> torch, oak_wall_sign -> oak_sign,
+  wall banners/skulls/coral fans/hanging signs the same).
+- Breaking a seagrass/kelp/waterlogged block leaves a water source.
+- Dug by hand on vanilla but not reproduced by the bot (dig had no effect, unexplained, so no scenario): big_dripleaf_stem,
+  tall_seagrass. Tall seagrass behaviour of the lower half / creative / commands varied between vanilla runs (dependent on water
+  flow timing), so the scenario has no seagrass case; the rules above come from the first clean runs (digging by hand also had no effect in the bot).
+
 ## Entity + first-person animation vs the real 26.2 client (oracle `bones`/`fp`, `basalt-check client-anim`, 2026-11-23)
 Measured from the vanilla client's own model parts / PoseStacks (exact fits; formulas live in crates/client/src/entity.rs):
 - Limb swing `cos(pos*0.6662 + phase)`; the phase (pi) is added after the scale. Walk anim: speed += (min(dist*4,1)-speed)*0.4, pos += speed.

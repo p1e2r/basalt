@@ -112,6 +112,8 @@ impl Game {
                 continue;
             }
             self.set_block(b[0], b[1], b[2], 0);
+            // whatever stood on or hung from the sand pops
+            self.update_neighbors(b, 0);
             let eid = self
                 .sh
                 .next_eid
