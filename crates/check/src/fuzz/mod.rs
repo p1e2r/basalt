@@ -22,6 +22,7 @@ pub mod arena;
 pub mod clicks;
 pub mod commands;
 pub mod dig;
+pub mod pickup;
 pub mod place;
 
 // ------------------------------------------------------------------ rng
@@ -96,7 +97,7 @@ pub struct Opts {
 static OPTS: OnceLock<Opts> = OnceLock::new();
 pub fn opts() -> &'static Opts { OPTS.get().expect("fuzz options not set") }
 
-pub static HARNESSES: &[&Harness] = &[&clicks::HARNESS, &commands::HARNESS, &dig::HARNESS, &place::HARNESS];
+pub static HARNESSES: &[&Harness] = &[&clicks::HARNESS, &commands::HARNESS, &dig::HARNESS, &place::HARNESS, &pickup::HARNESS];
 
 pub fn find(id: &str) -> Option<&'static Harness> {
     let id = id.trim_start_matches("fuzz_");
@@ -123,12 +124,14 @@ fn run_clicks(ctx: &mut Ctx) -> Result<()> { drive(&clicks::HARNESS, ctx) }
 fn run_commands(ctx: &mut Ctx) -> Result<()> { drive(&commands::HARNESS, ctx) }
 fn run_dig(ctx: &mut Ctx) -> Result<()> { drive(&dig::HARNESS, ctx) }
 fn run_place(ctx: &mut Ctx) -> Result<()> { drive(&place::HARNESS, ctx) }
+fn run_pickup(ctx: &mut Ctx) -> Result<()> { drive(&pickup::HARNESS, ctx) }
 
 pub static SPECS: &[Spec] = &[
     Spec { id: "fuzz_clicks", group: "Fuzz", desc: "random container click sequences: inventory + crafting grids", world: WorldKind::Flat, servers: Servers::Both, diff: false, run: run_clicks },
     Spec { id: "fuzz_commands", group: "Fuzz", desc: "random valid/invalid command strings: outcome class + translation key", world: WorldKind::Flat, servers: Servers::Both, diff: false, run: run_commands },
     Spec { id: "fuzz_dig", group: "Fuzz", desc: "dig acceptance time: block x tool x on_ground/in_water", world: WorldKind::Flat, servers: Servers::Both, diff: false, run: run_dig },
     Spec { id: "fuzz_place", group: "Fuzz", desc: "block placement: placed block + 6 neighbours (orientation, halves, waterlogging)", world: WorldKind::Flat, servers: Servers::Both, diff: false, run: run_place },
+    Spec { id: "fuzz_pickup", group: "Fuzz", desc: "item pickup slot order: random inventories x picked-up stacks (vanilla vs Basalt slots)", world: WorldKind::Flat, servers: Servers::Both, diff: false, run: run_pickup },
 ];
 
 // ------------------------------------------------------------------ worker pool helper
@@ -400,7 +403,7 @@ mod tests {
     #[test]
     fn every_harness_generates_deterministic_cases() {
         // dig's generator needs ./data (GameData); the other three are data-free
-        for h in [&clicks::HARNESS, &commands::HARNESS, &place::HARNESS] {
+        for h in [&clicks::HARNESS, &commands::HARNESS, &place::HARNESS, &pickup::HARNESS] {
             let a: Vec<Value> = (0..30).map(|i| (h.gen)(&mut Rng::for_case(2, i), i)).collect();
             let b: Vec<Value> = (0..30).map(|i| (h.gen)(&mut Rng::for_case(2, i), i)).collect();
             assert_eq!(a, b, "{}", h.id);

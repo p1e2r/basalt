@@ -63,6 +63,7 @@ fn fuzz_paths(id: &str) -> Vec<&'static str> {
         "commands" => p.extend(["crates/check/src/fuzz/commands.rs", "crates/server/src/commands.rs", "crates/server/src/cmdparse.rs", "crates/server/src/game/cmd.rs", "crates/game/**", "crates/server/src/game/{mob,env,health}.rs"]),
         "dig" => p.extend(["crates/check/src/fuzz/dig.rs", "crates/game/**", "crates/server/src/game.rs", "crates/server/src/game/{items,health}.rs"]),
         "place" => p.extend(["crates/check/src/fuzz/place.rs", "crates/game/**", "crates/server/src/game/items.rs"]),
+        "pickup" => p.extend(["crates/check/src/fuzz/pickup.rs", "crates/server/src/game/{inv,items}.rs", "crates/server/src/game/cmd.rs"]),
         _ => {}
     }
     p

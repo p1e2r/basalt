@@ -1959,6 +1959,38 @@ impl Game {
         {
             return Err(err("commands.summon.invalidPosition", &[]));
         }
+        if id == "minecraft:item" {
+            // {Item:{id, count, components}, PickupDelay, Motion:[x,y,z]} like vanilla's item entity NBT
+            let tag = if p.has("nbt") {
+                crate::snbt::parse(p.arg("nbt"))
+                    .ok_or_else(|| err("argument.nbt.invalid", &[p.arg("nbt")]))?
+            } else {
+                Tag::Compound(Default::default())
+            };
+            let Some(stack) = tag.get("Item").and_then(|t| self.stack_from_nbt(t)) else {
+                return Err(err("commands.summon.failed", &[]));
+            };
+            let delay = tag
+                .get("PickupDelay")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0)
+                .max(0) as u32;
+            let vel = match tag.get("Motion") {
+                Some(Tag::List(l)) if l.len() == 3 => [
+                    l[0].as_f64().unwrap_or(0.0),
+                    l[1].as_f64().unwrap_or(0.0),
+                    l[2].as_f64().unwrap_or(0.0),
+                ],
+                _ => [0.0; 3],
+            };
+            self.spawn_item(pos, vel, stack, delay);
+            self.ok(
+                eid,
+                "commands.summon.success",
+                vec![tr("entity.minecraft.item", vec![])],
+            );
+            return Ok(());
+        }
         let Some(kind) = super::mob::MobKind::from_name(&id) else {
             return Err(err("commands.summon.failed", &[]));
         };
