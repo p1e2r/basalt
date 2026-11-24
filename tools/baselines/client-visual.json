@@ -23,6 +23,12 @@
     "mean_ssim": 0.554,
     "min_tile_ssim": 0.327
   },
+  "grass_sides": {
+    "max_tile_hist": 0.648,
+    "mean_hist": 0.25,
+    "mean_ssim": 0.852,
+    "min_tile_ssim": 0.5
+  },
   "inventory": {
     "max_tile_hist": 0.6,
     "mean_hist": 0.146,
@@ -36,10 +42,10 @@
     "min_tile_ssim": 0.426
   },
   "title": {
-    "max_tile_hist": 0.449,
-    "mean_hist": 0.148,
-    "mean_ssim": 0.782,
-    "min_tile_ssim": 0.348
+    "max_tile_hist": 0.418,
+    "mean_hist": 0.156,
+    "mean_ssim": 0.789,
+    "min_tile_ssim": 0.398
   },
   "underwater": {
     "max_tile_hist": 0.953,
