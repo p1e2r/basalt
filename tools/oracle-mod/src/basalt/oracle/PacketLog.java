@@ -62,6 +62,13 @@ public final class PacketLog {
         line(o);
     }
 
+    /** A locally made effect (particle / sound) from the fx mixins, stamped with the client tick. */
+    public static synchronized void fx(JsonObject o) {
+        if (out == null) return;
+        o.addProperty("tick", Control.tick);
+        line(o);
+    }
+
     private static void line(JsonObject o) {
         try { out.write(o.toString()); out.write('\n'); out.flush(); } catch (Throwable ignored) {}
     }

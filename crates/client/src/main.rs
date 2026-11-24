@@ -287,6 +287,8 @@ pub struct Game {
     pub integrated: Option<worlds::Integrated>,
     pub sp_world: Option<worlds::WorldEntry>,
     step_dist: f64,
+    /// water state of the last tick: in water, history of the eyes being under water (bit 0 = last tick)
+    water_prev: (bool, u8),
     last_place: Instant,
     debug: bool,
     disconnected: Option<String>,
@@ -314,6 +316,10 @@ pub struct Game {
     frames: (u32, Instant, f32),
 }
 
+/// Splash volume (0.2 x speed) above which the high-speed splash sound plays instead (client-water,
+/// 2026-11-24: volume 0.250 -> normal, 0.261 -> high speed).
+const HIGH_SPEED_SPLASH: f64 = 0.25;
+
 pub(crate) fn send(out: &tokio::sync::mpsc::UnboundedSender<Vec<u8>>, w: Writer) { script::log_packet(&w.buf); let _ = out.send(w.buf); }
 
 pub struct GameOpts { pub name: String, pub addr: Option<String>, pub auto_respawn: bool, pub sounds: sound::Sounds, pub cfg: menu::Config }
@@ -333,7 +339,7 @@ impl Game {
             dirty: HashMap::new(), in_flight: HashSet::new(), events: rx, out: otx, entities: HashMap::new(), player_names: HashMap::new(), board: Default::default(), my_eid: 0, name: o.name,
             chat: Vec::new(), chat_input: None, chat_cursor: None, chat_sel: None, chat_hist: Vec::new(), chat_hist_pos: None, chat_draft: String::new(), chat_scroll: 0, clipboard: String::new(), cmd_tree: None, sug: Sug::default(), hp: 20.0, food: 20, xp: (0.0, 0), enchantments: Vec::new(), title: (String::new(), String::new(), -1, [10, 70, 20]), actionbar: (String::new(), 0), hotbar: Default::default(), held: 0, inventory: vec![ItemStack::default(); 46], inv_state: 0, carried: ItemStack::default(), day_time: 6000,
             spawned: false, loaded_sent: false, connected: false, keys: HashSet::new(), mouse: [false; 2], mouse_pos: (0.0, 0.0), slider_drag: None, last_tick: Instant::now(),
-            last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, sprint_sent: false, sprinting: false, sprint_trigger: 0, fwd_was: false, sprint_key_was: false, sprint_latch: false, jump_tick: None, particles: Default::default(), equip: (1.0, 1.0), equip_for: -1, shown_item: -1, attack_ticks: 100, walk_dist: (0.0, 0.0), view_bob: (0.0, 0.0), self_hurt: 0, held_name: (String::new(), 0), splash: String::new(), menu_t0: Instant::now(), pings: HashMap::new(), ping_chan: mpsc::channel(), icon_slots: HashMap::new(), ping_rounds: 0, worlds: Vec::new(), integrated: None, sp_world: None, step_dist: 0.0,
+            last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, sprint_sent: false, sprinting: false, sprint_trigger: 0, fwd_was: false, sprint_key_was: false, sprint_latch: false, jump_tick: None, particles: Default::default(), equip: (1.0, 1.0), equip_for: -1, shown_item: -1, attack_ticks: 100, walk_dist: (0.0, 0.0), view_bob: (0.0, 0.0), self_hurt: 0, held_name: (String::new(), 0), splash: String::new(), menu_t0: Instant::now(), pings: HashMap::new(), ping_chan: mpsc::channel(), icon_slots: HashMap::new(), ping_rounds: 0, worlds: Vec::new(), integrated: None, sp_world: None, step_dist: 0.0, water_prev: (false, 0),
             last_place: Instant::now(), debug: false, disconnected: None, death_msg: None, respawn_at: None, auto_respawn: o.auto_respawn,
             screen: Some(Screen::Title), cfg: o.cfg, sounds, last_addr: String::new(), quit: false, fullscreen_changed: false, hide_entities: false, hide_cracks: false, hide_gui: false, hide_hand: false, fixed_time: None, last_chunk_at: Instant::now(), stats: Stats::default(), clicks_sent: 0, ticks: 0,
             frames: (0, Instant::now(), 0.0),
@@ -622,6 +628,34 @@ impl Game {
         self.particles.block_land(&self.assets, below, at, n, tint);
     }
 
+    /// Water effects the client makes by itself (the server only sends them to other players, measured
+    /// with an onlooker bot): on entering water a splash sound (volume 0.2 x the vertical speed, the
+    /// high-speed variant from `HIGH_SPEED_SPLASH`; pitch 1 +- 0.4) with 13 bubbles and 13 drops at the
+    /// surface; ambient.underwater.enter / exit when the eyes go under / come out (volume 1).
+    fn track_water(&mut self, before: [f64; 3]) {
+        let p = &self.player;
+        let (was, hist) = self.water_prev;
+        let at = p.pos;
+        // after this tick's movement (the real client's effect fires in the tick that moved it in)
+        let swims = !p.flying && p.gamemode != 3;
+        let (now, eyes) = (swims && p.in_fluid_at(&self.assets, &self.world, p.pos[1]), swims && p.eyes_in_fluid_at(&self.assets, &self.world));
+        if now && !was {
+            let speed = (at[1] - before[1]).abs();
+            let vol = (0.2 * speed).min(1.0);
+            let pitch = 1.0 + (self.particles.rr(0.0, 1.0) - self.particles.rr(0.0, 1.0)) * 0.4;
+            let name = if vol > HIGH_SPEED_SPLASH { "entity.player.splash.high_speed" } else { "entity.player.splash" };
+            self.sounds.play(name, Some(at), vol as f32, pitch as f32);
+            self.particles.water_splash(&self.assets, at, speed);
+        }
+        // the real client's "enter" sound comes two ticks after its eyes go under (client-water
+        // fall_* cases, 2026-11-24: tick +2 for falls at normal speed, +1 at 40 blocks; exits 1-2 ticks later than ours: the exact rule is not found, the harness allows 2 ticks); both sound at the position the
+        // tick started from
+        let hist = (hist << 1) | eyes as u8;
+        if hist & 0b1111 == 0b0111 { self.sounds.play("ambient.underwater.enter", Some(before), 1.0, 1.0); }
+        if hist & 0b11 == 0b10 { self.sounds.play("ambient.underwater.exit", Some(before), 1.0, 1.0); }
+        self.water_prev = (now, hist);
+    }
+
     fn block_sound(&mut self, state: u16, kind: &str, at: [f64; 3]) {
         if state == 0 { return; }
         let g = sound::block_group(basalt_data::BlockState(state as u32).name());
@@ -820,6 +854,7 @@ impl Game {
         let was_ground = self.player.on_ground;
         self.player.tick(&self.assets, &self.world, inp);
         self.track_landing(was_ground);
+        self.track_water(before);
         // view bobbing (vanilla client, oracle "fp" recorder 2026-11-23): the walk distance grows by
         // 0.6 x horizontal distance; the amplitude eases (x0.4/tick) to min(0.1, horizontal speed)
         // on the ground and to 0 in the air

@@ -17,6 +17,8 @@ pub struct Player {
     pub in_water: bool,
     /// eyes under water: sprinting there is swimming
     pub eyes_in_water: bool,
+    /// eyes-under-water history, bit 0 = the position this tick started from (see `tick`)
+    pub eyes_hist: u8,
     pub prev_pos: [f64; 3],
     pub sneaking: bool,
 }
@@ -84,7 +86,7 @@ pub fn move_box(a: &Assets, w: &World, bb: Aabb, d: [f64; 3]) -> [f64; 3] {
 }
 
 impl Player {
-    pub fn new() -> Self { Player { pos: [0.0, 100.0, 0.0], vel: [0.0; 3], yaw: 0.0, pitch: 0.0, on_ground: false, h_collide: false, flying: false, gamemode: 0, in_water: false, eyes_in_water: false, prev_pos: [0.0, 100.0, 0.0], sneaking: false } }
+    pub fn new() -> Self { Player { pos: [0.0, 100.0, 0.0], vel: [0.0; 3], yaw: 0.0, pitch: 0.0, on_ground: false, h_collide: false, flying: false, gamemode: 0, in_water: false, eyes_in_water: false, eyes_hist: 0, prev_pos: [0.0, 100.0, 0.0], sneaking: false } }
     pub fn eye_height(&self) -> f64 { if self.sneaking { 1.27 } else { 1.62 } }
     pub fn aabb(&self) -> Aabb { let h = WIDTH / 2.0; [self.pos[0] - h, self.pos[1], self.pos[2] - h, self.pos[0] + h, self.pos[1] + HEIGHT, self.pos[2] + h] }
 
@@ -117,18 +119,16 @@ impl Player {
     /// block's surface is its top when fluid is above it, else (8 - level) / 9 of the block (still
     /// water 8/9) — the real client switches to air physics exactly when the feet pass that height
     /// (client-water swim_up trace, 2026-11-24).
-    fn in_fluid_at(&self, a: &Assets, w: &World, fy: f64) -> bool {
+    pub fn in_fluid_at(&self, a: &Assets, w: &World, fy: f64) -> bool {
         let (bx, bz) = (self.pos[0].floor() as i32, self.pos[2].floor() as i32);
-        (fy.floor() as i32..=(fy + 1.8).floor() as i32).any(|by| {
-            let st = w.get(bx, by, bz);
-            if a.info(st).fluid == 0 { return false; }
-            let above = w.get(bx, by + 1, bz);
-            let h = if a.info(above).fluid != 0 { 1.0 } else {
-                let lvl = basalt_data::BlockState(st as u32).get("level").and_then(|v| v.parse::<i32>().ok()).unwrap_or(0);
-                (8 - if lvl >= 8 { 0 } else { lvl }) as f64 / 9.0
-            };
-            fy < by as f64 + h
-        })
+        (fy.floor() as i32..=(fy + 1.8).floor() as i32).any(|by| fy < fluid_top(a, w, bx, by, bz).unwrap_or(f64::MIN))
+    }
+
+    /// Whether the eyes (1.62 above the feet) are under a fluid surface.
+    pub fn eyes_in_fluid_at(&self, a: &Assets, w: &World) -> bool {
+        let ey = self.pos[1] + 1.62;
+        let (bx, by, bz) = (self.pos[0].floor() as i32, ey.floor() as i32, self.pos[2].floor() as i32);
+        ey < fluid_top(a, w, bx, by, bz).unwrap_or(f64::MIN)
     }
 
     /// One 50 ms physics tick.
@@ -144,6 +144,7 @@ impl Player {
         // (client-water swim_up trace, 2026-11-24)
         self.in_water = self.in_fluid_at(a, w, self.pos[1]);
         if !self.in_water { self.eyes_in_water = false; }
+        self.eyes_hist = (self.eyes_hist << 1) | self.eyes_in_fluid_at(a, w) as u8;
         let (mut f, mut s) = (input.forward as f64, input.strafe as f64);
         let len = (f * f + s * s).sqrt(); if len > 1.0 { f /= len; s /= len; }
         f *= 0.98; s *= 0.98;
@@ -167,7 +168,9 @@ impl Player {
             // its depth when looking level (vertical x0.75, snapped to 0 below 0.003)
             let eyes = w.get(self.pos[0].floor() as i32, (self.pos[1] + 1.62).floor() as i32, self.pos[2].floor() as i32);
             self.eyes_in_water = a.info(eyes).fluid != 0;
-            let swimming = sprint && self.eyes_in_water;
+            // swimming (sprint under water) starts 3 ticks after the eyes go under and ends 3 ticks after
+            // they come out (client-water surface_sprint, 2026-11-24)
+            let swimming = sprint && self.eyes_hist & 0b100 != 0;
             if input.jump { self.vel[1] += 0.04; }
             accel_dir(0.02, &mut self.vel);
             let v = self.vel; self.do_move(a, w, v);
@@ -237,6 +240,16 @@ impl Player {
         self.vel[0] *= friction; self.vel[2] *= friction;
         for i in [0, 2] { if self.vel[i].abs() < 0.003 { self.vel[i] = 0.0; } }
     }
+}
+
+/// Surface height of the fluid in a block: its top when fluid is above it, else (8 - level) / 9 of
+/// the block (still water 8/9); None when the block holds no fluid.
+pub fn fluid_top(a: &Assets, w: &World, bx: i32, by: i32, bz: i32) -> Option<f64> {
+    let st = w.get(bx, by, bz);
+    if a.info(st).fluid == 0 { return None; }
+    if a.info(w.get(bx, by + 1, bz)).fluid != 0 { return Some(by as f64 + 1.0); }
+    let lvl = basalt_data::BlockState(st as u32).get("level").and_then(|v| v.parse::<i32>().ok()).unwrap_or(0);
+    Some(by as f64 + (8 - if lvl >= 8 { 0 } else { lvl }) as f64 / 9.0)
 }
 
 /// Per-tick acceleration on the ground: movement speed scaled by the block's slipperiness cubed

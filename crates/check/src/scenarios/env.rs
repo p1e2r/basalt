@@ -315,3 +315,55 @@ pub fn void(ctx: &mut Ctx) -> Result<()> {
     ctx.note(format!("died after {died:.0} ticks, {} hits", dm.len()));
     Ok(())
 }
+
+/// What the server sends when a player falls into water, swims and stays submerged (recording only:
+/// the notes list the sounds and level_particles seen by the swimmer and by an onlooker).
+pub fn water_effects(ctx: &mut Ctx) -> Result<()> {
+    let (bot, o) = setup(ctx)?;
+    let (x, z) = (o[0] + 6, o[2] + 6);
+    column(&bot, x, z, 5, "water")?;
+    let obs = ctx.bot()?;
+    obs.tp([o[0] as f64 + 2.5, Y as f64, o[2] as f64 + 2.5])?;
+    obs.wait_on_ground(Duration::from_secs(5));
+    let sname = |i: i32| basalt_data::registries::SOUND_EVENT.get(i as usize).copied().unwrap_or("?").to_string();
+    let pname = |i: i32| basalt_data::registries::PARTICLE_TYPE.get(i as usize).copied().unwrap_or("?").to_string();
+    let report = |ctx: &mut Ctx, label: &str, who: &str, b: &Bot, from: Instant, to: Instant| {
+        let st = b.st();
+        let snd: Vec<String> = st.sound_detail.iter().filter(|x| x.0 >= from && x.0 < to).map(|x| format!("{} cat{} @{:.1},{:.1},{:.1} v{:.3} p{:.3}", sname(x.1), x.2, x.3[0], x.3[1], x.3[2], x.4, x.5)).collect();
+        let ent: Vec<String> = st.entity_sounds.iter().filter(|x| x.0 >= from && x.0 < to).map(|x| sname(x.1)).collect();
+        let mut counts: std::collections::BTreeMap<String, (usize, i32)> = Default::default();
+        let mut first: std::collections::BTreeMap<String, String> = Default::default();
+        for p in st.particle_log.iter().filter(|p| p.0 >= from && p.0 < to) {
+            let e = counts.entry(pname(p.1)).or_default();
+            e.0 += 1;
+            e.1 += p.5;
+            first.entry(pname(p.1)).or_insert(format!("@{:.2},{:.2},{:.2} d{:?} sp{} n{}", p.2[0], p.2[1], p.2[2], p.3, p.4, p.5));
+        }
+        ctx.note(format!("{label} [{who}] sounds {snd:?} entity_sounds {ent:?}"));
+        ctx.note(format!("{label} [{who}] particles {counts:?} first {first:?}"));
+    };
+    let surface = (Y + 5) as f64;
+    for (label, from_h) in [("fall_from_10", 10.0), ("fall_from_3", 3.0), ("fall_from_1", 1.0)] {
+        bot.wait_ticks(30);
+        let t = Instant::now();
+        bot.tp([x as f64 + 0.5, surface + from_h, z as f64 + 0.5])?;
+        bot.wait_ticks(5);
+        bot.wait_until(Duration::from_secs(3), |s| s.body.pos[1] < surface - 1.0);
+        bot.wait_ticks(10);
+        let t1 = Instant::now();
+        report(ctx, label, "swimmer", &bot, t, t1);
+        report(ctx, label, "onlooker", &obs, t, t1);
+    }
+    bot.tp([x as f64 + 0.5, Y as f64 + 1.0, z as f64 + 0.5])?;
+    bot.wait_ticks(10);
+    let t = Instant::now();
+    bot.wait_ticks(60);
+    let t1 = Instant::now();
+    report(ctx, "submerged_3s", "swimmer", &bot, t, t1);
+    report(ctx, "submerged_3s", "onlooker", &obs, t, t1);
+    let t = Instant::now();
+    bot.tp([o[0] as f64 + 2.5, Y as f64, o[2] as f64 + 2.5])?;
+    bot.wait_ticks(10);
+    report(ctx, "exit", "swimmer", &bot, t, Instant::now());
+    Ok(())
+}

@@ -232,6 +232,35 @@ fn unhex(h: &str) -> Vec<u8> {
         .collect()
 }
 
+/// Effects a client made locally between two marks: the `fx` lines of the log ("sound" / "particle" /
+/// "ptick"; the oracle mod's FxParticleMixin / FxSoundMixin and basalt-client's `script::log_fx`).
+/// `tick` is relative to the `from` mark.
+pub fn read_fx(path: &Path, from: &str, to: &str) -> Result<Vec<Value>> {
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let (mut on, mut t0) = (false, 0i64);
+    let mut v = Vec::new();
+    for l in text.lines() {
+        let Ok(mut j) = serde_json::from_str::<Value>(l) else {
+            continue;
+        };
+        if let Some(m) = j["mark"].as_str() {
+            if m == from {
+                on = true;
+                t0 = j["tick"].as_i64().unwrap_or(0);
+            } else if m == to {
+                on = false;
+            }
+            continue;
+        }
+        if on && j["fx"].is_string() {
+            j["tick"] = Value::from(j["tick"].as_i64().unwrap_or(0) - t0);
+            v.push(j);
+        }
+    }
+    Ok(v)
+}
+
 /// Packets between marks `from` and `to` of a JSONL packet log (vanilla mod or basalt-client format).
 pub fn read_log(path: &Path, from: &str, to: &str) -> Result<Vec<Pkt>> {
     let text =
