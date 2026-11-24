@@ -80,6 +80,7 @@ pub static ALL: &[Spec] = &[
     spec!("M5", "m5_sheep_loot", m5::sheep_loot, Flat, Both, true, "red sheep drops 1 red wool; sheared sheep none"),
     spec!("M5", "m5_undead_sun", m5::undead_sun, Flat, Both, true, "zombie under noon sky catches fire and takes damage"),
     spec!("Env", "env_drowning", env::drowning, Flat, Both, true, "air drains 1/tick, 2 damage at -20, then every 20 ticks; refill +4/tick"),
+    spec!("Env", "env_water_effects", env::water_effects, Flat, Both, false, "recording: sounds + particles the server sends when falling into / staying in water"),
     spec!("Env", "env_respiration", env::respiration, Flat, Both, true, "Respiration III slows air loss"),
     spec!("Env", "env_water_breathing", env::water_breathing, Flat, Both, true, "Water Breathing keeps air at 300"),
     spec!("Env", "env_freezing", env::freezing, Flat, Both, true, "powder snow: ticks_frozen +1/tick to 140, damage every 40 ticks, thaw 2/tick"),

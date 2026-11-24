@@ -132,6 +132,8 @@ pub struct State {
     pub entity_sounds: Vec<(Instant, i32)>,
     /// positional sounds: (time, event, category, position, volume, pitch)
     pub sound_detail: Vec<(Instant, i32, i32, [f64; 3], f32, f32)>,
+    /// level_particles: (time, particle type id, position, delta, speed, count)
+    pub particle_log: Vec<(Instant, i32, [f64; 3], [f32; 3], f32, i32)>,
     pub xp_total: i32,
     pub xp_level: i32,
     /// entities removed by remove_entities (with their last known state), oldest first
@@ -240,7 +242,7 @@ impl Bot {
             spawned: false, loaded_sent: false, dead: false, death_msg: None, health: 20.0, food: 20, saturation: 5.0, air: 300, ticks_frozen: 0, flags: 0,
             effects: HashMap::new(), inv: vec![Stack::default(); 46], cursor: Stack::default(), held: 0, state_id: 0, cont_log: Vec::new(), screen: None, container: Vec::new(),
             chat: Vec::new(), entities: HashMap::new(), players: HashMap::new(), world: World::default(), teleports: Vec::new(), plog: Vec::new(), boss_log: Vec::new(),
-            counts: HashMap::new(), ticks: 0, disconnected: None, damage: Vec::new(), health_log: Vec::new(), taken: Vec::new(), explosions: Vec::new(), op_level: 0, entity_events: Vec::new(), registries: HashMap::new(), block_updates: 0, screen_title: String::new(), props: HashMap::new(), prop_log: Vec::new(), block_events: Vec::new(), sounds: Vec::new(), entity_sounds: Vec::new(), sound_detail: Vec::new(), xp_total: 0, xp_level: 0, removed: Vec::new(), difficulty: None,
+            counts: HashMap::new(), ticks: 0, disconnected: None, damage: Vec::new(), health_log: Vec::new(), taken: Vec::new(), explosions: Vec::new(), op_level: 0, entity_events: Vec::new(), registries: HashMap::new(), block_updates: 0, screen_title: String::new(), props: HashMap::new(), prop_log: Vec::new(), block_events: Vec::new(), sounds: Vec::new(), entity_sounds: Vec::new(), sound_detail: Vec::new(), particle_log: Vec::new(), xp_total: 0, xp_level: 0, removed: Vec::new(), difficulty: None,
             out: otx, last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input: 0, seq: 0, raw_ids: Vec::new(), raw: Vec::new(), cooldowns: Vec::new(), effect_log: Vec::new(), level_events: Vec::new(), damage_events: Vec::new(),
         }));
         let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -569,6 +571,13 @@ fn handle(s: &mut State, id: i32, data: &[u8]) -> Result<()> {
         cb::FORGET_LEVEL_CHUNK => { let cz = r.i32()?; let cx = r.i32()?; s.world.chunks.remove(&(cx, cz)); }
         cb::CONTAINER_SET_DATA => { let w = r.varint()?; let id = r.i16()?; let v = r.i16()?; if s.screen.as_ref().map(|x| x.0) == Some(w) { s.props.insert(id, v); s.prop_log.push((Instant::now(), id, v)); } }
         cb::BLOCK_EVENT => { let (x, y, z) = r.position()?; let t = r.u8()?; let v = r.u8()?; s.block_events.push((Instant::now(), [x, y, z], t, v)); }
+        cb::LEVEL_PARTICLES => {
+            let _force = r.bool()?; let _always = r.bool()?;
+            let (x, y, z) = (r.f64()?, r.f64()?, r.f64()?);
+            let d = [r.f32()?, r.f32()?, r.f32()?];
+            let speed = r.f32()?; let count = r.i32()?; let id = r.varint()?;
+            s.particle_log.push((Instant::now(), id, [x, y, z], d, speed, count));
+        }
         cb::SOUND => {
             let id = r.varint()?;
             if id > 0 {

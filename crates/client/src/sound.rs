@@ -130,6 +130,8 @@ impl Sounds {
     /// Play a sound event at a world position (None = non-positional, e.g. UI).
     pub fn play(&mut self, event: &str, pos: Option<[f64; 3]>, volume: f32, pitch: f32) {
         let event = event.trim_start_matches("minecraft:");
+        let p = pos.unwrap_or([0.0; 3]);
+        crate::script::log_fx("sound", &format!("minecraft:{event}"), &[("x", p[0]), ("y", p[1]), ("z", p[2]), ("vol", volume as f64), ("pitch", pitch as f64)]);
         let Some(v) = self.pick(event, 0) else { return };
         let vol = volume * v.volume;
         let (mut gain, mut pan) = (vol.min(1.0), 0.0f32);

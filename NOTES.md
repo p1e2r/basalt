@@ -776,3 +776,9 @@ Rules are documented in the module headers: crates/server/src/game/{proj,potion,
 throw_basics, throw_eggs, throw_pearl, throw_xp_bottle, throw_hit_mob, throw_splash, throw_lingering, bow_shoot, trident_throw, wind_charge.
 Projectile tick order: v.y=(v.y-g)*0.99, v.xz*=0.99, then move; gravity .03 snowball/egg/pearl, .07 xp bottle, .05 potions/trident/arrow, 0 wind charge.
 Probe tooling: `basalt-check --probe ADDR NAME raw:add_entity,... use look:0,90 release mark:X dumpraw`.
+## Water effects (client-water, 2026-11-24)
+Measured with the oracle mod's fx log (FxParticleMixin / FxSoundMixin: the client's local particles/sounds in the packet log; test-only) and an onlooker bot on vanilla (env_water_effects):
+- The server sends only `entity.player.splash` (cat 7, at the player, volume 0.2 x speed) to OTHER players; no particles, and nothing to the swimmer. The real client plays everything itself. (Basalt server does not yet send the onlooker splash.)
+- Splash on entering water, in the tick that moves the feet in: sound volume 0.2 x |dy of that tick|, pitch 1 +- 0.4, `.high_speed` variant when volume > 0.25 (0.250 normal, 0.261 high); 13 BubbleParticle + 13 SplashParticle at y = floor(feet)+1, x/z within 0.5. Bubbles: vy -(vol) - U(-0.004,0.056), vx/vz +-0.02, life 8/(0.2+0.8U), half-size 0.027..0.137; per tick vy += 0.002, move, x0.85, die outside water. Drops: vy U(0.105,0.295), vx/vz +-0.04, half-size 0.10..0.196, sprite splash_0..3; per tick vy -= 0.04, move, x0.98, die below the water surface.
+- `ambient.underwater.enter` (vol 1) fires ~2 ticks after the eyes go under (1 at 40-block falls: exact rule not found), `.exit` 1-2 ticks after they come out. No swim particles were seen while sprint-swimming.
+- Sprint-swimming (drag 0.9, vertical x0.75) starts 3 ticks after the eyes are under and ends 3 ticks after they leave (surface_sprint matches).

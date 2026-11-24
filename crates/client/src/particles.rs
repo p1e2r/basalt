@@ -17,6 +17,8 @@ pub struct Particle {
     uv: [f32; 4],
     tint: [u8; 3],
     on_ground: bool,
+    /// 0 block chip, 1 water bubble, 2 water splash drop
+    kind: u8,
 }
 
 #[derive(Default)]
@@ -27,6 +29,20 @@ pub struct Particles {
 
 /// Upper bound like the vanilla client keeps (old particles make way for new ones).
 const MAX: usize = 4000;
+
+/// One tick of a water bubble (buoyancy +0.002, drag 0.85) or splash drop (gravity 0.04, drag 0.98):
+/// accelerate, move by the new velocity, then apply the drag (checked against the real client's
+/// per-tick particle positions, oracle fx log 2026-11-24 — see the test).
+fn water_step(bubble: bool, pos: &mut [f64; 3], vel: &mut [f64; 3]) {
+    vel[1] += if bubble { 0.002 } else { -0.04 };
+    for i in 0..3 {
+        pos[i] += vel[i];
+    }
+    let drag = if bubble { 0.85 } else { 0.98 };
+    for v in vel.iter_mut() {
+        *v *= drag;
+    }
+}
 
 impl Particles {
     fn rand(&mut self) -> f64 {
@@ -68,6 +84,7 @@ impl Particles {
             uv,
             tint,
             on_ground: false,
+            kind: 0,
         });
     }
 
@@ -75,7 +92,7 @@ impl Particles {
         if self.list.len() >= MAX {
             self.list.remove(0);
         }
-        self.list.push(Particle { pos, prev: pos, vel, age: 0, life, size, uv, tint, on_ground: false });
+        self.list.push(Particle { pos, prev: pos, vel, age: 0, life, size, uv, tint, on_ground: false, kind: 0 });
     }
 
     /// Item break burst (a snowball or egg hitting something): small chips of the item sprite.
@@ -111,6 +128,49 @@ impl Particles {
             let life = 10 + (self.rand() * 20.0) as u32;
             self.spawn_uv(uv, c, vel, tint, life, 0.12);
         }
+    }
+
+    pub fn rr(&mut self, lo: f64, hi: f64) -> f64 {
+        if self.seed == 0 {
+            self.seed = 0x9E37_79B9_7F4A_7C15;
+        }
+        lo + (hi - lo) * self.rand()
+    }
+
+    /// The splash a body makes entering water at `speed` (blocks/tick, vertical): 13 splash drops and
+    /// 13 bubbles from a spot on the surface (floor(y)+1) within 0.5 blocks of the body's axis.
+    /// Fitted to the real 26.2 client's local particles (oracle fx log, client-water cases, 2026-11-24):
+    /// bubbles start with vy = -(0.2 * speed) - U(-0.004..0.056), vx/vz +-0.02, quad half-size
+    /// 0.027..0.137; drops vy U(0.105..0.295) vx/vz +-0.04, half-size 0.10..0.196, one of 4 sprites;
+    /// both live 8 / (0.2 + 0.8 U) ticks.
+    pub fn water_splash(&mut self, a: &Assets, pos: [f64; 3], speed: f64) {
+        let y = pos[1].floor() + 1.0;
+        for _ in 0..13 {
+            let at = [pos[0] + self.rr(-0.5, 0.5), y, pos[2] + self.rr(-0.5, 0.5)];
+            let v = [self.rr(-0.02, 0.02), -(0.2 * speed) - self.rr(-0.004, 0.056), self.rr(-0.02, 0.02)];
+            let (life, size) = (self.life8(), self.rr(0.027, 0.137) as f32);
+            self.spawn_sprite(a, "particle/bubble", 1, at, v, life, size);
+        }
+        for _ in 0..13 {
+            let at = [pos[0] + self.rr(-0.5, 0.5), y, pos[2] + self.rr(-0.5, 0.5)];
+            let v = [self.rr(-0.04, 0.04), self.rr(0.105, 0.295), self.rr(-0.04, 0.04)];
+            let (life, size) = (self.life8(), self.rr(0.10, 0.196) as f32);
+            let n = (self.rand() * 4.0) as u32;
+            self.spawn_sprite(a, &format!("particle/splash_{n}"), 2, at, v, life, size);
+        }
+    }
+
+    fn life8(&mut self) -> u32 {
+        (8.0 / self.rr(0.2, 1.0)) as u32
+    }
+
+    fn spawn_sprite(&mut self, a: &Assets, name: &str, kind: u8, pos: [f64; 3], vel: [f64; 3], life: u32, half: f32) {
+        let Some(uv) = a.tex_uv(name) else { return };
+        crate::script::log_fx("particle", if kind == 1 { "BubbleParticle" } else { "SplashParticle" }, &[("x", pos[0]), ("y", pos[1]), ("z", pos[2]), ("vx", vel[0]), ("vy", vel[1]), ("vz", vel[2]), ("life", life as f64), ("size", half as f64)]);
+        if self.list.len() >= MAX {
+            self.list.remove(0);
+        }
+        self.list.push(Particle { pos, prev: pos, vel, age: 0, life, size: half, uv, tint: [255; 3], on_ground: false, kind });
     }
 
     /// A broken block: a 4x4x4 burst spread through the block, flying outwards from its centre.
@@ -201,7 +261,35 @@ impl Particles {
             );
             s != 0 && a.info(s).collides
         };
+        // surface height of the water at a point (None when it isn't in water): still water is 8/9 of
+        // its block, water with water above fills it
+        let water_top = |p: [f64; 3]| -> Option<f64> {
+            let (x, y, z) = (p[0].floor() as i32, p[1].floor() as i32, p[2].floor() as i32);
+            let st = world.get(x, y, z);
+            if st == 0 || a.info(st).fluid != 1 {
+                return None;
+            }
+            if a.info(world.get(x, y + 1, z)).fluid != 0 {
+                return Some(y as f64 + 1.0);
+            }
+            let lvl = basalt_data::BlockState(st as u32).get("level").and_then(|v| v.parse::<i32>().ok()).unwrap_or(0);
+            Some(y as f64 + (8 - if lvl >= 8 { 0 } else { lvl }) as f64 / 9.0)
+        };
         self.list.retain_mut(|q| {
+            if q.kind != 0 {
+                // water bubble / splash drop: vanilla order — expire, accelerate, move, drag, then die
+                // outside water (bubbles) or below the surface (drops); positions fitted to the real client
+                if q.age >= q.life {
+                    return false;
+                }
+                q.age += 1;
+                q.prev = q.pos;
+                water_step(q.kind == 1, &mut q.pos, &mut q.vel);
+                return match water_top(q.pos) {
+                    Some(top) => q.kind == 1 || q.pos[1] >= top,
+                    None => q.kind != 1 && !solid(q.pos),
+                };
+            }
             q.age += 1;
             if q.age >= q.life {
                 return false;
@@ -263,7 +351,8 @@ impl Particles {
                 (q.prev[2] + (q.pos[2] - q.prev[2]) * alpha as f64) as f32,
             );
             let (sl, bl) = world.light(c.x.floor() as i32, c.y.floor() as i32, c.z.floor() as i32);
-            let (r, u) = (right * q.size * 0.5, up * q.size * 0.5);
+            let k = if q.kind == 0 { 0.5 } else { 1.0 };
+            let (r, u) = (right * q.size * k, up * q.size * k);
             let pts = [c - r + u, c - r - u, c + r - u, c + r + u];
             let uvs = [
                 [q.uv[0], q.uv[1]],
@@ -294,6 +383,27 @@ impl Particles {
                 b + 3,
                 b + 2,
             ]);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::water_step;
+
+    /// Positions of two particles recorded from the real client (client-water fall_10, tick by tick).
+    #[test]
+    fn bubble_and_drop_follow_the_recorded_paths() {
+        let (mut p, mut v) = ([2005.0792, 200.0, 2005.4943], [-0.0171, -0.2531, 0.0043]);
+        let want = [199.7489, 199.5374, 199.3597, 199.2106, 199.0859, 198.9819, 198.8955, 198.8241];
+        for w in want {
+            water_step(true, &mut p, &mut v);
+            assert!((p[1] - w).abs() < 2e-4, "bubble y {} vs {w}", p[1]);
+        }
+        let (mut p, mut v) = ([2004.98, 200.0, 2005.838], [0.0244, 0.1345, -0.0079]);
+        for w in [200.0945, 200.1471, 200.1586, 200.1299, 200.0618, 199.9551] {
+            water_step(false, &mut p, &mut v);
+            assert!((p[1] - w).abs() < 2e-4, "drop y {} vs {w}", p[1]);
         }
     }
 }

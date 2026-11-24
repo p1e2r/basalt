@@ -182,7 +182,7 @@ impl Jar {
         let mut z = zip::ZipArchive::new(std::io::BufReader::new(f))?;
         let wanted = ["assets/minecraft/texts/splashes.txt", "assets/minecraft/blockstates/", "assets/minecraft/models/block/", "assets/minecraft/textures/block/", "assets/minecraft/textures/colormap/",
             "assets/minecraft/textures/font/", "assets/minecraft/font/include/default.json", "assets/minecraft/textures/gui/", "assets/minecraft/textures/item/", "assets/minecraft/models/item/", "assets/minecraft/items/",
-            "assets/minecraft/textures/entity/", "assets/minecraft/textures/environment/", "assets/minecraft/lang/en_us.json",
+            "assets/minecraft/textures/entity/", "assets/minecraft/textures/environment/", "assets/minecraft/textures/particle/", "assets/minecraft/lang/en_us.json",
             "data/minecraft/dimension_type/", "data/minecraft/worldgen/biome/"];
         let mut files = HashMap::new();
         for i in 0..z.len() {
@@ -442,7 +442,9 @@ fn build_atlas(jar: &Jar) -> Atlas {
     let mut imgs: Vec<(String, Image)> = Vec::new();
     for (path, data) in &jar.files {
         let Some(rest) = path.strip_prefix("assets/minecraft/textures/") else { continue };
-        if !(rest.starts_with("block/") || rest.starts_with("item/")) || !rest.ends_with(".png") { continue; }
+        // particle sprites in the atlas: only the ones drawn so far (water splash + bubbles)
+        let particle = rest.strip_prefix("particle/").map(|n| n.starts_with("splash_") || n == "bubble.png").unwrap_or(false);
+        if !(rest.starts_with("block/") || rest.starts_with("item/") || particle) || !rest.ends_with(".png") { continue; }
         if let Ok(mut img) = decode_png(data) {
             if img.h > img.w && img.h % img.w == 0 { img.rgba.truncate((img.w * img.w * 4) as usize); img.h = img.w; } // animation strip: first frame
             imgs.push((rest.trim_end_matches(".png").to_string(), img));

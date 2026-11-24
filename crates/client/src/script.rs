@@ -32,6 +32,18 @@ pub(crate) fn log_packet(buf: &[u8]) {
     *seq += 1;
 }
 
+/// A locally made effect (sound / particle), logged next to the packets like the oracle mod's fx
+/// lines (`{"tick","fx":"sound"|"particle","name",...numbers}`) so the harness can compare them.
+pub(crate) fn log_fx(fx: &str, name: &str, fields: &[(&str, f64)]) {
+    let Ok(mut g) = LOG.lock() else { return };
+    let Some((f, _)) = g.as_mut() else { return };
+    let mut line = format!("{{\"tick\":{},\"fx\":\"{fx}\",\"name\":{}", TICK.load(Ordering::Relaxed), Value::String(name.into()));
+    for (k, v) in fields {
+        line += &format!(",\"{k}\":{v}");
+    }
+    let _ = writeln!(f, "{line}}}");
+}
+
 fn mark(label: &str) {
     if let Ok(mut g) = LOG.lock() {
         if let Some((f, _)) = g.as_mut() {
