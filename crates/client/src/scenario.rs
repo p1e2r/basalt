@@ -14,7 +14,7 @@ use winit::keyboard::KeyCode;
 const W: u32 = 854;
 const H: u32 = 480;
 
-pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer", "falling_block", "sprint", "xp_bar", "titles", "nether", "enchanting_screen", "anvil_screen", "grindstone_screen", "smithing_screen", "brewing_screen", "font_widths", "grass_overlay"];
+pub const ALL: &[&str] = &["edge_chunks", "inventory", "crafting_table", "death", "dig", "dig_others", "models", "interp", "head_pitch", "first_person_arm", "command_suggestions", "sounds", "menus", "held_item", "break_particles", "options_pages", "chest", "furnace", "server_list", "singleplayer", "falling_block", "sprint", "xp_bar", "titles", "nether", "enchanting_screen", "anvil_screen", "grindstone_screen", "smithing_screen", "brewing_screen", "font_widths", "grass_overlay", "item_drop_smooth"];
 
 enum Outcome { Pass(String), Skip(String) }
 
@@ -40,7 +40,7 @@ pub fn run(args: &Args, assets: Arc<Assets>, name: &str) -> Result<bool> {
         let t = Instant::now();
         let r = match s {
             "edge_chunks" => edge_chunks(&ctx), "inventory" => inventory(&ctx), "crafting_table" => crafting_table(&ctx), "death" => death(&ctx),
-            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "falling_block" => falling_block(&ctx), "sprint" => sprint(&ctx), "xp_bar" => xp_bar(&ctx), "titles" => titles(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx), "nether" => nether(&ctx), "enchanting_screen" => enchanting_screen(&ctx), "anvil_screen" => anvil_screen(&ctx), "grindstone_screen" => grindstone_screen(&ctx), "smithing_screen" => smithing_screen(&ctx), "brewing_screen" => brewing_screen(&ctx), "font_widths" => font_widths(&ctx), "grass_overlay" => grass_overlay(&ctx),
+            "dig" => dig(&ctx), "dig_others" => dig_others(&ctx), "models" => models(&ctx), "interp" => interp(&ctx), "head_pitch" => head_pitch(&ctx), "first_person_arm" => first_person_arm(&ctx), "command_suggestions" => command_suggestions(&ctx), "sounds" => sounds(&ctx), "menus" => menus(&ctx), "held_item" => held_item(&ctx), "break_particles" => break_particles(&ctx), "options_pages" => options_pages(&ctx), "server_list" => server_list(&ctx), "singleplayer" => singleplayer(&ctx), "falling_block" => falling_block(&ctx), "sprint" => sprint(&ctx), "xp_bar" => xp_bar(&ctx), "titles" => titles(&ctx), "chest" => chest(&ctx), "furnace" => furnace(&ctx), "nether" => nether(&ctx), "enchanting_screen" => enchanting_screen(&ctx), "anvil_screen" => anvil_screen(&ctx), "grindstone_screen" => grindstone_screen(&ctx), "smithing_screen" => smithing_screen(&ctx), "brewing_screen" => brewing_screen(&ctx), "font_widths" => font_widths(&ctx), "grass_overlay" => grass_overlay(&ctx), "item_drop_smooth" => item_drop_smooth(&ctx),
             other => Err(anyhow!("unknown scenario {other} (known: {})", ALL.join(", "))),
         };
         let secs = t.elapsed().as_secs_f32();
@@ -930,6 +930,61 @@ fn break_particles(c: &Ctx) -> Result<Outcome> {
     wait(&mut g, 2.5)?;
     if !g.particles.is_empty() { bail!("{} particles still alive after 2.5 s", g.particles.len()); }
     Ok(Outcome::Pass(format!("{dig_max} while digging, {after} on break, all gone after 2.5 s")))
+}
+
+/// Dropped items must not teleport: a Q-drop and a block drop are followed every tick for 1.5 s;
+/// the item starts where add_entity put it and never moves more in one tick than its own speed
+/// plus 0.1 (a jump to a server sync position after hanging still was the bug).
+fn item_drop_smooth(c: &Ctx) -> Result<Outcome> {
+    let mut g = c.game("drop")?;
+    join(&mut g)?;
+    cmd(&mut g, "gamemode creative");
+    tp(&mut g, [960.5, -60.0, 960.5], 0.0, 10.0)?;
+    wait(&mut g, 1.0)?;
+    cmd(&mut g, "gamemode survival");
+    cmd(&mut g, "clear @s");
+    cmd(&mut g, "give @s cobblestone 4");
+    wait(&mut g, 0.5)?;
+    let snapshot = |g: &Game| -> std::collections::HashSet<i32> { g.entities.keys().copied().collect() };
+    let follow = |g: &mut Game, label: &str, before: std::collections::HashSet<i32>| -> Result<String> {
+        let mut id = None;
+        for _ in 0..40 {
+            if let Some(e) = g.entities.values().find(|e| crate::entity::type_name(e.kind) == "item" && !before.contains(&e.id)) { id = Some(e.id); break; }
+            step(g)?;
+        }
+        let Some(id) = id else { bail!("{label}: no item entity appeared") };
+        let (mut last, mut worst) = (g.entities[&id].pos, 0.0f64);
+        let spawn = g.entities[&id].server_pos;
+        let d0: f64 = (0..3).map(|i| (last[i] - spawn[i]).powi(2)).sum::<f64>().sqrt();
+        if d0 > 0.35 { bail!("{label}: item appeared {d0:.2} from its spawn position"); }
+        for t in 0..30 {
+            let speed = { let e = &g.entities[&id]; (e.vel[0] * e.vel[0] + e.vel[1] * e.vel[1] + e.vel[2] * e.vel[2]).sqrt() };
+            step(g)?;
+            let Some(e) = g.entities.get(&id) else { break };
+            let d: f64 = (0..3).map(|i| (e.pos[i] - last[i]).powi(2)).sum::<f64>().sqrt();
+            let jump = d - speed;
+            worst = worst.max(jump);
+            if jump > 0.1 { bail!("{label}: tick {t}: moved {d:.3} with speed {speed:.3} (jump {jump:.3})"); }
+            last = e.pos;
+        }
+        Ok(format!("{label} worst excess {worst:.3}"))
+    };
+    let before = snapshot(&g);
+    tap(&mut g, KeyCode::KeyQ, None)?;
+    let a = follow(&mut g, "Q-drop", before)?;
+    let b = [961, -60, 963];
+    cmd(&mut g, &format!("setblock {} {} {} dirt", b[0], b[1], b[2]));
+    if !wait_until(&mut g, 3.0, |g| basalt_data::BlockState(g.world.get(b[0], b[1], b[2]) as u32).name() == "dirt")? { bail!("setblock dirt failed"); }
+    // survival digging by hand (dirt: 15 ticks), so the drop takes the block-break path
+    look_at(&mut g, [b[0] as f64 + 0.5, b[1] as f64 + 0.5, b[2] as f64]);
+    step(&mut g)?;
+    let before = snapshot(&g);
+    g.mouse_button(0, true);
+    let broke = wait_until(&mut g, 3.0, |g| basalt_data::BlockState(g.world.get(b[0], b[1], b[2]) as u32).is_air())?;
+    g.mouse_button(0, false);
+    if !broke { bail!("dirt did not break"); }
+    let bd = follow(&mut g, "block drop", before)?;
+    Ok(Outcome::Pass(format!("{a}; {bd}")))
 }
 
 /// Grass side flicker (z-fighting): the grass_block side overlay is a second, coplanar quad in the

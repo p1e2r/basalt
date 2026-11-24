@@ -678,7 +678,28 @@ impl Game {
 
     fn tick(&mut self) {
         self.ticks += 1;
+        let lerping: std::collections::HashSet<i32> = self.entities.values().filter(|e| e.steps > 0).map(|e| e.id).collect();
         for e in self.entities.values_mut() { e.tick(); }
+        // items and XP orbs move on their own between the server's (every 20 ticks) syncs, like the
+        // vanilla client: without this they hang still after spawning, then jump to the synced spot
+        for e in self.entities.values_mut() {
+            let k = entity::type_name(e.kind);
+            // a tick spent lerping to a server position is that tick's movement
+            if lerping.contains(&e.id) || !matches!(k, "item" | "experience_orb") { continue; }
+            e.vel[1] -= if k == "item" { 0.04 } else { 0.03 };
+            let h = 0.125;
+            let bb = [e.pos[0] - h, e.pos[1], e.pos[2] - h, e.pos[0] + h, e.pos[1] + 0.25, e.pos[2] + h];
+            let m = player::move_box(&self.assets, &self.world, bb, e.vel);
+            let ground = e.vel[1] < 0.0 && m[1] > e.vel[1] + 1e-7;
+            for i in 0..3 { e.pos[i] += m[i]; if (m[i] - e.vel[i]).abs() > 1e-7 { e.vel[i] = 0.0; } }
+            let slip = if ground {
+                let below = self.world.get(e.pos[0].floor() as i32, (e.pos[1] - 0.99).floor() as i32, e.pos[2].floor() as i32);
+                match basalt_data::BlockState(below as u32).name() { "ice" | "packed_ice" | "frosted_ice" => 0.98, "blue_ice" => 0.989, "slime_block" => 0.8, _ => 0.6 }
+            } else { 1.0 };
+            e.vel[0] *= slip * 0.98; e.vel[2] *= slip * 0.98; e.vel[1] *= 0.98;
+            e.on_ground = ground;
+            e.target = e.pos;
+        }
         if self.fp_swing >= 0 { self.fp_swing += 1; if self.fp_swing >= 6 { self.fp_swing = -1; } }
         if !self.particles.is_empty() { self.particles.tick(&self.assets, &self.world); }
         // equip height (measured on the vanilla client, oracle "fp" recorder 2026-11-23): moves at most

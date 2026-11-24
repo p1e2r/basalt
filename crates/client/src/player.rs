@@ -73,6 +73,14 @@ fn sweep(mut bb: Aabb, boxes: &[Aabb], d: [f64; 3]) -> ([f64; 3], Aabb) {
     (out, bb)
 }
 
+/// Move a box by `d` against the world's block shapes (y, then x, z); returns the distance moved.
+pub fn move_box(a: &Assets, w: &World, bb: Aabb, d: [f64; 3]) -> [f64; 3] {
+    let mut boxes = Vec::new();
+    let reach = [bb[0].min(bb[0] + d[0]), bb[1].min(bb[1] + d[1]), bb[2].min(bb[2] + d[2]), bb[3].max(bb[3] + d[0]), bb[4].max(bb[4] + d[1]), bb[5].max(bb[5] + d[2])];
+    collect(a, w, &reach, &mut boxes);
+    sweep(bb, &boxes, d).0
+}
+
 impl Player {
     pub fn new() -> Self { Player { pos: [0.0, 100.0, 0.0], vel: [0.0; 3], yaw: 0.0, pitch: 0.0, on_ground: false, h_collide: false, flying: false, gamemode: 0, in_water: false, prev_pos: [0.0, 100.0, 0.0], sneaking: false } }
     pub fn eye_height(&self) -> f64 { if self.sneaking { 1.27 } else { 1.62 } }
