@@ -691,7 +691,7 @@ impl Game {
             let bb = [e.pos[0] - h, e.pos[1], e.pos[2] - h, e.pos[0] + h, e.pos[1] + 0.25, e.pos[2] + h];
             let m = player::move_box(&self.assets, &self.world, bb, e.vel);
             let ground = e.vel[1] < 0.0 && m[1] > e.vel[1] + 1e-7;
-            for i in 0..3 { e.pos[i] += m[i]; if (m[i] - e.vel[i]).abs() > 1e-7 { e.vel[i] = 0.0; } }
+            for (i, mi) in m.iter().enumerate() { e.pos[i] += mi; if (mi - e.vel[i]).abs() > 1e-7 { e.vel[i] = 0.0; } }
             let slip = if ground {
                 let below = self.world.get(e.pos[0].floor() as i32, (e.pos[1] - 0.99).floor() as i32, e.pos[2].floor() as i32);
                 match basalt_data::BlockState(below as u32).name() { "ice" | "packed_ice" | "frosted_ice" => 0.98, "blue_ice" => 0.989, "slime_block" => 0.8, _ => 0.6 }
