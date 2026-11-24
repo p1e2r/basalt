@@ -11,7 +11,7 @@ of light levels — ARE allowed, each with a comment saying where/how it was mea
 
 Read NOTES.md for verified packet formats.
 
-## Status (updated 2026-11-23)
+## Status (updated 2026-11-24, wrap-up)
 - Done & working: crates/nbt, crates/data (tables generated from ./data at build time),
   crates/protocol (framing, compression, varints, NBT, text), crates/probe (joins a server and
   dumps packets; `basalt-probe proxy LISTEN TARGET DUMPDIR` logs both directions).
@@ -88,6 +88,52 @@ Read NOTES.md for verified packet formats.
   occlusion on inset faces 7.9k (~10 % of vertices: a diagonal cell sometimes counts differently), uv 6.8k
   (sculk vein, resin clump, glow lichen, fences/uvlock with x rotation), culling ~3.3k (sculk sensors,
   trapdoors/doors, dried ghast), shade 0.9k, lever/tripwire hook/hanging sign geometry 0.5k, bamboo variants.
+
+### Hand-off (2026-11-24 wrap-up — the user took the laptop away; back Wed 25 Nov 8 pm WIB)
+Play-test bugs the user reported on 24 Nov and where they stand:
+| Bug | State |
+|---|---|
+| Font: buttons read "Si ngl epl ayer" | fixed (11b527b): UI atlas overflowed before the ascii font page; scenario font_widths |
+| Grass flicker | fixed (ffc14f8): missing mipmaps (shimmer), diagnosed from motion recordings of both clients (`client-visual --motion`); 4 mip levels, coverage-preserving alpha. @invariant (545068a) covers coplanar overlays. Ask the user to confirm in play |
+| Dropped items teleport | fixed (bfe958a): client simulates items/orbs between server syncs; scenario item_drop_smooth |
+| No pickup animation | fixed (dc5b9de): flying item + hotbar pop + sound; scenario pickup_anim. Pop size/timing are estimates, not oracle-compared |
+| Pickup slot order | fixed + verified (dc5b9de, 13f7446): fuzz_pickup 750 cases = vanilla |
+| Chat history / keys | fixed (81a4dc2): history, Tab, PageUp/Down, Home/End, Shift selection, Ctrl/Cmd A/C/X/V; scenario chat_keys |
+| Water physics | movement fixed (c4a3f9a, harness client-water 4/4 = real client); splash/bubbles/sounds, lava, currents, Depth Strider, Dolphin's Grace, swim pose: agent branch worktree-agent-ae0d6e8c9e8320a65 (see below) |
+| Landing sounds | fixed (9dc6124): server sends onlookers small/big_fall + block fall + hurt (= vanilla, m4_fall_damage); client plays them locally + dust (dust amount not measured) |
+| Animals end up in water | fixed (merge 5ada958): water-avoiding stroll, float back to land, spawn rules; m5_animals_avoid_water / m5_animal_float / m5_chicken_fall |
+| Double-block breaking + support | fixed (merge fe6053e): both halves, drops from the lower half, support pops, /setblock+/fill destroy drops; m4_double_block_break / m4_support_break |
+| Throwables (eggs etc.) + tool actions | in progress: agent branch worktree-agent-a68d4f6072bc2774f (see below) |
+| Scoreboard sidebar / boss bars | done (75989f4) |
+
+Half-done work (unmerged branches, pushed to origin):
+- worktree-agent-a68d4f6072bc2774f (7b1026f) — throwables/use_item. Server done + = vanilla (scenarios throw_basics,
+  throw_eggs, throw_pearl, throw_xp_bottle, throw_hit_mob, throw_splash, throw_lingering, bow_shoot, trident_throw,
+  wind_charge: --diff pass): snowball, egg (1/8 baby, 1/32 four), ender pearl (5 dmg, 20-tick cooldown), xp bottle,
+  splash potions (46-potion table measured), lingering clouds, wind charge, bow, trident. Client partial (thrown-item
+  sprites, flight prediction, break particles, use/release sent) with NO client scenario and the use_item-after-block-use
+  rule unmeasured. pr_ready not run on the branch. Todo: crossbow, trident enchants, endermites, egg variants, tipped/
+  spectral arrows, bow enchants, buckets, flint and steel, bonemeal, shears, hoe/shovel/axe, fishing rod.
+- worktree-agent-ae0d6e8c9e8320a65 (3b8e7f8) — water effects fitted to the real client (oracle FxParticle/FxSound hooks):
+  splash sound 0.2 x |dy| (high_speed above 0.25), 13 bubbles + 13 drops, underwater enter/exit (within 2 ticks),
+  sprint-swim starts/ends 3 ticks after the eyes go under/out; client-water now 12 cases (movement 12/12, effects 11/12:
+  fall_3 particle-speed tolerance loosened, not re-run); client scenario water_splash. WIP, never run: lava, current,
+  swim_fwd, wade, Dolphin's Grace, Depth Strider cases in water.rs — the client still needs mob-effect tracking
+  (UPDATE_MOB_EFFECT), boots enchants, lava + current physics; swim pose not recorded (no oracle hook). Server doesn't
+  yet send onlookers entity.player.splash (cat 7, vol 0.2 x speed). pr_ready not run on the branch.
+- worktree-agent-a8aab1358eb6aafd2 — WIP m8_portal_place measurement scenario for vanilla's exit-portal build rule (no fix yet).
+
+Next steps for a fresh session, in order:
+0. Main's last full gate (2026-11-24 ~11:00, base 9dc6124, no cache): 93/95 harnesses pass; the 2 failures are vanilla-side
+   only and pass when run alone: m5_chicken_fall (vanilla chicken "lands" in 0.48 s) and m5_undead_sun (vanilla zombie
+   doesn't burn). Likely parallel scenarios changing the shared vanilla world (e.g. m6_weather's rain) — make these
+   scenarios set/restore their own weather/time and arena, or mark them serial, then re-run.
+1. `git fetch`; review + merge the two agent branches above (`git merge origin/<branch>`), fix conflicts, `tools/pr_ready.sh` (the shared vanilla server on 25566 is flaky under concurrent use — re-run failing vanilla-side diffs alone before believing them), push.
+2. Finish throwables (egg, snowball, pearl, xp bottle, potions, wind charge, trident, bow/crossbow) then buckets, flint and steel, bonemeal, shears, hoe/shovel/axe, fishing rod — each measured on vanilla with a differential scenario.
+3. Finish water effects (splash/bubbles/sounds), lava, currents, Depth Strider, Dolphin's Grace, swim pose, the first ticks of surface floating — extend `basalt-check client-water`.
+4. Ask the user to play-test the fixes above (grass, pickups, chat, water, landing) in the real game.
+5. Remaining plan: M3c woodland mansions, M8 End + exit-portal build rule, M9 redstone (Fable after Thu 26 Nov 6 pm WIB), fluids/block ticks, M11-M14.
+6. Disk: keep ~/Downloads/rustcraft under 20 GB with `cargo xtask clean-disk`; enable the shared worktree build folder (.claude/worktrees/.cargo/config.toml.off -> config.toml) only when no agent is running.
 
 ### Task list
 - [x] M1 client builds, joins vanilla, renders chunks
@@ -306,3 +352,10 @@ The old `tools/*.sh` scripts are thin wrappers around the same tasks, so existin
 - Open: water splash/bubbles/sounds, Depth Strider/Dolphin's Grace/lava/currents; landing sounds + particles; throwables,
   tool actions, buckets (requested, continue Wed 25 Nov 8 pm); woodland mansions; m8 exit-portal build rule.
 - Schedule: the user takes the laptop away; the loop ends tonight 9 pm WIB with a hand-off in this file.
+- Later on 24 Nov: landing sounds (9dc6124), merged double-block breaking + support pops (fe6053e) and land animals
+  avoiding water (5ada958), `cargo xtask clean-disk` (6d9fded): ~/Downloads/rustcraft 103 GB -> 16 GB (26 finished
+  worktrees removed, debug incremental cache, target-play). Mistake: the shared worktree target-dir config applied to
+  running agents at once and overwrote main's binaries for ~10 min; disabled (config.toml.off), result cache discarded,
+  gate re-run from scratch. Wrap-up brought forward by the user to ~10 am: crons cancelled, agents committed their WIP
+  (branches above), main gated and pushed. Shared vanilla server flakes seen today: m8_portal_travel, m5_chicken_fall,
+  m5_undead_sun, m6_break_contents, m5_zombie_hit (vanilla side, pass when run alone).
