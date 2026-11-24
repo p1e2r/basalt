@@ -994,7 +994,9 @@ impl Game {
                     return Err(err("commands.setblock.failed", &[]));
                 }
                 // destroy: the old block drops its loot table (empty hand, tool requirement ignored)
-                if p.path.last().map(|l| l == "destroy").unwrap_or(false) && !BlockState(old).is_air() {
+                if p.path.last().map(|l| l == "destroy").unwrap_or(false)
+                    && !BlockState(old).is_air()
+                {
                     let items = self.tool_less_drops(BlockState(old), b);
                     self.drop_at_block(b, items);
                 }

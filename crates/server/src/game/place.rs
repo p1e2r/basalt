@@ -1104,7 +1104,10 @@ impl Game {
     /// What a removed block leaves behind: water for waterlogged blocks and the plants that live in water.
     pub(super) fn empty_state(s: BlockState) -> u32 {
         let wet = s.get("waterlogged") == Some("true")
-            || matches!(s.name(), "seagrass" | "tall_seagrass" | "kelp" | "kelp_plant" | "bubble_column");
+            || matches!(
+                s.name(),
+                "seagrass" | "tall_seagrass" | "kelp" | "kelp_plant" | "bubble_column"
+            );
         if wet {
             block_default("water").unwrap_or(0)
         } else {
@@ -1117,7 +1120,8 @@ impl Game {
     pub(super) fn tool_less_drops(&mut self, s: BlockState, q: [i32; 3]) -> Vec<(i32, i32)> {
         let below = self.world.get_block(q[0], q[1] - 1, q[2]);
         let above = self.world.get_block(q[0], q[1] + 1, q[2]);
-        self.data.block_drops_popped(s.0, below, above, &mut self.rng)
+        self.data
+            .block_drops_popped(s.0, below, above, &mut self.rng)
     }
 
     /// After the block at `p` changed: re-shape / break the six neighbours (cascading a few levels).
@@ -1149,10 +1153,14 @@ impl Game {
             }
             if pop.is_none() {
                 let here = self.bs(p);
-                let partner = |half: &str| here.block().name == s.block().name && here.get("half") == Some(half);
+                let partner = |half: &str| {
+                    here.block().name == s.block().name && here.get("half") == Some(half)
+                };
                 match s.get("half") {
                     Some("upper") if d == 1 && !partner("lower") => pop = Some(false),
-                    Some("lower") if d == 0 && s.name() != "tall_seagrass" && !partner("upper") => pop = Some(true),
+                    Some("lower") if d == 0 && s.name() != "tall_seagrass" && !partner("upper") => {
+                        pop = Some(true)
+                    }
                     _ => {}
                 }
             }
