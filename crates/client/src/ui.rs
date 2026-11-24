@@ -20,7 +20,7 @@ fn wanted(name: &str, img: &crate::assets::Image) -> bool {
 
 impl UiAtlas {
     pub fn build(a: &Assets) -> UiAtlas {
-        let (w, h) = (2048u32, 2048u32);
+        let (w, h) = (2048u32, 4096u32);
         let mut rgba = vec![0u8; (w * h * 4) as usize];
         let mut rects = HashMap::new();
         let mut glyph_w = [6u8; 256];

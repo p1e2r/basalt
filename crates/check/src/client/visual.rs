@@ -89,6 +89,8 @@ pub enum Kind {
     View,
     /// the survival inventory screen
     Inventory,
+    /// the world with the HUD visible and `cmds` run (scoreboard sidebar, boss bars), creative, at `pos`
+    Hud,
     /// the title screen with the panorama
     Title,
 }
@@ -104,6 +106,8 @@ pub struct Scene {
     pub desc: &'static str,
     /// ticks to wait after the teleport (falling time)
     pub settle: u32,
+    /// commands run once the player has settled (Kind::Hud), after which the chat is left to fade out
+    pub cmds: &'static [&'static str],
 }
 
 /// Landmarks and rooms built in the flat world by the first client that joins (idempotent: both
@@ -136,6 +140,7 @@ pub fn scenes() -> Vec<Scene> {
         yaw,
         pitch,
         desc,
+        cmds: &[],
         settle: if pos[1] > 100.0 {
             260
         } else if pos[1] > -55.0 {
@@ -215,6 +220,45 @@ pub fn scenes() -> Vec<Scene> {
             0.0,
             "survival inventory screen over the world",
         ),
+        Scene {
+            cmds: SIDEBAR_CMDS,
+            ..s(
+                "scoreboard_sidebar",
+                World::Flat,
+                Kind::Hud,
+                6000,
+                [0.5, -60.0, 0.5],
+                0.0,
+                0.0,
+                "sidebar scoreboard: coloured title, ties sorted by name, a negative score, a hidden #holder",
+            )
+        },
+        Scene {
+            cmds: SIDEBAR_FULL_CMDS,
+            ..s(
+                "scoreboard_full",
+                World::Flat,
+                Kind::Hud,
+                6000,
+                [0.5, -60.0, 0.5],
+                0.0,
+                0.0,
+                "sidebar with 17 scores: the highest 15 show",
+            )
+        },
+        Scene {
+            cmds: BOSSBAR_CMDS,
+            ..s(
+                "bossbars",
+                World::Flat,
+                Kind::Hud,
+                6000,
+                [0.5, -60.0, 0.5],
+                0.0,
+                0.0,
+                "three boss bars: red progress, blue notched_10, green notched_20 with a coloured name",
+            )
+        },
         s(
             "title",
             World::None,
@@ -227,6 +271,64 @@ pub fn scenes() -> Vec<Scene> {
         ),
     ]
 }
+
+/// Scoreboard / boss bar set-ups of the HUD scenes (names, colours and values chosen to exercise sorting,
+/// ties, negatives, hidden `#` holders, notches and name colours).
+const SIDEBAR_CMDS: &[&str] = &[
+    "scoreboard objectives add sbvis dummy {\"text\":\"Sidebar Test\",\"color\":\"gold\"}",
+    "scoreboard objectives setdisplay sidebar sbvis",
+    "scoreboard players set Alice sbvis 10",
+    "scoreboard players set bob sbvis 10",
+    "scoreboard players set Carol sbvis 25",
+    "scoreboard players set Zed sbvis -3",
+    "scoreboard players set dave sbvis 0",
+    "scoreboard players set #hidden sbvis 99",
+    "scoreboard players set LongNamedPlayer sbvis 1234",
+];
+const SIDEBAR_FULL_CMDS: &[&str] = &[
+    "scoreboard objectives add sbvis dummy \"Top 15\"",
+    "scoreboard objectives setdisplay sidebar sbvis",
+    "scoreboard players set p01 sbvis 1",
+    "scoreboard players set p02 sbvis 2",
+    "scoreboard players set p03 sbvis 3",
+    "scoreboard players set p04 sbvis 4",
+    "scoreboard players set p05 sbvis 5",
+    "scoreboard players set p06 sbvis 6",
+    "scoreboard players set p07 sbvis 7",
+    "scoreboard players set p08 sbvis 8",
+    "scoreboard players set p09 sbvis 9",
+    "scoreboard players set p10 sbvis 10",
+    "scoreboard players set p11 sbvis 11",
+    "scoreboard players set p12 sbvis 12",
+    "scoreboard players set p13 sbvis 13",
+    "scoreboard players set p14 sbvis 14",
+    "scoreboard players set p15 sbvis 15",
+    "scoreboard players set p16 sbvis 16",
+    "scoreboard players set p17 sbvis 17",
+];
+const BOSSBAR_CMDS: &[&str] = &[
+    "bossbar add bzv1 {\"text\":\"Ender Boss\"}",
+    "bossbar set bzv1 color red",
+    "bossbar set bzv1 players @a",
+    "bossbar set bzv1 value 50",
+    "bossbar add bzv2 {\"text\":\"Notched\"}",
+    "bossbar set bzv2 color blue",
+    "bossbar set bzv2 style notched_10",
+    "bossbar set bzv2 players @a",
+    "bossbar set bzv2 value 25",
+    "bossbar add bzv3 {\"text\":\"Green Giant\",\"color\":\"green\"}",
+    "bossbar set bzv3 color green",
+    "bossbar set bzv3 style notched_20",
+    "bossbar set bzv3 players @a",
+    "bossbar set bzv3 value 100",
+];
+/// Commands that undo the HUD set-ups (errors are ignored).
+const HUD_CLEANUP: &[&str] = &[
+    "scoreboard objectives remove sbvis",
+    "bossbar remove bzv1",
+    "bossbar remove bzv2",
+    "bossbar remove bzv3",
+];
 
 fn w(t: u32) -> Value {
     json!({"op": "wait", "ticks": t})
@@ -246,7 +348,7 @@ fn scene_ops(sc: &Scene, setup: &[&str], vanilla: bool) -> Vec<Value> {
             }
             v.push(w(100));
         }
-        Kind::View | Kind::Inventory => {
+        Kind::View | Kind::Inventory | Kind::Hud => {
             let survival = sc.kind == Kind::Inventory;
             v.push(cmd(if survival {
                 "gamemode survival"
@@ -267,7 +369,14 @@ fn scene_ops(sc: &Scene, setup: &[&str], vanilla: bool) -> Vec<Value> {
             v.push(json!({"op": "look", "yaw": sc.yaw, "pitch": sc.pitch}));
             // the player falls to rest (ground, pool bottom) from the teleport height: same end state in both clients
             v.push(w(sc.settle));
-            if survival {
+            if sc.kind == Kind::Hud {
+                // start from a clean scoreboard / boss bar state (the Basalt pass has no cleanup between scenes)
+                for c in HUD_CLEANUP.iter().chain(sc.cmds.iter()) {
+                    v.push(cmd(c));
+                }
+                // command feedback sits in the chat for 10 s plus a 1 s fade; wait it out so only the HUD differs
+                v.push(w(260));
+            } else if survival {
                 v.push(json!({"op": "inventory", "action": "open"}));
                 v.push(w(20));
             } else if vanilla {
@@ -290,6 +399,7 @@ fn scene_cleanup(sc: &Scene) -> Vec<Value> {
             w(2),
         ],
         Kind::Inventory => vec![json!({"op": "inventory", "action": "close"}), w(5)],
+        Kind::Hud => HUD_CLEANUP.iter().map(|c| cmd(c)).chain([w(5)]).collect(),
         Kind::Title => vec![],
     }
 }

@@ -1,4 +1,10 @@
 {
+  "bossbars": {
+    "max_tile_hist": 0.798,
+    "mean_hist": 0.411,
+    "mean_ssim": 0.855,
+    "min_tile_ssim": 0.193
+  },
   "cave_room": {
     "max_tile_hist": 1.0,
     "mean_hist": 0.986,
@@ -28,6 +34,18 @@
     "mean_hist": 0.146,
     "mean_ssim": 0.869,
     "min_tile_ssim": 0.59
+  },
+  "scoreboard_full": {
+    "max_tile_hist": 0.801,
+    "mean_hist": 0.415,
+    "mean_ssim": 0.858,
+    "min_tile_ssim": 0.193
+  },
+  "scoreboard_sidebar": {
+    "max_tile_hist": 0.796,
+    "mean_hist": 0.418,
+    "mean_ssim": 0.856,
+    "min_tile_ssim": 0.193
   },
   "terrain_spawn": {
     "max_tile_hist": 1.0,

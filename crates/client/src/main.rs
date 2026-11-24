@@ -5,6 +5,7 @@
 //!                      [--scenario NAME|all] [--auto-respawn]
 //! Without an address (windowed) it starts at the title screen.
 mod assets;
+mod board;
 mod assetgrid;
 mod bench;
 mod container;
@@ -203,6 +204,8 @@ pub struct Game {
     out: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
     entities: HashMap<i32, entity::Entity>,
     player_names: HashMap<uuid::Uuid, String>,
+    /// scoreboard objectives / scores / display slots and boss bars
+    board: board::Board,
     my_eid: i32,
     name: String,
     chat: Vec<(String, Instant)>,
@@ -310,7 +313,7 @@ impl Game {
         let mut sounds = o.sounds; sounds.master = o.cfg.master_volume;
         let mut g = Game {
             gpu, assets, rules, ui, entity_atlas, biomes, dim_types: Vec::new(), dim: None, world: World::new(-64, 384), player: Player::new(), mesher,
-            dirty: HashMap::new(), in_flight: HashSet::new(), events: rx, out: otx, entities: HashMap::new(), player_names: HashMap::new(), my_eid: 0, name: o.name,
+            dirty: HashMap::new(), in_flight: HashSet::new(), events: rx, out: otx, entities: HashMap::new(), player_names: HashMap::new(), board: Default::default(), my_eid: 0, name: o.name,
             chat: Vec::new(), chat_input: None, cmd_tree: None, sug: Sug::default(), hp: 20.0, food: 20, xp: (0.0, 0), enchantments: Vec::new(), title: (String::new(), String::new(), -1, [10, 70, 20]), actionbar: (String::new(), 0), hotbar: Default::default(), held: 0, inventory: vec![ItemStack::default(); 46], inv_state: 0, carried: ItemStack::default(), day_time: 6000,
             spawned: false, loaded_sent: false, connected: false, keys: HashSet::new(), mouse: [false; 2], mouse_pos: (0.0, 0.0), slider_drag: None, last_tick: Instant::now(),
             last_sent: ([0.0; 3], 0.0, 0.0, false), ticks_since_pos: 0, last_input_flags: 0, seq: 0, dig: None, dig_delay: 0, last_dig: None, destroy: HashMap::new(), fp_swing: -1, sprint_sent: false, sprinting: false, sprint_trigger: 0, fwd_was: false, sprint_key_was: false, sprint_latch: false, jump_tick: None, particles: Default::default(), equip: (1.0, 1.0), equip_for: -1, shown_item: -1, attack_ticks: 100, walk_dist: (0.0, 0.0), view_bob: (0.0, 0.0), self_hurt: 0, held_name: (String::new(), 0), splash: String::new(), menu_t0: Instant::now(), pings: HashMap::new(), ping_chan: mpsc::channel(), icon_slots: HashMap::new(), ping_rounds: 0, worlds: Vec::new(), integrated: None, sp_world: None, step_dist: 0.0,
@@ -437,6 +440,7 @@ impl Game {
                 if matches!(self.screen, Some(Screen::Connecting { .. })) { self.screen = None; }
             }
             Event::Chat(s) => { println!("[chat] {}", lang::strip_codes(&s)); self.chat.push((s, Instant::now())); if self.chat.len() > 100 { self.chat.remove(0); } }
+            Event::Board(u) => self.board.apply(u),
             Event::Health { hp, food } => { self.hp = hp; self.food = food; }
             Event::Experience { progress, level, total: _ } => { self.xp = (progress, level); }
             Event::Title { kind: 0, text } => { self.title.0 = text; self.title.2 = 0; }
@@ -1179,6 +1183,7 @@ impl Game {
                 let tw = a.text_width(&self.held_name.0, s);
                 a.text(deco, &self.held_name.0, ((w - tw) / 2.0).floor(), ty, s, [255, 255, 255, alpha]);
             }
+            if !self.hide_gui { self.board.draw_bars(a, ui, w, h, s); self.board.draw_sidebar(a, ui, w, h, s); }
             // hearts + food (survival / adventure)
             if self.player.gamemode == 0 || self.player.gamemode == 2 {
                 // experience bar and level, as laid out by vanilla: 182x5 bar 29 above the bottom,

@@ -20,7 +20,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 pub const COLORS: [&str; 7] = ["pink", "blue", "red", "green", "yellow", "purple", "white"];
-pub const OVERLAYS: [&str; 5] = ["progress", "notched_6", "notched_10", "notched_12", "notched_20"];
+pub const OVERLAYS: [&str; 5] = [
+    "progress",
+    "notched_6",
+    "notched_10",
+    "notched_12",
+    "notched_20",
+];
 
 #[derive(Clone)]
 pub struct Bar {
@@ -36,14 +42,29 @@ pub struct Bar {
 
 impl Bar {
     fn new(name: Tag) -> Bar {
-        Bar { uuid: Uuid::new_v4(), name, color: 6, overlay: 0, value: 0, max: 100, visible: true, players: BTreeSet::new() }
+        Bar {
+            uuid: Uuid::new_v4(),
+            name,
+            color: 6,
+            overlay: 0,
+            value: 0,
+            max: 100,
+            visible: true,
+            players: BTreeSet::new(),
+        }
     }
     fn progress(&self) -> f32 {
         (self.value as f32 / self.max as f32).clamp(0.0, 1.0)
     }
     fn add_packet(&self) -> Writer {
         let mut w = Writer::with_id(cb::BOSS_EVENT);
-        w.uuid(self.uuid).varint(0).nbt(&self.name).f32(self.progress()).varint(self.color as i32).varint(self.overlay as i32).u8(0);
+        w.uuid(self.uuid)
+            .varint(0)
+            .nbt(&self.name)
+            .f32(self.progress())
+            .varint(self.color as i32)
+            .varint(self.overlay as i32)
+            .u8(0);
         w
     }
     fn simple(&self, action: i32) -> Writer {
@@ -77,18 +98,27 @@ fn idx(list: &[&str], name: &str) -> u8 {
 impl BossBars {
     /// Packets that bring a joining player up to date.
     pub fn join_packets(&self, uuid: Uuid) -> Vec<Writer> {
-        self.bars.values().filter(|b| b.visible && b.players.contains(&uuid)).map(|b| b.add_packet()).collect()
+        self.bars
+            .values()
+            .filter(|b| b.visible && b.players.contains(&uuid))
+            .map(|b| b.add_packet())
+            .collect()
     }
 
     pub fn load(world: &std::path::Path) -> BossBars {
         let mut out = BossBars::default();
-        let Some(t) = crate::level::read_gz(&world.join("data/minecraft/custom_boss_events.dat")) else {
+        let Some(t) = crate::level::read_gz(&world.join("data/minecraft/custom_boss_events.dat"))
+        else {
             return out;
         };
-        let Some(d) = t.get("data").and_then(|d| d.as_compound()) else { return out };
+        let Some(d) = t.get("data").and_then(|d| d.as_compound()) else {
+            return out;
+        };
         for (id, e) in d {
             let name = match e.get("Name") {
-                Some(Tag::String(s)) => crate::snbt::parse(s).filter(|t| !matches!(t, Tag::String(_))).unwrap_or(Tag::String(s.clone())),
+                Some(Tag::String(s)) => crate::snbt::parse(s)
+                    .filter(|t| !matches!(t, Tag::String(_)))
+                    .unwrap_or(Tag::String(s.clone())),
                 Some(t) => t.clone(),
                 None => Tag::String(id.clone()),
             };
@@ -105,7 +135,12 @@ impl BossBars {
             b.value = e.get("Value").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
             b.max = e.get("Max").and_then(|v| v.as_i64()).unwrap_or(100) as i32;
             b.visible = e.get("Visible").and_then(|v| v.as_i64()).unwrap_or(0) != 0;
-            for p in e.get("Players").and_then(|l| l.as_list()).into_iter().flatten() {
+            for p in e
+                .get("Players")
+                .and_then(|l| l.as_list())
+                .into_iter()
+                .flatten()
+            {
                 if let Tag::IntArray(a) = p {
                     if a.len() == 4 {
                         let mut bytes = [0u8; 16];
@@ -126,7 +161,9 @@ impl BossBars {
         if self.bars.is_empty() && !path.exists() {
             return;
         }
-        let mut root = crate::level::read_gz(&path).and_then(|t| t.as_compound().cloned()).unwrap_or_default();
+        let mut root = crate::level::read_gz(&path)
+            .and_then(|t| t.as_compound().cloned())
+            .unwrap_or_default();
         let mut d = Compound::new();
         for (id, b) in &self.bars {
             let mut c = Compound::new();
@@ -135,7 +172,10 @@ impl BossBars {
                 c.insert("Color".into(), Tag::String(COLORS[b.color as usize].into()));
             }
             if b.overlay != 0 {
-                c.insert("Overlay".into(), Tag::String(OVERLAYS[b.overlay as usize].into()));
+                c.insert(
+                    "Overlay".into(),
+                    Tag::String(OVERLAYS[b.overlay as usize].into()),
+                );
             }
             if b.value != 0 {
                 c.insert("Value".into(), Tag::Int(b.value));
@@ -152,7 +192,13 @@ impl BossBars {
                     .iter()
                     .map(|u| {
                         let by = u.as_bytes();
-                        Tag::IntArray((0..4).map(|i| i32::from_be_bytes(by[i * 4..i * 4 + 4].try_into().unwrap())).collect())
+                        Tag::IntArray(
+                            (0..4)
+                                .map(|i| {
+                                    i32::from_be_bytes(by[i * 4..i * 4 + 4].try_into().unwrap())
+                                })
+                                .collect(),
+                        )
                     })
                     .collect();
                 c.insert("Players".into(), Tag::List(l));
@@ -170,7 +216,9 @@ impl BossBars {
 impl Game {
     /// Send a packet built from the bar to every online player on it (hidden bars send nothing).
     fn bb_send(&self, id: &str, make: impl Fn(&Bar) -> Writer) {
-        let Some(b) = self.bossbars.bars.get(id) else { return };
+        let Some(b) = self.bossbars.bars.get(id) else {
+            return;
+        };
         if !b.visible {
             return;
         }
@@ -183,7 +231,12 @@ impl Game {
     }
 
     fn bb_name(&self, id: &str) -> Tag {
-        let n = self.bossbars.bars.get(id).map(|b| b.name.clone()).unwrap_or(Tag::String(id.into()));
+        let n = self
+            .bossbars
+            .bars
+            .get(id)
+            .map(|b| b.name.clone())
+            .unwrap_or(Tag::String(id.into()));
         super::tr("chat.square_brackets", vec![n])
     }
 
@@ -196,7 +249,11 @@ impl Game {
     }
 
     fn bb_online_names(&self, b: &Bar) -> Vec<String> {
-        let mut v: Vec<String> = self.all_players().filter(|p| b.players.contains(&p.uuid)).map(|p| p.name.clone()).collect();
+        let mut v: Vec<String> = self
+            .all_players()
+            .filter(|p| b.players.contains(&p.uuid))
+            .map(|p| p.name.clone())
+            .collect();
         v.sort();
         v
     }
@@ -210,7 +267,8 @@ impl Game {
                 if self.bossbars.bars.contains_key(&id) {
                     return Err(err("commands.bossbar.create.failed", &[&id]));
                 }
-                let name = crate::snbt::parse(p.arg("name")).ok_or_else(|| err("argument.component.invalid", &[p.arg("name")]))?;
+                let name = crate::snbt::parse(p.arg("name"))
+                    .ok_or_else(|| err("argument.component.invalid", &[p.arg("name")]))?;
                 self.bossbars.bars.insert(id.clone(), Bar::new(name));
                 let n = self.bb_name(&id);
                 self.ok(eid, "commands.bossbar.create.success", vec![n]);
@@ -235,11 +293,21 @@ impl Game {
                         }
                         list.push(self.bb_name(id));
                     }
-                    let joined = basalt_nbt::compound([("text", Tag::String(String::new())), ("extra", Tag::List(list))]);
-                    self.ok(eid, "commands.bossbar.list.bars.some", vec![s(ids.len()), joined]);
+                    let joined = basalt_nbt::compound([
+                        ("text", Tag::String(String::new())),
+                        ("extra", Tag::List(list)),
+                    ]);
+                    self.ok(
+                        eid,
+                        "commands.bossbar.list.bars.some",
+                        vec![s(ids.len()), joined],
+                    );
                 }
             }
-            "bossbar get id value" | "bossbar get id max" | "bossbar get id visible" | "bossbar get id players" => {
+            "bossbar get id value"
+            | "bossbar get id max"
+            | "bossbar get id visible"
+            | "bossbar get id players" => {
                 let id = id.unwrap();
                 self.bb_need(&id)?;
                 let n = self.bb_name(&id);
@@ -256,12 +324,18 @@ impl Game {
                         if names.is_empty() {
                             self.ok(eid, "commands.bossbar.get.players.none", vec![n]);
                         } else {
-                            self.ok(eid, "commands.bossbar.get.players.some", vec![n, s(names.len()), s(names.join(", "))]);
+                            self.ok(
+                                eid,
+                                "commands.bossbar.get.players.some",
+                                vec![n, s(names.len()), s(names.join(", "))],
+                            );
                         }
                     }
                 }
             }
-            _ if path.starts_with("bossbar set ") => self.bb_set(eid, p, &id.unwrap_or_default(), &path)?,
+            _ if path.starts_with("bossbar set ") => {
+                self.bb_set(eid, p, &id.unwrap_or_default(), &path)?
+            }
             _ => return Err(err("command.unknown.command", &[])),
         }
         Ok(())
@@ -273,7 +347,8 @@ impl Game {
         let n_before = self.bb_name(id);
         match what {
             "name" => {
-                let name = crate::snbt::parse(p.arg("name")).ok_or_else(|| err("argument.component.invalid", &[p.arg("name")]))?;
+                let name = crate::snbt::parse(p.arg("name"))
+                    .ok_or_else(|| err("argument.component.invalid", &[p.arg("name")]))?;
                 if self.bossbars.bars[id].name == name {
                     return Err(err("commands.bossbar.set.name.unchanged", &[]));
                 }
@@ -308,13 +383,24 @@ impl Game {
                     w
                 });
                 let n = self.bb_name(id);
-                self.ok(eid, &format!("commands.bossbar.set.{what}.success"), vec![n]);
+                self.ok(
+                    eid,
+                    &format!("commands.bossbar.set.{what}.success"),
+                    vec![n],
+                );
             }
             "value" | "max" => {
-                let v: i32 = p.arg(what).parse().map_err(|_| err("parsing.int.invalid", &[p.arg(what)]))?;
+                let v: i32 = p
+                    .arg(what)
+                    .parse()
+                    .map_err(|_| err("parsing.int.invalid", &[p.arg(what)]))?;
                 let b = self.bossbars.bars.get_mut(id).unwrap();
                 let before = b.progress();
-                let slot = if what == "value" { &mut b.value } else { &mut b.max };
+                let slot = if what == "value" {
+                    &mut b.value
+                } else {
+                    &mut b.max
+                };
                 if *slot == v {
                     return Err(err(&format!("commands.bossbar.set.{what}.unchanged"), &[]));
                 }
@@ -329,13 +415,20 @@ impl Game {
                     });
                 }
                 let n = self.bb_name(id);
-                self.ok(eid, &format!("commands.bossbar.set.{what}.success"), vec![n, s(v)]);
+                self.ok(
+                    eid,
+                    &format!("commands.bossbar.set.{what}.success"),
+                    vec![n, s(v)],
+                );
             }
             "visible" => {
                 let v = p.arg("visible") == "true";
                 if self.bossbars.bars[id].visible == v {
                     let k = if v { "visible" } else { "hidden" };
-                    return Err(err(&format!("commands.bossbar.set.visibility.unchanged.{k}"), &[]));
+                    return Err(err(
+                        &format!("commands.bossbar.set.visibility.unchanged.{k}"),
+                        &[],
+                    ));
                 }
                 // the packet goes to the players before the flag flips for hiding, after it for showing
                 if !v {
@@ -346,12 +439,19 @@ impl Game {
                     self.bb_send(id, |b| b.add_packet());
                 }
                 let k = if v { "visible" } else { "hidden" };
-                self.ok(eid, &format!("commands.bossbar.set.visible.success.{k}"), vec![n_before]);
+                self.ok(
+                    eid,
+                    &format!("commands.bossbar.set.visible.success.{k}"),
+                    vec![n_before],
+                );
             }
             "players" => {
                 let new: BTreeSet<Uuid> = if p.has("targets") {
                     let t = self.resolve(eid, p.arg("targets"), true)?;
-                    Self::players_of(&t).iter().filter_map(|e| self.all_players().find(|q| q.eid == *e).map(|q| q.uuid)).collect()
+                    Self::players_of(&t)
+                        .iter()
+                        .filter_map(|e| self.all_players().find(|q| q.eid == *e).map(|q| q.uuid))
+                        .collect()
                 } else {
                     BTreeSet::new()
                 };
@@ -376,7 +476,11 @@ impl Game {
                 if names.is_empty() {
                     self.ok(eid, "commands.bossbar.set.players.success.none", vec![n]);
                 } else {
-                    self.ok(eid, "commands.bossbar.set.players.success.some", vec![n, s(names.len()), s(names.join(", "))]);
+                    self.ok(
+                        eid,
+                        "commands.bossbar.set.players.success.some",
+                        vec![n, s(names.len()), s(names.join(", "))],
+                    );
                 }
             }
             _ => {
@@ -412,14 +516,19 @@ mod tests {
         b.value = 7;
         b.max = 30;
         b.visible = false;
-        b.players.insert(Uuid::from_u128(0x1234_5678_9abc_def0_1122_3344_5566_7788));
+        b.players
+            .insert(Uuid::from_u128(0x1234_5678_9abc_def0_1122_3344_5566_7788));
         bb.bars.insert("minecraft:x".into(), b);
-        bb.bars.insert("t:plain".into(), Bar::new(Tag::String("plain".into())));
+        bb.bars
+            .insert("t:plain".into(), Bar::new(Tag::String("plain".into())));
         bb.save(&dir);
         let l = BossBars::load(&dir);
         let _ = std::fs::remove_dir_all(&dir);
         let (a, b) = (&bb.bars["minecraft:x"], &l.bars["minecraft:x"]);
-        assert_eq!((a.color, a.overlay, a.value, a.max, a.visible), (b.color, b.overlay, b.value, b.max, b.visible));
+        assert_eq!(
+            (a.color, a.overlay, a.value, a.max, a.visible),
+            (b.color, b.overlay, b.value, b.max, b.visible)
+        );
         assert_eq!(a.players, b.players);
         assert_eq!(a.name, b.name);
         assert!(l.bars["t:plain"].visible && l.bars["t:plain"].max == 100);
