@@ -61,7 +61,8 @@ impl Game {
         let (yr, xr) = ((yaw as f64).to_radians(), (pitch as f64).to_radians());
         let dir = [-yr.sin() * xr.cos(), -xr.sin(), yr.cos() * xr.cos()];
         let speed = self.rng.gen_range(1.0..1.2);
-        let vel = [dir[0] * speed, dir[1] * speed + 0.1, dir[2] * speed];
+        // (no extra lift: with it casts flew ~10.5 blocks and hit the far pool wall; vanilla lands ~9.6)
+        let vel = [dir[0] * speed, dir[1] * speed, dir[2] * speed];
         let pos = [feet[0] + dir[0] * 0.3, eye, feet[2] + dir[2] * 0.3];
         let peid = self
             .sh
@@ -237,7 +238,10 @@ impl Game {
                     }
                 }
             }
-            let t = hit.unwrap_or(1.0);
+            // stop just short of the face that was hit, so the bobber's cell is not the block itself
+            let t = hit
+                .map(|t| (t - 0.01 / len.max(1e-6)).max(0.0))
+                .unwrap_or(1.0);
             for k in 0..3 {
                 a.pos[k] = p[k] + d[k] * t;
             }
