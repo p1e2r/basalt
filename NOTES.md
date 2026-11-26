@@ -808,3 +808,21 @@ Measured with the oracle mod's fx log (FxParticleMixin / FxSoundMixin: the clien
   Survival single bucket swaps in place, a stack of 2 keeps 1 bucket + adds the filled one; creative keeps the bucket and
   gets one filled bucket (if none), an emptied water bucket stays. Powder snow pickup sends level_event 2001 (break
   particles, data = state id) to everyone; powder_snow_bucket places like a block (use_item_on) and leaves a bucket.
+
+## Fluids (M6, 2026-11-26) — scenario m6_fluids (10 cases) against vanilla 26.2, sampled every tick by the bot
+- Water spreads one cell per 5 ticks (first neighbours 5 ticks after the setblock), levels 1..7 by Manhattan distance
+  (full diamond on a flat floor: 4n cells at level n). Lava: one cell per 30 ticks, levels 2/4/6 (radius 3).
+- Falling fluid is level 8; next to a falling column the floor gets level 1. A flowing cell above a hole falls and does not
+  spread sideways; nor does a flowing cell above the same fluid (a filled hole): water_hole keeps only the path to the hole.
+- Slope finding: a cell flows only towards the directions with the fewest steps to a cell with a hole below (water up to
+  4 steps, lava 2), counting neighbours that already hold the same flowing fluid as candidate directions; a hole at
+  Manhattan 7 removes just one level-7 cell from the diamond (water_far_hole).
+- Two horizontal source neighbours over a solid block (or source) make a new water source (5 ticks after it first fills).
+- Removing the source drains the whole flow (water_drain). Torches and flowers are washed away and drop their item.
+- Lava with water beside or above turns into obsidian (source) / cobblestone (flowing) at once; lava falling onto water
+  makes stone. Basalt sends level_event 1501 (fizz) for these (not compared).
+- Basalt: game/fluid.rs, scheduled per-dimension fluid ticks queued by set_block for the changed cell and its 6 neighbours.
+  Not done: waterlogged blocks spreading (they count as sources for neighbours only), bubble columns, lava fire spread,
+  nether lava speed (10 ticks, drop-off 1, slope 4: set from the vanilla dimension rules, not measured), lava's
+  occasional slower tick, basalt from lava over soul soil next to blue ice, fluid pushing entities/items, fluid ticks
+  saved in chunks (pending ticks are lost on restart).

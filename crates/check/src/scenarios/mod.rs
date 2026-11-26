@@ -3,6 +3,7 @@
 use crate::runner::{Servers, Spec, WorldKind};
 
 pub mod env;
+pub mod fluids;
 pub mod m1;
 pub mod m10;
 pub mod m3;
@@ -135,4 +136,5 @@ pub static ALL: &[Spec] = &[
     spec!("M10", "m10_brew_table", m10::brew_table, Flat, VanillaOnly, false, "measurement tool (vanilla only): 9 bases x 20 ingredients brewed in 180 parallel stands; the server table is pinned by station.rs unit test brew_table_matches_vanilla_measurement"),
     spec!("Items", "tool_actions", tools::tool_actions, Flat, Both, true, "hoe tilling, shovel paths + campfires, axe stripping/scraping/unwaxing, shears on pumpkins, honeycomb, bone meal: changed cells, drops, held count/damage vs vanilla"),
     spec!("Items", "tool_buckets", tools::buckets, Flat, Both, true, "buckets: fill from water/lava sources, waterlogged blocks, powder snow; empty against blocks, into slabs; stacks and creative vs vanilla"),
+    spec!("M6", "m6_fluids", fluids::fluids, Flat, Both, true, "water/lava flow: spread levels + timing, holes within 4, falling, draining, infinite sources, lava+water -> obsidian/cobblestone/stone, washing away torches/plants"),
 ];

@@ -96,6 +96,8 @@ pub(super) struct DimState {
     pub projs: HashMap<i32, proj::Proj>,
     pub fallers: HashMap<i32, falling::Faller>,
     pub gravity_checks: Vec<(u64, [i32; 3])>,
+    pub fluid_ticks: Vec<(u64, [i32; 3])>,
+    pub fluid_pending: HashSet<[i32; 3]>,
     pub orbs: HashMap<i32, xporb::Orb>,
     pub bes: HashMap<[i32; 3], container::Be>,
     pub portals: HashSet<[i32; 3]>,
@@ -114,6 +116,8 @@ impl DimState {
             projs: HashMap::new(),
             fallers: HashMap::new(),
             gravity_checks: Vec::new(),
+            fluid_ticks: Vec::new(),
+            fluid_pending: HashSet::new(),
             orbs: HashMap::new(),
             bes: HashMap::new(),
             portals: HashSet::new(),
@@ -132,6 +136,8 @@ impl Game {
         std::mem::swap(&mut self.projs, &mut s.projs);
         std::mem::swap(&mut self.fallers, &mut s.fallers);
         std::mem::swap(&mut self.gravity_checks, &mut s.gravity_checks);
+        std::mem::swap(&mut self.fluid_ticks, &mut s.fluid_ticks);
+        std::mem::swap(&mut self.fluid_pending, &mut s.fluid_pending);
         std::mem::swap(&mut self.orbs, &mut s.orbs);
         std::mem::swap(&mut self.bes, &mut s.bes);
         std::mem::swap(&mut self.portals, &mut s.portals);

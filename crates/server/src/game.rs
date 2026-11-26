@@ -12,6 +12,7 @@ pub(crate) mod dim;
 mod env;
 mod explosion;
 mod falling;
+mod fluid;
 mod health;
 mod inv;
 mod items;
@@ -213,6 +214,9 @@ pub struct Game {
     /// falling_block entities and pending gravity checks (due tick, block)
     fallers: HashMap<i32, falling::Faller>,
     gravity_checks: Vec<(u64, [i32; 3])>,
+    /// scheduled fluid ticks (due tick, cell) + the cells already queued
+    fluid_ticks: Vec<(u64, [i32; 3])>,
+    fluid_pending: HashSet<[i32; 3]>,
     /// gamerule random_tick_speed (vanilla default 3)
     random_tick_speed: i32,
     /// /scoreboard state (data/minecraft/scoreboard.dat)
@@ -332,6 +336,8 @@ impl Game {
             projs: s.projs,
             fallers: s.fallers,
             gravity_checks: s.gravity_checks,
+            fluid_ticks: s.fluid_ticks,
+            fluid_pending: s.fluid_pending,
             random_tick_speed: 3,
             scoreboard: Default::default(),
             bossbars: Default::default(),
@@ -729,6 +735,9 @@ impl Game {
         let changed = self.world.set_block(x, y, z, state);
         self.be_block_changed([x, y, z], state);
         self.schedule_gravity([x, y, z]);
+        if old != state {
+            self.fluid_block_changed([x, y, z]);
+        }
         self.broadcast_chunk((x >> 4, z >> 4), None, || {
             let mut w = Writer::with_id(cb::BLOCK_UPDATE);
             w.position(x, y, z).varint(state as i32);
@@ -2062,6 +2071,7 @@ impl Game {
         self.tick_projs();
         self.tick_cooldowns();
         self.tick_falling();
+        self.tick_fluids();
         self.tick_orbs();
         self.tick_random();
         self.tick_spawning();
