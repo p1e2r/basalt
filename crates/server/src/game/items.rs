@@ -41,6 +41,9 @@ fn quantize(v: f64) -> i64 {
 
 const DESPAWN_TICKS: u32 = 6000;
 
+/// Per-tick push of a water current on an item (fitted, see m6_item_drift).
+const ITEM_CURRENT: f64 = 0.085;
+
 impl Game {
     pub(super) fn item_type(&self) -> i32 {
         basalt_data::registry_id(basalt_data::registries::ENTITY_TYPE, "item").unwrap_or(0)
@@ -247,14 +250,30 @@ impl Game {
                 p[2].floor() as i32,
             ))
             .has_fluid();
-            if in_water {
+            let cell = [
+                p[0].floor() as i32,
+                (p[1] + 0.1).floor() as i32,
+                p[2].floor() as i32,
+            ];
+            let flowing = in_water
+                && basalt_data::BlockState(self.world.get_block(cell[0], cell[1], cell[2]))
+                    .get("level")
+                    .is_some_and(|l| l != "0" && l.parse::<i32>().unwrap_or(0) < 8);
+            if in_water && !flowing {
                 if v[1] < 0.06 {
                     v[1] += 5.0e-4;
                 }
                 v[0] *= 0.99;
                 v[2] *= 0.99;
             } else {
+                // shallow flowing water does not hold items up (m6_item_drift: they settle on the floor)
                 v[1] -= 0.04;
+            }
+            if in_water {
+                // current: fitted to m6_item_drift (vanilla 26.2: ~4.5 blocks in the first 20 ticks)
+                let f = self.flow_at(cell);
+                v[0] += f[0] * ITEM_CURRENT;
+                v[2] += f[2] * ITEM_CURRENT;
             }
             // resting items only run the move step every 4th tick (vanilla), so gravity builds up between
             let (was_ground, age) = {

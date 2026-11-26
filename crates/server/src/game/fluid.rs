@@ -403,3 +403,38 @@ fn washable(s: BlockState) -> bool {
                 | "cobweb"
         ))
 }
+
+impl Game {
+    /// Horizontal flow direction of the fluid in cell `p` (unit vector or zero): towards lower
+    /// neighbours (air beside counts as empty), like the current that pushes entities.
+    pub(super) fn flow_at(&self, p: [i32; 3]) -> [f64; 3] {
+        let Some(c) = self.fcell(p) else {
+            return [0.0; 3];
+        };
+        let h = |c: &Cell| c.amount as f64 / 9.0;
+        let own = h(&c);
+        let mut v = [0.0f64; 3];
+        for d in HORIZ {
+            let q = step(p, d);
+            let nh = match self.fcell(q) {
+                Some(n) if n.f == c.f => h(&n),
+                Some(_) => continue,
+                None => {
+                    let s = self.world.get_block(q[0], q[1], q[2]);
+                    if basalt_world::props::props(s).blocks_motion() {
+                        continue;
+                    }
+                    0.0
+                }
+            };
+            let diff = own - nh;
+            v[0] += FACE[d][0] as f64 * diff;
+            v[2] += FACE[d][2] as f64 * diff;
+        }
+        let l = (v[0] * v[0] + v[2] * v[2]).sqrt();
+        if l < 1e-9 {
+            return [0.0; 3];
+        }
+        [v[0] / l, 0.0, v[2] / l]
+    }
+}

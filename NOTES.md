@@ -826,3 +826,9 @@ Measured with the oracle mod's fx log (FxParticleMixin / FxSoundMixin: the clien
   nether lava speed (10 ticks, drop-off 1, slope 4: set from the vanilla dimension rules, not measured), lava's
   occasional slower tick, basalt from lava over soul soil next to blue ice, fluid pushing entities/items, fluid ticks
   saved in chunks (pending ticks are lost on restart).
+- Items in currents (m6_item_drift, a 1-wide 10-cell channel): vanilla items move ~4.5-5 blocks in the first 20 ticks,
+  stop near the channel end (they coast past the last water cell). An item summoned in a flowing level-2 cell settles
+  on the floor (dy -0.3); one starting in the source cell keeps floating (dy ~0) while it drifts. Basalt: horizontal push
+  0.085 x flow direction per tick (fitted to the flowing-cell case), gravity in flowing (non-source) cells; the
+  source-start case is only noted (Basalt sinks it and it runs ~1 block further at 20 ticks). Flow direction =
+  normalised sum over horizontal neighbours of (own height - neighbour height), air beside = height 0.
