@@ -11,7 +11,7 @@ of light levels — ARE allowed, each with a comment saying where/how it was mea
 
 Read NOTES.md for verified packet formats.
 
-## Status (updated 2026-11-24, wrap-up)
+## Status (updated 2026-11-26, daily cloud run)
 - Done & working: crates/nbt, crates/data (tables generated from ./data at build time),
   crates/protocol (framing, compression, varints, NBT, text), crates/probe (joins a server and
   dumps packets; `basalt-probe proxy LISTEN TARGET DUMPDIR` logs both directions).
@@ -123,16 +123,21 @@ Half-done work (unmerged branches, pushed to origin):
   yet send onlookers entity.player.splash (cat 7, vol 0.2 x speed). pr_ready not run on the branch.
 - worktree-agent-a8aab1358eb6aafd2 — WIP m8_portal_place measurement scenario for vanilla's exit-portal build rule (no fix yet).
 
-Next steps for a fresh session, in order:
-0. Main's last full gate (2026-11-24 ~11:00, base 9dc6124, no cache): 93/95 harnesses pass; the 2 failures are vanilla-side
-   only and pass when run alone: m5_chicken_fall (vanilla chicken "lands" in 0.48 s) and m5_undead_sun (vanilla zombie
-   doesn't burn). Likely parallel scenarios changing the shared vanilla world (e.g. m6_weather's rain) — make these
-   scenarios set/restore their own weather/time and arena, or mark them serial, then re-run.
-1. `git fetch`; review + merge the two agent branches above (`git merge origin/<branch>`), fix conflicts, `tools/pr_ready.sh` (the shared vanilla server on 25566 is flaky under concurrent use — re-run failing vanilla-side diffs alone before believing them), push.
-2. Finish throwables (egg, snowball, pearl, xp bottle, potions, wind charge, trident, bow/crossbow) then buckets, flint and steel, bonemeal, shears, hoe/shovel/axe, fishing rod — each measured on vanilla with a differential scenario.
-3. Finish water effects (splash/bubbles/sounds), lava, currents, Depth Strider, Dolphin's Grace, swim pose, the first ticks of surface floating — extend `basalt-check client-water`.
-4. Ask the user to play-test the fixes above (grass, pickups, chat, water, landing) in the real game.
-5. Remaining plan: M3c woodland mansions, M8 End + exit-portal build rule, M9 redstone (Fable after Thu 26 Nov 6 pm WIB), fluids/block ticks, M11-M14.
+Next steps for a fresh session, in order (updated 2026-11-26 by the daily cloud run):
+0. Shared-vanilla flakes: m5_undead_sun fixed (clears the weather first, 2026-11-26); m5_chicken_fall passes alone. Still
+   seen under load: throw_pearl pearl_dz (Basalt 11.7-12.9 vs vanilla 12.8-13.0, tol 0.2 — noisy on both sides),
+   items_tracking pos_packets_60t, m4_double_block_break (vanilla chickens lay eggs into the cells). Re-run alone before believing.
+1. (done 2026-11-24 cloud session) agent branches merged.
+2. use_item: DONE for hoe/shovel/axe/shears/honeycomb/bone meal (tool_actions), buckets (tool_buckets), crossbow, fishing rod
+   (2026-11-26). Remaining: crossbow Multishot/Quick Charge/Piercing + firework rockets, trident Loyalty/Riptide/Channeling,
+   endermites from pearls, egg variants, tipped/spectral arrows, bow Infinity/Power, fishing hooks on entities + Luck of the
+   Sea, bone meal on other plants (other saplings, flowers, stems' fruit, berries, cocoa, kelp, moss), milk buckets/fish buckets.
+3. Water effects (client): splash/bubbles/sounds, lava, currents, Depth Strider, Dolphin's Grace, swim pose — needs the real
+   client + oracle (extend `basalt-check client-water`); server: onlooker entity.player.splash not sent yet.
+4. Ask the user to play-test the fixes above (grass, pickups, chat, water, landing) in the real game — and now flowing water/lava.
+5. Remaining plan: M6 fluids follow-ups (waterlogged blocks spreading, bubble columns, pending fluid ticks saved in chunks,
+   mobs/players pushed by currents server-side, the source-start item drift case), other scheduled block ticks, M8 End +
+   exit-portal build rule, M9 redstone (Fable after Thu 26 Nov 6 pm WIB), M3c woodland mansions, M11-M14.
 6. Disk: keep ~/Downloads/rustcraft under 20 GB with `cargo xtask clean-disk`; enable the shared worktree build folder (.claude/worktrees/.cargo/config.toml.off -> config.toml) only when no agent is running.
 
 - Throwables (2026-11-24): use_item for snowball, egg, ender pearl, xp bottle, splash/lingering potions (+ area effect cloud), wind charge, player bow, trident throw/pickup done and diffed vs vanilla (scenarios throw_*, bow_shoot, trident_throw, wind_charge). basalt-client: item-sprite billboards, own flight prediction, break/splash particles, sends use_item for throwables (PARTIAL: client scenario not written, untested in a real window, trident drawn as a sprite). Remaining: crossbow, trident Loyalty/Riptide/Channeling, endermite from pearls, egg chicken variants (blue/brown egg), wind charge damage on entity hit, tipped/spectral arrows, bow Infinity/Power, potion effects on mobs, buckets, flint and steel, bonemeal, shears, hoe/shovel/axe, fishing rod, client scenario for projectiles.
@@ -147,6 +152,14 @@ Next steps for a fresh session, in order:
   Gate on the merged tree: cargo test --workspace green; clippy: no new lints from the merges (7 toolchain-version lints in older
   files differ from the Mac baseline); scenarios --diff vs vanilla: 269/280 (the failures are vanilla-side, e.g. m6_break_contents,
   m6_random_ticks — shared-world interference); basalt-only 99/100 with m8_portal_travel flaky under --jobs 2 (passes 3/3 alone).
+
+### Daily cloud runs (scheduled, owner away until Mon 30 Nov)
+- Fresh container each day: checkout /home/claude/basalt, `apt-get install -y openjdk-25-jre-headless` +
+  `update-alternatives --set java /usr/lib/jvm/java-25-openjdk-amd64/bin/java`, `cargo xtask extract-data` (~1 min).
+- vanilla/srv: server.properties (eula, online-mode=false, network-compression-threshold=-1, level-seed=12345,
+  server-port=25566, spawn-protection=0) + run.sh that keeps a writer on console.fifo (`sleep infinity > console.fifo &`,
+  then `exec java -Xmx2G -jar ../server.jar nogui < console.fifo > server.log`). Start it with
+  `setsid nohup vanilla/srv/run.sh &` — without setsid the tool's shell exit kills the fifo writer and the server stops on EOF.
 
 ### Task list
 - [x] M1 client builds, joins vanilla, renders chunks
@@ -174,7 +187,7 @@ Next steps for a fresh session, in order:
       drowning (Respiration, Water Breathing, conduit power w/ frame detection, turtle helmet),
       powder-snow freezing (ticks_frozen 140, thaw 2/tick, leather immunity, entity-data synced),
       suffocation, lava, fire/burning, campfire, magma, cactus, berry bush, void. Status effects
-      (/effect), enchantments on stacks (/enchant), /setblock /fill /kill. Armor reduction done in M5. Double blocks + support pops done (2026-11-24; breaking either half of a tall plant/door removes the other, dependants of a removed block pop with tool-less drops via dig / creative / /setblock / /fill / falling sand; /setblock + /fill destroy drop; scenarios m4_double_block_break + m4_support_break match vanilla; rules in NOTES.md "Double blocks and support pops"; pops from explosions/piston/fluids not wired yet). Missing: non-food use_item (buckets etc.), death
+      (/effect), enchantments on stacks (/enchant), /setblock /fill /kill. Armor reduction done in M5. Double blocks + support pops done (2026-11-24; breaking either half of a tall plant/door removes the other, dependants of a removed block pop with tool-less drops via dig / creative / /setblock / /fill / falling sand; /setblock + /fill destroy drop; scenarios m4_double_block_break + m4_support_break match vanilla; rules in NOTES.md "Double blocks and support pops"; pops from explosions/piston not wired yet). Tool actions done (2026-11-26, game/tools.rs + bucket.rs + fishing.rs + bow.rs crossbow: hoe/shovel/axe/shears/honeycomb/bone meal, buckets, crossbow, fishing rod; scenarios tool_actions, tool_buckets, crossbow, fishing = vanilla). Missing: death
       screen in basalt-client (auto-respawns), human-driven real-client inventory test.
 - [x] M5 mobs — done, check-all M5 12/12 + Diff 34/34 vs vanilla (2026-11-23) (server game/{mob,ai,path,combat,arrow,explosion,spawn,track}.rs):
       zombie/skeleton/creeper/spider/cow/pig/sheep/chicken with vanilla-measured spawn packets +
@@ -191,7 +204,7 @@ Next steps for a fresh session, in order:
       /kill @e[type=..], /mobs [r] (debug). Mobs persist in <world>/entities.json. --no-spawning.
       XP orbs + /xp done (game/xporb.rs: mob kills by players and ores drop orbs that drift and are collected; vanilla XP model — level, float progress, gained-points counter; m5_xp_orbs + m5_xp_command match vanilla; client XP bar M7/xp_bar). Breeding done (game/breed.rs; m5_breeding matches vanilla: baby 3.3 s after feeding, 1-7 xp). Sheep eat grass (regrow wool; m5_sheep_eat_grass). Land animals avoid water (land-only wander targets, water path cost 8) and swim back to shore (float goal); m5_animals_avoid_water 0 % of samples in a lake vs vanilla 2.4 %, m5_animal_float, m5_chicken_fall match vanilla (2026-11-24). Missing: zombie reinforcements/drowned conversion,
       mob-vs-mob pushing, swimming AI beyond buoyancy, peaceful natural regen. /difficulty done (saved per world; mob/arrow/explosion damage scaling, starvation floor, peaceful removes + refuses monsters; m5_difficulty matches vanilla).
-- [~] M6 world logic (weather done: /weather + cycle + rain/thunder levels, scenario m6_weather matches vanilla; containers done: chests (single/double/trapped), barrels, furnace/blast furnace/smoker as block entities (server game/container.rs; Anvil-persisted, windows + click modes + lid events + smelting + XP; scenarios m6_chest_*, m6_double_chest, m6_barrel, m6_break_contents, m6_furnace_*, m6_blast_smoker, m6_container_persistence all match vanilla; client screens M7/chest + M7/furnace; falling blocks done (server game/falling.rs: sand/gravel/powder/anvils as falling_block entities, columns, torch → item, powder hardens; m6_falling_blocks matches vanilla incl. 24-tick 10-block drop; client draws them, M7/falling_block); random ticks done (server game/randomtick.rs + /gamerule random_tick_speed: crops, grass spread/decay, leaf decay, sugar cane, cactus, farmland, oak saplings; m6_random_ticks matches vanilla outcomes); ender chests done (per-player EnderItems, scenario m6_ender_chest); todo: XP orbs, chest/furnace models in the client, fluids, block ticks, other sapling/tree kinds, stems, berries, ice/snow melt)
+- [~] M6 world logic (weather done: /weather + cycle + rain/thunder levels, scenario m6_weather matches vanilla; containers done: chests (single/double/trapped), barrels, furnace/blast furnace/smoker as block entities (server game/container.rs; Anvil-persisted, windows + click modes + lid events + smelting + XP; scenarios m6_chest_*, m6_double_chest, m6_barrel, m6_break_contents, m6_furnace_*, m6_blast_smoker, m6_container_persistence all match vanilla; client screens M7/chest + M7/furnace; falling blocks done (server game/falling.rs: sand/gravel/powder/anvils as falling_block entities, columns, torch → item, powder hardens; m6_falling_blocks matches vanilla incl. 24-tick 10-block drop; client draws them, M7/falling_block); random ticks done (server game/randomtick.rs + /gamerule random_tick_speed: crops, grass spread/decay, leaf decay, sugar cane, cactus, farmland, oak saplings; m6_random_ticks matches vanilla outcomes); ender chests done (per-player EnderItems, scenario m6_ender_chest); fluids done (2026-11-26, game/fluid.rs: scheduled water/lava ticks, levels/falling/slope finding/infinite sources/draining, washing away, obsidian/cobblestone/stone; items drift in currents; scenarios m6_fluids + m6_item_drift = vanilla; rules + gaps in NOTES.md 'Fluids'); todo: chest/furnace models in the client, waterlogged spreading, bubble columns, other block ticks, other sapling/tree kinds, stems, berries, ice/snow melt)
 - [~] M7 client parity (19/19 tools/client-scenarios.sh, 2026-11-23; asset grid 0 problems; input parity vs the real client:
       `basalt-check client-input` 0 divergences (oracle scripted-input channel, tools/oracle-mod Control.java, port 25789);
       done: held item + equip anim, item name above hotbar, break/dig particles, menus like vanilla (blurred world /
@@ -372,3 +385,23 @@ The old `tools/*.sh` scripts are thin wrappers around the same tasks, so existin
   gate re-run from scratch. Wrap-up brought forward by the user to ~10 am: crons cancelled, agents committed their WIP
   (branches above), main gated and pushed. Shared vanilla server flakes seen today: m8_portal_travel, m5_chicken_fall,
   m5_undead_sun, m6_break_contents, m5_zombie_hit (vanilla side, pass when run alone).
+
+### 2026-11-26 (Thu) — daily cloud run (scheduled; owner away until Mon 30 Nov)
+- Setup: fresh container, Java 25, extract-data, vanilla/srv recreated (see "Daily cloud runs"; the server must be started
+  with setsid or it dies with the tool's shell).
+- Merged to main: tool actions + buckets (1897843: game/tools.rs, game/bucket.rs; scenarios tool_actions 52 cases,
+  tool_buckets 20 cases), M6 fluids (d94e0fa: game/fluid.rs, scenario m6_fluids 10 cases incl. per-cell arrival ticks),
+  m5_undead_sun weather fix ("clear the weather first"), crossbow (6f1cd47: charged_projectiles component on
+  the wire + NBT, scenario crossbow), fishing rod (522abf6, c122bac: game/fishing.rs, scenario fishing incl. a Lure III
+  catch), items drifting in currents (90847d1: scenario m6_item_drift). All new scenarios pass --diff vs vanilla 26.2.
+- Gate (main at 90847d1, `basalt-check --diff --jobs 2`, all scenarios, 1481 s): 298 results, 14 failed. Every Basalt
+  scenario passed; failing diffs: vanilla reference runs failed (m6_chest_clicks, m6_double_chest, m5_chicken_fall,
+  throw_hit_mob, m2_command_forms — vanilla server under load / shared world), timing-noisy metrics (throw_pearl pearl_dx,
+  bow_half_speed, items_tracking pos_packets_60t, m1_chunk_streaming vanilla 96 vs 117 after moving) and fishing (Basalt
+  casts flew into the far pool wall: fixed in c122bac, 2/2 catches after). cargo test (server + check) green; clippy: no
+  new lints in touched files besides pre-existing toolchain ones.
+- Decisions made on the owner's behalf: buckets act on use_item with a server-side look ray against approximate outline
+  boxes; crossbows need an arrow even in creative (measured); the item-current push is a rough fit (0.085/tick) and only
+  the flowing-cell drift case is compared (source-start case noted); fluid ticks are not persisted across restarts yet;
+  M9 redstone left for the planned Fable session.
+- Open: see "Next steps" (updated today) — use_item enchant variants, client water effects, fluid follow-ups, End, redstone.
