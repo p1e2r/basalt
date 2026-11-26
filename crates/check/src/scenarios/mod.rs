@@ -138,4 +138,5 @@ pub static ALL: &[Spec] = &[
     spec!("Items", "tool_buckets", tools::buckets, Flat, Both, true, "buckets: fill from water/lava sources, waterlogged blocks, powder snow; empty against blocks, into slabs; stacks and creative vs vanilla"),
     spec!("M6", "m6_fluids", fluids::fluids, Flat, Both, true, "water/lava flow: spread levels + timing, holes within 4, falling, draining, infinite sources, lava+water -> obsidian/cobblestone/stone, washing away torches/plants"),
     spec!("Items", "crossbow", throw::crossbow, Flat, Both, true, "crossbow: charge time, loading on release, charged_projectiles, arrow used, firing speed/sound/durability, creative loading"),
+    spec!("Items", "fishing", throw::fishing, Flat, Both, true, "fishing rod: cast (bobber spawn/owner/speed/sound), floating, reeling in empty and from the ground (durability), a Lure III catch: bite, loot item, xp"),
 ];

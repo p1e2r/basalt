@@ -37,6 +37,8 @@ pub enum PKind {
     Splash,
     Lingering,
     Wind,
+    /// fishing_bobber (fishing.rs)
+    Bobber,
 }
 
 impl PKind {
@@ -62,6 +64,7 @@ impl PKind {
             PKind::Lingering => "lingering_potion",
             PKind::Wind => "wind_charge",
             PKind::Cloud => "area_effect_cloud",
+            PKind::Bobber => "fishing_bobber",
         }
     }
     fn speed(self) -> f64 {
@@ -95,7 +98,7 @@ impl PKind {
             PKind::Splash => ("entity.splash_potion.throw", 7),
             PKind::Lingering => ("entity.lingering_potion.throw", 6),
             PKind::Wind => ("entity.wind_charge.throw", 6),
-            PKind::Cloud => ("", 0),
+            PKind::Cloud | PKind::Bobber => ("", 0),
         }
     }
     /// (cooldown group item, ticks)
@@ -123,6 +126,7 @@ pub struct Proj {
     /// outward normal of the block face that was hit (zero for entity hits)
     pub hit_normal: [f64; 3],
     pub cloud: Option<super::potion::Cloud>,
+    pub fish: Option<super::fishing::Fish>,
 }
 
 impl Proj {
@@ -140,6 +144,7 @@ impl Proj {
             hit_pos: pos,
             hit_normal: [0.0; 3],
             cloud: None,
+            fish: None,
         }
     }
     pub fn rot(&self) -> (f32, f32) {
@@ -168,7 +173,7 @@ impl Proj {
         let mut v = vec![Writer::with_id(cb::BUNDLE_DELIMITER), a];
         if let (PKind::Cloud, Some(c)) = (self.kind, &self.cloud) {
             v.push(c.spawn_data(self.eid));
-        } else if self.kind != PKind::Wind {
+        } else if self.kind != PKind::Wind && self.kind != PKind::Bobber {
             let mut d = Writer::with_id(cb::SET_ENTITY_DATA);
             d.varint(self.eid).u8(8).varint(7);
             write_slot(
@@ -289,6 +294,7 @@ impl Game {
                 hit_pos: pos,
                 hit_normal: [0.0; 3],
                 cloud: None,
+                fish: None,
             },
         );
         self.sync_viewers_for(peid);
@@ -325,6 +331,10 @@ impl Game {
             };
             if a.kind == PKind::Cloud {
                 self.tick_cloud(a);
+                continue;
+            }
+            if a.kind == PKind::Bobber {
+                self.tick_bobber(a);
                 continue;
             }
             if self
@@ -549,7 +559,7 @@ impl Game {
                 self.untrack(id);
                 self.wind_burst(&a);
             }
-            PKind::Cloud => {
+            PKind::Cloud | PKind::Bobber => {
                 self.untrack(id);
             }
         }

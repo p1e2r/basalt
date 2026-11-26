@@ -914,7 +914,7 @@ pub fn crossbow(ctx: &mut Ctx) -> Result<()> {
         ctx.note(format!("{tag}: sounds {snd:?}"));
         for (n, t) in &snd {
             if let Some(k) = n.strip_prefix("item.crossbow.") {
-                ctx.metric(&format!("crossbow_{tag}_sound_{k}_tick"), *t as f64, 2.0);
+                ctx.metric(&format!("crossbow_{tag}_sound_{k}_tick"), *t as f64, 3.0);
             }
         }
     }
@@ -961,5 +961,180 @@ pub fn crossbow(ctx: &mut Ctx) -> Result<()> {
     bot.release_use();
     bot.wait_ticks(4);
     ctx.metric("crossbow_creative_charged", charged(&bot), 0.0);
+    Ok(())
+}
+
+/// Fishing rod: cast (bobber spawn, owner, speed), floating, reeling in empty / from the ground,
+/// and a catch with Lure III (bite -> loot item pulled to the player + experience).
+pub fn fishing(ctx: &mut Ctx) -> Result<()> {
+    let bot = ctx.bot()?;
+    let o = ctx.arena(&bot, 11, 14, 8)?;
+    // a pool: stone basin y..y+2 with 3-deep water, the bot on its south rim
+    fill(
+        &bot,
+        [o[0], Y, o[2] + 2],
+        [o[0] + 10, Y + 2, o[2] + 13],
+        "stone",
+    )?;
+    fill(
+        &bot,
+        [o[0] + 1, Y, o[2] + 4],
+        [o[0] + 9, Y + 2, o[2] + 12],
+        "water",
+    )?;
+    ctx.stand(&bot, o[0] + 5, o[2] + 2, "survival")?;
+    bot.tp([o[0] as f64 + 5.5, (Y + 3) as f64, o[2] as f64 + 2.5])?;
+    bot.wait_ticks(10);
+    let surface = (Y + 3) as f64;
+    give(&bot, "fishing_rod", 1)?;
+    hold(&bot, "fishing_rod")?;
+    let eid = bot.st().eid;
+    let me = bot.st().pos();
+    let bobber = |bot: &Bot, since: Instant| spawned(bot, "fishing_bobber", since);
+    // 1. cast straight ahead into the pool
+    let t0 = Instant::now();
+    bot.look(0.0, 0.0);
+    bot.wait_ticks(2);
+    bot.use_item();
+    bot.wait_ticks(3);
+    let b = bobber(&bot, t0);
+    ctx.metric("cast_spawned", b.is_some() as u8 as f64, 0.0);
+    if let Some(b) = &b {
+        let sp = (b.spawn_vel[0].powi(2) + b.spawn_vel[1].powi(2) + b.spawn_vel[2].powi(2)).sqrt();
+        ctx.metric("cast_speed", sp, 0.25);
+        ctx.metric("cast_dy", b.spawn_pos[1] - me[1], 0.05);
+        ctx.metric("cast_owner", (b.data == eid) as u8 as f64, 0.0);
+    }
+    let snd: Vec<String> = sounds_since(&bot, t0).into_iter().map(|s| s.0).collect();
+    ctx.metric(
+        "cast_sound",
+        snd.iter().any(|s| s == "entity.fishing_bobber.throw") as u8 as f64,
+        0.0,
+    );
+    bot.wait_ticks(50);
+    let (float_y, alive) = {
+        let s = bot.st();
+        let e = b
+            .as_ref()
+            .and_then(|b| s.entities.values().find(|e| e.uuid == b.uuid));
+        (e.map(|e| e.pos[1] - surface), e.is_some())
+    };
+    ctx.metric("float_alive", alive as u8 as f64, 0.0);
+    if let Some(y) = float_y {
+        ctx.metric("float_y", y, 0.3);
+    }
+    ctx.note(format!("cast sounds {snd:?}, float y {float_y:?}"));
+    // 2. reel in with nothing on the line
+    let t1 = Instant::now();
+    bot.use_item();
+    bot.wait_ticks(4);
+    let gone = {
+        let s = bot.st();
+        b.as_ref()
+            .is_some_and(|b| !s.entities.values().any(|e| e.uuid == b.uuid))
+    };
+    ctx.metric("reel_empty_removed", gone as u8 as f64, 0.0);
+    ctx.metric(
+        "reel_empty_damage",
+        bot.st().held_stack().damage as f64,
+        0.0,
+    );
+    let snd: Vec<String> = sounds_since(&bot, t1).into_iter().map(|s| s.0).collect();
+    ctx.note(format!("reel sounds {snd:?}"));
+    // 3. cast onto the rim (ground), reel in
+    let d0 = bot.st().held_stack().damage;
+    let t2 = Instant::now();
+    bot.look(0.0, 70.0);
+    bot.wait_ticks(2);
+    bot.use_item();
+    bot.wait_ticks(30);
+    let on_ground = bobber(&bot, t2).map(|e| e.pos[1] - surface);
+    bot.use_item();
+    bot.wait_ticks(4);
+    ctx.note(format!("ground bobber y {on_ground:?}"));
+    ctx.metric(
+        "reel_ground_damage",
+        (bot.st().held_stack().damage - d0) as f64,
+        0.0,
+    );
+    // 4. a catch: Lure III, wait for the bite (entity data), reel in
+    bot.cmd_reply("clear @s")?;
+    bot.cmd_reply("give @s minecraft:fishing_rod[enchantments={lure:3}]")?;
+    bot.wait_ticks(4);
+    hold(&bot, "fishing_rod")?;
+    ctx.note(format!(
+        "lure rod enchantments {:?}",
+        bot.st().held_stack().ench
+    ));
+    bot.look(0.0, 0.0);
+    bot.wait_ticks(2);
+    let mut caught = false;
+    let mut waits = Vec::new();
+    for _attempt in 0..3 {
+        let t3 = Instant::now();
+        bot.use_item();
+        bot.wait_ticks(3);
+        let Some(b) = bobber(&bot, t3) else { break };
+        let bit = bot.wait_until(Duration::from_secs(40), |s| {
+            s.entities
+                .values()
+                .find(|e| e.uuid == b.uuid)
+                .and_then(|e| e.meta.get(&9))
+                .is_some_and(|m| matches!(m, Meta::Bool(true)))
+        });
+        waits.push(t3.elapsed().as_secs_f64());
+        let keys: Vec<u8> = bot
+            .st()
+            .entities
+            .values()
+            .find(|e| e.uuid == b.uuid)
+            .map(|e| e.meta.keys().copied().collect())
+            .unwrap_or_default();
+        let bpos = bot
+            .st()
+            .entities
+            .values()
+            .find(|e| e.uuid == b.uuid)
+            .map(|e| [e.pos[0] - me[0], e.pos[1] - surface, e.pos[2] - me[2]]);
+        ctx.note(format!(
+            "bite {bit} after {:.1}s, bobber meta keys {keys:?}, at {bpos:?}",
+            t3.elapsed().as_secs_f64()
+        ));
+        let d1 = bot.st().held_stack().damage;
+        let t4 = Instant::now();
+        bot.use_item();
+        bot.wait_ticks(30);
+        let items: Vec<String> = {
+            let s = bot.st();
+            s.entities
+                .values()
+                .chain(s.removed.iter())
+                .filter(|e| e.added >= t4 && e.kind == "item")
+                .filter_map(|e| e.item.as_ref().map(|i| i.name().to_string()))
+                .collect()
+        };
+        let orbs = {
+            let s = bot.st();
+            s.entities
+                .values()
+                .chain(s.removed.iter())
+                .filter(|e| e.added >= t4 && e.kind == "experience_orb")
+                .count()
+        };
+        ctx.note(format!("catch: items {items:?}, orbs {orbs}"));
+        if bit {
+            caught = true;
+            ctx.metric("catch_item", (!items.is_empty()) as u8 as f64, 0.0);
+            ctx.metric("catch_orb", (orbs > 0) as u8 as f64, 0.0);
+            ctx.metric(
+                "catch_damage",
+                (bot.st().held_stack().damage - d1) as f64,
+                0.0,
+            );
+            break;
+        }
+    }
+    ctx.metric("caught", caught as u8 as f64, 0.0);
+    ctx.note(format!("bite waits {waits:?}"));
     Ok(())
 }

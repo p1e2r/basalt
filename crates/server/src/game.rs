@@ -12,6 +12,7 @@ pub(crate) mod dim;
 mod env;
 mod explosion;
 mod falling;
+mod fishing;
 mod fluid;
 mod health;
 mod inv;
@@ -1489,6 +1490,7 @@ impl Game {
                 let seq = r.varint()?;
                 let (yaw, pitch) = (r.f32().unwrap_or(0.0), r.f32().unwrap_or(0.0));
                 if !self.try_bucket(eid, hand, yaw, pitch)
+                    && !self.try_fish(eid, hand, yaw, pitch)
                     && !self.try_throw(eid, hand, yaw, pitch)
                     && !self.try_draw(eid, hand)
                 {
