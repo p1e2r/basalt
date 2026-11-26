@@ -866,3 +866,100 @@ pub fn wind_charge(ctx: &mut Ctx) -> Result<()> {
     );
     Ok(())
 }
+
+/// Crossbow: hold use to charge (a short tap loads nothing), release after a full charge loads an
+/// arrow (charged_projectiles component, one arrow used); the next use fires at once.
+pub fn crossbow(ctx: &mut Ctx) -> Result<()> {
+    let (bot, _o) = box_arena(ctx, 8, "survival")?;
+    give(&bot, "crossbow", 1)?;
+    give(&bot, "arrow", 8)?;
+    hold(&bot, "crossbow")?;
+    let me = bot.st().pos();
+    let eid = bot.st().eid;
+    let charged = |bot: &Bot| bot.st().held_stack().charged.len() as f64;
+    for (tag, ticks) in [("tap", 5u32), ("short", 20), ("full", 30)] {
+        let before = bot.st().count("arrow");
+        let t0 = Instant::now();
+        bot.look(0.0, 0.0);
+        bot.wait_ticks(2);
+        bot.use_item();
+        bot.wait_ticks(ticks);
+        let mid = charged(&bot);
+        bot.release_use();
+        bot.wait_ticks(4);
+        ctx.metric(&format!("crossbow_{tag}_charged_before_release"), mid, 0.0);
+        ctx.metric(&format!("crossbow_{tag}_charged"), charged(&bot), 0.0);
+        ctx.metric(
+            &format!("crossbow_{tag}_arrows_used"),
+            (before - bot.st().count("arrow")) as f64,
+            0.0,
+        );
+        ctx.metric(
+            &format!("crossbow_{tag}_shot"),
+            spawned(&bot, "arrow", t0).is_some() as u8 as f64,
+            0.0,
+        );
+        let snd: Vec<(String, u32)> = bot
+            .st()
+            .sound_detail
+            .iter()
+            .filter(|s| s.0 >= t0)
+            .map(|s| {
+                (
+                    sound_name(s.1),
+                    (s.0.duration_since(t0).as_secs_f64() * 20.0).round() as u32,
+                )
+            })
+            .collect();
+        ctx.note(format!("{tag}: sounds {snd:?}"));
+        for (n, t) in &snd {
+            if let Some(k) = n.strip_prefix("item.crossbow.") {
+                ctx.metric(&format!("crossbow_{tag}_sound_{k}_tick"), *t as f64, 2.0);
+            }
+        }
+    }
+    // loaded: the next use fires at once
+    let t0 = Instant::now();
+    bot.look(0.0, 0.0);
+    bot.wait_ticks(2);
+    bot.use_item();
+    bot.wait_ticks(4);
+    let e = spawned(&bot, "arrow", t0);
+    ctx.metric("crossbow_fire_shot", e.is_some() as u8 as f64, 0.0);
+    if let Some(e) = &e {
+        let sp = (e.spawn_vel[0].powi(2) + e.spawn_vel[1].powi(2) + e.spawn_vel[2].powi(2)).sqrt();
+        ctx.metric("crossbow_fire_speed", sp, 0.15);
+        ctx.metric("crossbow_fire_dy", e.spawn_pos[1] - me[1], 0.011);
+        ctx.metric("crossbow_fire_owner", (e.data == eid) as u8 as f64, 0.0);
+        ctx.note(format!("fire: meta {:?}", e.meta));
+    }
+    let snd = sounds_since(&bot, t0);
+    let sh = snd.iter().find(|s| s.0 == "item.crossbow.shoot");
+    ctx.metric(
+        "crossbow_fire_sound_cat",
+        sh.map(|s| s.1 as f64).unwrap_or(-1.0),
+        0.0,
+    );
+    ctx.metric(
+        "crossbow_fire_pitch",
+        sh.map(|s| s.3 as f64).unwrap_or(-1.0),
+        0.3,
+    );
+    ctx.note(format!("fire sounds {snd:?}"));
+    ctx.metric("crossbow_fire_charged_after", charged(&bot), 0.0);
+    ctx.metric(
+        "crossbow_fire_damage",
+        bot.st().held_stack().damage as f64,
+        0.0,
+    );
+    // creative: loads without arrows
+    ctx.gamemode(&bot, "creative")?;
+    bot.cmd_reply("clear @s minecraft:arrow")?;
+    bot.wait_ticks(2);
+    bot.use_item();
+    bot.wait_ticks(30);
+    bot.release_use();
+    bot.wait_ticks(4);
+    ctx.metric("crossbow_creative_charged", charged(&bot), 0.0);
+    Ok(())
+}

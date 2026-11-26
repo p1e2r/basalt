@@ -32,6 +32,15 @@ impl Game {
                 }
             }
             "trident" => {}
+            "crossbow" => {
+                if s.ench.charged != 0 {
+                    self.fire_crossbow(eid, slot);
+                    return true;
+                }
+                if self.find_arrow(eid).is_none() {
+                    return true;
+                }
+            }
             _ => return false,
         }
         let tick = self.tick;
@@ -152,4 +161,101 @@ impl Game {
             _ => {}
         }
     }
+
+    /// Crossbows being charged (a draw on a crossbow): sounds at 20 % / 50 % of the charge, loaded
+    /// on the tick the charge completes while still held (measured: crossbow scenario, 5 / 13 / 25
+    /// ticks of use; released earlier nothing is loaded).
+    pub(super) fn tick_crossbows(&mut self) {
+        let now = self.tick;
+        let mut events: Vec<(i32, usize, u64)> = Vec::new();
+        for p in self.players.values() {
+            if let Some((slot, start)) = p.draw {
+                let s = p.inv[slot];
+                if s.count > 0
+                    && s.ench.charged == 0
+                    && reg::ITEM.get(s.item as usize).copied() == Some("crossbow")
+                {
+                    events.push((p.eid, slot, now.saturating_sub(start)));
+                }
+            }
+        }
+        for (eid, slot, t) in events {
+            let feet = self.players[&eid].pos;
+            let creative = self.players[&eid].gamemode == 1;
+            let charge = CROSSBOW_CHARGE as u64;
+            if t == charge / 5 {
+                self.play_sound("item.crossbow.loading_start", 7, feet, 0.5, 1.0);
+            } else if t == charge.div_ceil(2) {
+                self.play_sound("item.crossbow.loading_middle", 7, feet, 0.5, 1.0);
+            } else if t >= charge {
+                // an arrow is needed even in creative (measured: no load without one), creative keeps it
+                let Some(a) = self.find_arrow(eid) else {
+                    continue;
+                };
+                let p = self.players.get_mut(&eid).unwrap();
+                let arrow_item = p.inv[a].item;
+                if !creative {
+                    p.inv[a].count -= 1;
+                    if p.inv[a].count <= 0 {
+                        p.inv[a] = Stack::default();
+                    }
+                }
+                p.inv[slot].ench.charged = arrow_item as u16 + 1;
+                p.inv[slot].ench.charged_n = 1;
+                Self::send_window(p);
+                let pitch = 1.0 / (self.rng.gen::<f32>() * 0.5 + 1.0) + 0.2;
+                self.play_sound("item.crossbow.loading_end", 7, feet, 1.0, pitch);
+            }
+        }
+    }
+
+    /// use_item with a loaded crossbow: the projectile leaves at once, the crossbow is empty again.
+    fn fire_crossbow(&mut self, eid: i32, slot: usize) {
+        let Some(p) = self.players.get_mut(&eid) else {
+            return;
+        };
+        let s = p.inv[slot];
+        let creative = p.gamemode == 1;
+        let (yaw, pitch, sneaking, feet) = (p.yaw as f64, p.pitch as f64, p.sneaking, p.pos);
+        p.inv[slot].ench.charged = 0;
+        p.inv[slot].ench.charged_n = 0;
+        let max_damage = self.data.item(s.item).map(|i| i.max_damage).unwrap_or(0);
+        if !creative {
+            p.inv[slot].damage += 1;
+            if max_damage > 0 && p.inv[slot].damage >= max_damage {
+                p.inv[slot] = Stack::default();
+            }
+        }
+        Self::send_window(p);
+        let eye = feet[1] + if sneaking { 1.27 } else { 1.62 };
+        let from = [feet[0], eye - 0.1, feet[2]];
+        let (yr, xr) = (yaw.to_radians(), pitch.to_radians());
+        let dir = [-yr.sin() * xr.cos(), -xr.sin(), yr.cos() * xr.cos()];
+        let item = (!creative).then(|| Stack {
+            item: s.ench.charged as i32 - 1,
+            count: 1,
+            ..Stack::default()
+        });
+        let id = self.shoot_projectile(
+            eid,
+            from,
+            dir,
+            CROSSBOW_SPEED,
+            1.0,
+            2.0,
+            "arrow",
+            false,
+            item,
+        );
+        if let Some(a) = self.arrows.get_mut(&id) {
+            a.crossbow = true;
+        }
+        // measured: pitch 1.0 for a single arrow
+        self.play_sound("item.crossbow.shoot", 7, feet, 1.0, 1.0);
+    }
 }
+
+/// Ticks of use before a released crossbow is loaded (no Quick Charge).
+const CROSSBOW_CHARGE: f64 = 25.0;
+/// Arrow speed from a crossbow.
+const CROSSBOW_SPEED: f64 = 3.15;

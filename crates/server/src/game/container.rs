@@ -351,6 +351,17 @@ impl Game {
                 comps.insert("minecraft:trim".into(), Tag::Compound(tc));
             }
         }
+        if s.ench.charged != 0 {
+            let one = Stack {
+                item: s.ench.charged as i32 - 1,
+                count: 1,
+                ..Stack::default()
+            };
+            let list = (0..s.ench.charged_n.max(1))
+                .map(|_| self.stack_to_nbt(None, &one))
+                .collect();
+            comps.insert("minecraft:charged_projectiles".into(), Tag::List(list));
+        }
         if !comps.is_empty() {
             c.insert("components".into(), Tag::Compound(comps));
         }
@@ -402,6 +413,14 @@ impl Game {
                 if let (Some(a), Some(b)) = (find(m, "material"), find(p, "pattern")) {
                     ench.trim_mat = a as u8 + 1;
                     ench.trim_pat = b as u8 + 1;
+                }
+            }
+            if let Some(Tag::List(l)) = c.get("minecraft:charged_projectiles") {
+                if let Some(first) = l.first().and_then(|t| t.get("id")).and_then(|i| i.as_str()) {
+                    if let Some(i) = registry_id(reg::ITEM, first) {
+                        ench.charged = i as u16 + 1;
+                        ench.charged_n = l.len().min(255) as u8;
+                    }
                 }
             }
             let stored = c.get("minecraft:stored_enchantments");

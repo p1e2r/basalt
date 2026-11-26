@@ -23,6 +23,10 @@ pub struct Ench {
     /// `minecraft:trim`: TRIM_MATERIAL registry id + 1, TRIM_PATTERN registry id + 1 (0 = none).
     pub trim_mat: u8,
     pub trim_pat: u8,
+    /// `minecraft:charged_projectiles` (loaded crossbow): ITEM registry id + 1 of the projectile, and
+    /// how many copies (multishot loads 3).
+    pub charged: u16,
+    pub charged_n: u8,
 }
 
 pub const NO_ENCH: Ench = Ench {
@@ -33,6 +37,8 @@ pub const NO_ENCH: Ench = Ench {
     potion: 0,
     trim_mat: 0,
     trim_pat: 0,
+    charged: 0,
+    charged_n: 0,
 };
 
 impl Deref for Ench {
@@ -85,7 +91,11 @@ impl Ench {
         name_of(self.name)
     }
     pub fn has_extras(&self) -> bool {
-        self.repair != 0 || self.name != 0 || self.potion != 0 || self.trim_mat != 0
+        self.repair != 0
+            || self.name != 0
+            || self.potion != 0
+            || self.trim_mat != 0
+            || self.charged != 0
     }
 }
 

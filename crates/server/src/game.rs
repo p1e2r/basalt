@@ -2070,6 +2070,7 @@ impl Game {
         self.tick_arrows();
         self.tick_projs();
         self.tick_cooldowns();
+        self.tick_crossbows();
         self.tick_falling();
         self.tick_fluids();
         self.tick_orbs();
@@ -2228,7 +2229,8 @@ pub(crate) fn write_slot(w: &mut Writer, s: Stack) {
         + (x.repair != 0) as i32
         + (x.name != 0) as i32
         + (x.potion != 0) as i32
-        + (x.trim_mat != 0) as i32;
+        + (x.trim_mat != 0) as i32
+        + (x.charged != 0) as i32;
     w.varint(n).varint(0);
     if s.damage > 0 {
         w.varint(damage_component()).varint(s.damage);
@@ -2264,6 +2266,21 @@ pub(crate) fn write_slot(w: &mut Writer, s: Stack) {
         w.varint(comp_id("trim"))
             .varint(x.trim_mat as i32)
             .varint(x.trim_pat as i32);
+    }
+    // charged_projectiles: list of item stacks
+    if x.charged != 0 {
+        w.varint(comp_id("charged_projectiles"))
+            .varint(x.charged_n.max(1) as i32);
+        for _ in 0..x.charged_n.max(1) {
+            write_slot(
+                w,
+                Stack {
+                    item: x.charged as i32 - 1,
+                    count: 1,
+                    ..Stack::default()
+                },
+            );
+        }
     }
 }
 

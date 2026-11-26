@@ -22,6 +22,8 @@ pub struct Arrow {
     pub kind: &'static str,
     /// what picking it up gives (players' arrows and tridents); None = not collectable
     pub item: Option<super::Stack>,
+    /// shot from a crossbow (hit sound item.crossbow.hit)
+    pub crossbow: bool,
 }
 
 impl Arrow {
@@ -153,6 +155,7 @@ impl Game {
                 crit,
                 kind,
                 item,
+                crossbow: false,
             },
         );
         self.sync_viewers_for(eid);
@@ -366,14 +369,20 @@ impl Game {
                 self.send_to_viewers(id, &w);
                 let mut m = Writer::with_id(cb::SET_ENTITY_DATA);
                 m.varint(id);
-                if a.crit {
+                if a.crit || a.crossbow {
                     m.u8(8).varint(0).u8(0);
                 }
                 m.u8(10).varint(8).bool(true).u8(0xff);
                 a.crit = false;
                 self.send_to_viewers(id, &m);
                 a.vel = [0.0; 3];
-                self.play_sound("entity.arrow.hit", 7, a.pos, 1.0, 1.2);
+                if a.crossbow {
+                    // measured (crossbow scenario): category 6, pitch 1.18 / 1.32 -> 1.2 / (0.9 + 0.2 r)
+                    let pitch = 1.2 / (self.rng.gen::<f32>() * 0.2 + 0.9);
+                    self.play_sound("item.crossbow.hit", 6, a.pos, 1.0, pitch);
+                } else {
+                    self.play_sound("entity.arrow.hit", 7, a.pos, 1.0, 1.2);
+                }
                 self.arrows.insert(id, a);
                 continue;
             }

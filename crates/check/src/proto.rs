@@ -110,6 +110,8 @@ pub struct Stack {
     pub name: String,
     pub potion: i32,
     pub trim: (i32, i32),
+    /// charged_projectiles (loaded crossbow): item ids
+    pub charged: Vec<i32>,
 }
 
 impl Stack {
@@ -183,6 +185,12 @@ pub fn read_slot(r: &mut Reader) -> Result<Stack> {
             let m = r.varint()?;
             let p = r.varint()?;
             s.trim = (m, p);
+        } else if ty == component_id("charged_projectiles") {
+            let n = r.varint()?;
+            for _ in 0..n {
+                let c = read_slot(r)?;
+                s.charged.push(c.item);
+            }
         } else if ty == component_id("unbreakable") || ty == component_id("glider") {
         } else {
             bail!("unknown component type {ty} on {}", s.name());

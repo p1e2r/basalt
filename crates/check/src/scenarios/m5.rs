@@ -348,7 +348,9 @@ pub fn undead_sun(ctx: &mut Ctx) -> Result<()> {
     // rain stops undead burning; the shared vanilla world's weather cycle may have started some
     // (2026-11-24 gate: vanilla zombie never burned): clear it and let the rain level drain
     bot.cmd_reply("weather clear 600s")?;
-    bot.wait_until(Duration::from_secs(9), |s| s.rain <= 0.01 && s.thunder <= 0.01);
+    bot.wait_until(Duration::from_secs(9), |s| {
+        s.rain <= 0.01 && s.thunder <= 0.01
+    });
     // the zombie stands in a pit it can't leave
     let c = [o[0] + 6, Y, o[2] + 6];
     fill(
