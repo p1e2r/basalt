@@ -391,7 +391,7 @@ The old `tools/*.sh` scripts are thin wrappers around the same tasks, so existin
   with setsid or it dies with the tool's shell).
 - Merged to main: tool actions + buckets (1897843: game/tools.rs, game/bucket.rs; scenarios tool_actions 52 cases,
   tool_buckets 20 cases), M6 fluids (d94e0fa: game/fluid.rs, scenario m6_fluids 10 cases incl. per-cell arrival ticks),
-  m5_undead_sun weather fix ("clear the weather first"), crossbow (6f1cd47: charged_projectiles component on
+  m5_undead_sun weather fix (3a80180), crossbow (6f1cd47: charged_projectiles component on
   the wire + NBT, scenario crossbow), fishing rod (522abf6, c122bac: game/fishing.rs, scenario fishing incl. a Lure III
   catch), items drifting in currents (90847d1: scenario m6_item_drift). All new scenarios pass --diff vs vanilla 26.2.
 - Gate (main at 90847d1, `basalt-check --diff --jobs 2`, all scenarios, 1481 s): 298 results, 14 failed. Every Basalt
