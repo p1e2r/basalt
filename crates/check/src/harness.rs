@@ -62,6 +62,7 @@ fn scenario_paths(id: &str) -> Vec<&'static str> {
         ("m6_", &["crates/check/src/scenarios/m6.rs"]),
         ("m8_", &["crates/check/src/scenarios/m8.rs", "crates/worldgen/**", "crates/server/src/game/{dim,portal,cmd,place}.rs"]),
         ("env_", &["crates/check/src/scenarios/env.rs", "crates/game/**", "crates/server/src/game/{env,health}.rs"]),
+        ("tool_", &["crates/check/src/scenarios/tools.rs", "crates/server/src/game/tools.rs", "crates/server/src/game/place.rs"]),
         ("items_", &["crates/check/src/scenarios/m4.rs", "crates/game/**", "crates/server/src/game/{items,track}.rs"]),
     ];
     for (pre, ps) in by_prefix {

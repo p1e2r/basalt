@@ -782,3 +782,29 @@ Measured with the oracle mod's fx log (FxParticleMixin / FxSoundMixin: the clien
 - Splash on entering water, in the tick that moves the feet in: sound volume 0.2 x |dy of that tick|, pitch 1 +- 0.4, `.high_speed` variant when volume > 0.25 (0.250 normal, 0.261 high); 13 BubbleParticle + 13 SplashParticle at y = floor(feet)+1, x/z within 0.5. Bubbles: vy -(vol) - U(-0.004,0.056), vx/vz +-0.02, life 8/(0.2+0.8U), half-size 0.027..0.137; per tick vy += 0.002, move, x0.85, die outside water. Drops: vy U(0.105,0.295), vx/vz +-0.04, half-size 0.10..0.196, sprite splash_0..3; per tick vy -= 0.04, move, x0.98, die below the water surface.
 - `ambient.underwater.enter` (vol 1) fires ~2 ticks after the eyes go under (1 at 40-block falls: exact rule not found), `.exit` 1-2 ticks after they come out. No swim particles were seen while sprint-swimming.
 - Sprint-swimming (drag 0.9, vertical x0.75) starts 3 ticks after the eyes are under and ends 3 ticks after they leave (surface_sprint matches).
+
+## Tool actions and buckets (2026-11-26) — scenarios tool_actions / tool_buckets, measured on vanilla 26.2 with the bot
+- Order: the block's own use first (doors/trapdoors/gates toggle — an axe on a waxed copper door opens it), then the item.
+- Hoe: grass_block / dirt / dirt_path -> farmland[moisture=0]; coarse_dirt -> dirt; rooted_dirt -> dirt + 1 hanging_roots item
+  (first seen exactly on the clicked face, ±0.25 across it, vy 0.2). Needs air above (a poppy or short grass on top blocks it),
+  any face but the bottom. podzol/mycelium/stone: nothing, no durability.
+- Shovel: grass_block/dirt/coarse_dirt/rooted_dirt/podzol/mycelium -> dirt_path (same face/air rules; farmland stays).
+  Lit campfire / soul campfire -> lit=false from any face, level_event 1009 (data 0) to everyone incl. the user.
+- Axe: *_log/_wood/_stem/_hyphae/bamboo_block -> stripped_* (axis kept), copper one oxidation stage back (props kept,
+  exposed_copper -> copper_block), waxed_* -> unwaxed. copper_block / stone: nothing.
+- Shears on pumpkin: carved_pumpkin facing the clicked side (top: opposite the player's facing), 4 pumpkin_seeds spawned at
+  centre + 0.65 x facing, y+0.1, v ≈ (0.05 x facing + small, 0.05, ...), sound block.pumpkin.carve heard by the user too.
+- Honeycomb: copper -> waxed_* (copper_block -> waxed_copper_block), one used in survival. Already waxed: nothing.
+- Durability: 1 per successful use, 0 for a failed use and in creative.
+- Bone meal: wheat age +2..5 (seen 0->2, 0->4, 0->5), sapling 45 %-ish stage step (consumed either way), grass block ->
+  plants around (an arena of stone: just tall grass on top), fully grown crop / stone: not used. level_event 1505 data 15
+  to everyone. Not used up in creative.
+- Strip/scrape/wax sounds and level events 3003/3004/3005 are NOT sent to the acting player (their client predicts them).
+- Buckets act on use_item (the look ray from the packet's yaw/pitch, eye 1.62, reach 4.5 from the eye): an empty bucket
+  stops at fluid sources (flowing water is passed through) and at the water inside waterlogged blocks; a filled bucket
+  passes through fluids and hits outline shapes (aiming at the top of a bottom slab's cell misses when the slab surface
+  is beyond 4.5). Emptying: waterloggable block hit -> waterlogged; else the hit block if replaceable (not a snow layer:
+  the water goes on top), else the cell in front of the face (existing water there: bucket emptied, nothing changes).
+  Survival single bucket swaps in place, a stack of 2 keeps 1 bucket + adds the filled one; creative keeps the bucket and
+  gets one filled bucket (if none), an emptied water bucket stays. Powder snow pickup sends level_event 2001 (break
+  particles, data = state id) to everyone; powder_snow_bucket places like a block (use_item_on) and leaves a bucket.

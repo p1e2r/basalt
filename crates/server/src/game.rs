@@ -3,6 +3,7 @@ mod ai;
 mod arrow;
 mod bow;
 mod breed;
+mod bucket;
 mod cmd;
 mod combat;
 mod container;
@@ -26,6 +27,7 @@ mod randomtick;
 mod spawn;
 mod stackx;
 mod station;
+mod tools;
 mod track;
 mod wind;
 mod xporb;
@@ -1477,7 +1479,10 @@ impl Game {
                 let hand = r.varint()?;
                 let seq = r.varint()?;
                 let (yaw, pitch) = (r.f32().unwrap_or(0.0), r.f32().unwrap_or(0.0));
-                if !self.try_throw(eid, hand, yaw, pitch) && !self.try_draw(eid, hand) {
+                if !self.try_bucket(eid, hand, yaw, pitch)
+                    && !self.try_throw(eid, hand, yaw, pitch)
+                    && !self.try_draw(eid, hand)
+                {
                     self.start_using(eid, hand);
                 }
                 if let Some(p) = self.players.get(&eid) {
@@ -1900,9 +1905,14 @@ impl Game {
             self.use_flint_and_steel(eid, b, face);
             return;
         }
+        let item_name: &'static str = item_name;
+        if self.use_tool_on(eid, b, face, item_name) {
+            return;
+        }
         let Some(state) = block_default(item_name).or_else(|| block_for_item(item_name)) else {
             return;
         };
+        let p = &self.players[&eid];
         let (yaw, pitch, sneaking) = (p.yaw, p.pitch, p.sneaking);
         let clicked = BlockState(self.world.get_block(b[0], b[1], b[2]));
         let replacing = self.replaceable_for(clicked) && clicked.name() != "water";
@@ -1962,9 +1972,20 @@ impl Game {
         }
         let p = self.players.get_mut(&eid).unwrap();
         if p.gamemode != 1 {
-            p.inv[slot].count -= 1;
-            if p.inv[slot].count <= 0 {
-                p.inv[slot] = Stack::default();
+            if item_name == "powder_snow_bucket" {
+                // the bucket is kept (measured: scenario buckets)
+                if let Some(id) = basalt_data::registry_id(reg::ITEM, "bucket") {
+                    p.inv[slot] = Stack {
+                        item: id,
+                        count: 1,
+                        ..Stack::default()
+                    };
+                }
+            } else {
+                p.inv[slot].count -= 1;
+                if p.inv[slot].count <= 0 {
+                    p.inv[slot] = Stack::default();
+                }
             }
             Self::send_window(p);
         }

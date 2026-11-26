@@ -273,7 +273,7 @@ impl Game {
     }
 
     /// A small oak: trunk 4-6 high, blob of leaves around the top (needs room above).
-    fn grow_oak(&mut self, b: [i32; 3]) {
+    pub(super) fn grow_oak(&mut self, b: [i32; 3]) {
         let h: i32 = 4 + self.rng.gen_range(0..3);
         for y in 1..=h + 1 {
             let s = self.world.get_block(b[0], b[1] + y, b[2]);
