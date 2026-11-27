@@ -776,6 +776,25 @@ Rules are documented in the module headers: crates/server/src/game/{proj,potion,
 throw_basics, throw_eggs, throw_pearl, throw_xp_bottle, throw_hit_mob, throw_splash, throw_lingering, bow_shoot, trident_throw, wind_charge.
 Projectile tick order: v.y=(v.y-g)*0.99, v.xz*=0.99, then move; gravity .03 snowball/egg/pearl, .07 xp bottle, .05 potions/trident/arrow, 0 wind charge.
 Probe tooling: `basalt-check --probe ADDR NAME raw:add_entity,... use look:0,90 release mark:X dumpraw`.
+Bow / crossbow enchantments, special arrows, mob effects (2026-11-27, scenarios bow_enchants / crossbow_enchants, = vanilla):
+- Half-draw shots at a NoAI cow 5 blocks away: damage 3 plain, 4 Power I, 7 Power V (base 2 + 0.5 x level + 0.5); Punch II
+  horizontal knockback 1.6 (0.4 + 0.6 x level); Flame: arrow shared flag 0x01, cow burning 5 s (2 damage in the next 40 ticks).
+- Infinity: plain arrows not used up (spectral / tipped are), needs one arrow to shoot, the arrow can't be picked up.
+- spectral_arrow entity type; the target gets glowing (shared flag 0x40). Tipped arrows: entity data 11 = potion colour
+  (ARGB as int, e.g. poison -7888029), effects at 1/8 duration (tipped poison: 2 damage in 40 ticks); tipped harming deals
+  6 in total = arrow 3 + harming 6 during the hurt cooldown -> only the difference lands (vanilla "bigger hit" rule, now in
+  combat.rs damage_mob for every damage source).
+- Mobs hold effects (game/mobfx.rs): poison 1 dmg every 25 >> amp ticks (not below 1 hp), wither every 40 >> amp,
+  regeneration every 50 >> amp; undead ignore poison/regeneration and swap instant harming/healing (undead side not diffed).
+- Crossbow: Quick Charge charges in 25 - 5 x level ticks, start sound item.crossbow.quick_charge_N, no middle sound.
+  Multishot: one arrow loads three (charged_projectiles: the two copies carry intangible_projectile, which is sent as an
+  EMPTY NBT COMPOUND, 0x0a 0x00 — not a bare unit), fired at yaw -10/0/+10 (measured spread ~21 deg incl. inaccuracy),
+  3 durability; only the middle arrow can be picked up. Piercing: entity data 9 (byte) = level while flying, reset to 0
+  when it sticks; Piercing II went through a cow into the next one. Creative crossbows load without arrows (an
+  intangible arrow); the 2026-11-26 note "creative needs an arrow" was the check bot failing to parse that component.
+Drinking (2026-11-27, scenario drink, = vanilla): milk clears every effect -> bucket; potions give their effects at full
+duration -> glass bottle; honey cures poison, +6 food -> glass bottle; 32-tick use, releasing at 20 ticks drinks nothing;
+creative drinks too (keeps the item). Stews leave a bowl (not measured).
 ## Water effects (client-water, 2026-11-24)
 Measured with the oracle mod's fx log (FxParticleMixin / FxSoundMixin: the client's local particles/sounds in the packet log; test-only) and an onlooker bot on vanilla (env_water_effects):
 - The server sends only `entity.player.splash` (cat 7, at the player, volume 0.2 x speed) to OTHER players; no particles, and nothing to the swimmer. The real client plays everything itself. (Basalt server does not yet send the onlooker splash.)
@@ -822,10 +841,16 @@ Measured with the oracle mod's fx log (FxParticleMixin / FxSoundMixin: the clien
 - Lava with water beside or above turns into obsidian (source) / cobblestone (flowing) at once; lava falling onto water
   makes stone. Basalt sends level_event 1501 (fizz) for these (not compared).
 - Basalt: game/fluid.rs, scheduled per-dimension fluid ticks queued by set_block for the changed cell and its 6 neighbours.
-  Not done: waterlogged blocks spreading (they count as sources for neighbours only), bubble columns, lava fire spread,
-  nether lava speed (10 ticks, drop-off 1, slope 4: set from the vanilla dimension rules, not measured), lava's
-  occasional slower tick, basalt from lava over soul soil next to blue ice, fluid pushing entities/items, fluid ticks
-  saved in chunks (pending ticks are lost on restart).
+  Not done: bubble columns, lava fire spread, nether lava speed (10 ticks, drop-off 1, slope 4: set from the vanilla
+  dimension rules, not measured), lava's occasional slower tick, fluid pushing entities, fluid ticks saved in chunks
+  (pending ticks are lost on restart).
+- Waterlogged blocks (2026-11-27, cases waterlogged_slab / waterlogged_stairs_pillar): a waterlogged block set by
+  /setblock spreads like a source at the same timing. Fluid never passes a face that the block's collision shape covers
+  completely (waterlogged stairs facing north keep the water in on the north side; a bottom slab can't drain downwards).
+  Basalt: fluid.rs face_open (collision boxes sampled on an 8x8 grid; stair shapes added to mob::block_boxes).
+- Basalt generator (case lava_basalt): lava entering a cell over soul soil with blue ice beside it becomes basalt
+  (axis=y) on the tick it fills. Basalt's set_block now runs the fluid reactions after broadcasting the update — before,
+  a reaction replacing the very block (lava -> basalt) left viewers with the stale lava state.
 - Items in currents (m6_item_drift, a 1-wide 10-cell channel): vanilla items move ~4.5-5 blocks in the first 20 ticks,
   stop near the channel end (they coast past the last water cell). An item summoned in a flowing level-2 cell settles
   on the floor (dy -0.3); one starting in the source cell keeps floating (dy ~0) while it drifts. Basalt: horizontal push

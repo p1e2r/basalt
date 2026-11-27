@@ -1,5 +1,6 @@
 //! Health, hunger, fall damage, eating, death and respawn (survival/adventure only).
 use super::{Game, Stack};
+use basalt_data::{registries as reg, registry_id};
 use basalt_protocol::{ids::play::clientbound as cb, text, Writer};
 
 const MAX_HEALTH: f32 = 20.0;
@@ -444,7 +445,23 @@ impl Game {
                 if p.hurt_cooldown > 0 {
                     p.hurt_cooldown -= 1;
                 }
+                // eating / drinking runs in creative too (measured: drink milk_creative clears effects)
+                if !p.dead && p.gamemode != 3 {
+                    if let Some((slot, left)) = p.using.as_mut() {
+                        if *left > 0 {
+                            *left -= 1;
+                        }
+                        if *left == 0 {
+                            finished_eating = Some(*slot);
+                        }
+                    }
+                }
                 if p.dead || matches!(p.gamemode, 1 | 3) {
+                    if let Some(slot) = finished_eating {
+                        if !p.dead && p.gamemode == 1 {
+                            self.finish_eating(eid, slot);
+                        }
+                    }
                     continue;
                 }
                 // exhaustion → saturation → food
@@ -484,14 +501,6 @@ impl Game {
                 } else {
                     p.regen_timer = 0;
                 }
-                if let Some((slot, left)) = p.using.as_mut() {
-                    if *left > 0 {
-                        *left -= 1;
-                    }
-                    if *left == 0 {
-                        finished_eating = Some(*slot);
-                    }
-                }
             }
             if let Some(slot) = finished_eating {
                 self.finish_eating(eid, slot);
@@ -519,10 +528,17 @@ impl Game {
         let Some(info) = self.data.item(s.item) else {
             return;
         };
-        let Some(food) = &info.food else { return };
         let creative = p.gamemode == 1;
-        if p.food >= 20 && !food.can_always_eat && !creative {
-            return;
+        let name = reg::ITEM.get(s.item as usize).copied().unwrap_or("air");
+        match &info.food {
+            Some(food) => {
+                if p.food >= 20 && !food.can_always_eat && !creative {
+                    return;
+                }
+            }
+            // drinks without nutrition: always allowed
+            None if matches!(name, "milk_bucket" | "potion") => {}
+            None => return,
         }
         let ticks = if info.consume_ticks > 0 {
             info.consume_ticks
@@ -537,29 +553,88 @@ impl Game {
             return;
         };
         let s = p.inv[slot];
+        let name = reg::ITEM.get(s.item as usize).copied().unwrap_or("air");
         let food = self
             .data
             .item(s.item)
             .and_then(|i| i.food.as_ref())
             .map(|f| (f.nutrition, f.saturation));
-        let p = self.players.get_mut(&eid).unwrap();
-        p.using = None;
-        let Some((n, sat)) = food else { return };
-        if s.count <= 0 {
+        self.players.get_mut(&eid).unwrap().using = None;
+        if s.count <= 0 || (food.is_none() && !matches!(name, "milk_bucket" | "potion")) {
             return;
         }
-        p.food = (p.food + n).min(20);
-        p.saturation = (p.saturation + sat).min(p.food as f32);
+        // what drinking / eating does besides nutrition (measured: scenario drink)
+        match name {
+            "milk_bucket" => {
+                let ids: Vec<i32> = self.players[&eid].effects.keys().copied().collect();
+                for id in ids {
+                    self.clear_effect(eid, id);
+                }
+            }
+            "honey_bottle" => {
+                if let Some(id) = super::env::effect_id("poison") {
+                    self.clear_effect(eid, id);
+                }
+            }
+            "potion" => {
+                let pname = super::potion::potion_name(&s);
+                if let Some((_, fx, _)) = super::potions::potion(pname) {
+                    for &(e, amp, ticks) in fx {
+                        match e {
+                            "instant_health" => {
+                                let p = self.players.get_mut(&eid).unwrap();
+                                p.health = (p.health + (4u32 << amp) as f32).min(20.0);
+                            }
+                            "instant_damage" => {
+                                self.hurt(eid, (6u32 << amp) as f32, "magic");
+                            }
+                            _ => self.add_effect(eid, e, amp, ticks, true),
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        let remainder = match name {
+            "milk_bucket" => Some("bucket"),
+            "potion" | "honey_bottle" => Some("glass_bottle"),
+            "mushroom_stew" | "beetroot_soup" | "rabbit_stew" | "suspicious_stew" => Some("bowl"),
+            _ => None,
+        };
+        let Some(p) = self.players.get_mut(&eid) else {
+            return;
+        };
+        if let Some((n, sat)) = food {
+            p.food = (p.food + n).min(20);
+            p.saturation = (p.saturation + sat).min(p.food as f32);
+        }
+        let mut give_back = None;
         if p.gamemode != 1 {
             p.inv[slot].count -= 1;
             if p.inv[slot].count <= 0 {
                 p.inv[slot] = Stack::default();
+            }
+            if let Some(r) = remainder.and_then(|r| registry_id(reg::ITEM, r)) {
+                let r = Stack {
+                    item: r,
+                    count: 1,
+                    ..Stack::default()
+                };
+                if p.inv[slot].count <= 0 {
+                    p.inv[slot] = r;
+                } else {
+                    give_back = Some(r);
+                }
             }
         }
         let mut w = Writer::with_id(cb::ENTITY_EVENT);
         w.i32(eid).u8(9);
         p.send(w);
         Self::send_window(p);
+        if let Some(r) = give_back {
+            self.give_stack(eid, r);
+        }
+        self.send_health(eid);
     }
 
     /// Exhaustion from movement (called with the horizontal distance moved this packet).

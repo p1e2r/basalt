@@ -142,4 +142,5 @@ pub static ALL: &[Spec] = &[
     spec!("M6", "m6_item_drift", fluids::item_drift, Flat, Both, true, "items carried by flowing water in a channel (displacement after 20/40 ticks) and resting in a source"),
     spec!("Items", "bow_enchants", throw::bow_enchants, Flat, Both, true, "bow Power/Punch/Flame/Infinity, spectral + tipped arrows at a NoAI cow: damage, knockback, burning, glowing, consumption, projectile metadata"),
     spec!("Items", "crossbow_enchants", throw::crossbow_enchants, Flat, Both, true, "crossbow Quick Charge / Multishot / Piercing: charge time + sounds, loaded count, arrows fired + spread, pierce metadata, cows hit, durability"),
+    spec!("Items", "drink", throw::drink, Flat, Both, true, "drinking milk (clears effects -> bucket), potions (effects -> glass bottle), honey (cures poison, food); early release; creative keeps the milk"),
 ];

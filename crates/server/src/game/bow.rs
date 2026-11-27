@@ -328,10 +328,11 @@ impl Game {
     }
 }
 
+/// (effect name, amplifier, ticks) list of a potion.
+pub(super) type Effects = Vec<(&'static str, u8, i32)>;
+
 /// Entity type, tipped effects and colour (entity data 11) for an arrow item stack.
-pub(super) fn arrow_kind(
-    ammo: Option<Stack>,
-) -> (&'static str, Vec<(&'static str, u8, i32)>, Option<i32>) {
+pub(super) fn arrow_kind(ammo: Option<Stack>) -> (&'static str, Effects, Option<i32>) {
     let Some(a) = ammo else {
         return ("arrow", Vec::new(), None);
     };
@@ -350,7 +351,5 @@ pub(super) fn arrow_kind(
     }
 }
 
-/// Ticks of use before a released crossbow is loaded (no Quick Charge).
-const CROSSBOW_CHARGE: f64 = 25.0;
 /// Arrow speed from a crossbow.
 const CROSSBOW_SPEED: f64 = 3.15;

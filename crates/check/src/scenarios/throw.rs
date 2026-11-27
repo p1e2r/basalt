@@ -1482,3 +1482,99 @@ pub fn crossbow_enchants(ctx: &mut Ctx) -> Result<()> {
     }
     Ok(())
 }
+
+/// Drinking: milk clears every effect and leaves a bucket, a potion gives its effects and leaves a glass bottle,
+/// honey cures poison (+food) and leaves a bottle; creative keeps the milk. Also the drink duration (an early
+/// release drinks nothing).
+pub fn drink(ctx: &mut Ctx) -> Result<()> {
+    let (bot, _o) = box_arena(ctx, 6, "survival")?;
+    let fx = |bot: &Bot| {
+        let mut v: Vec<String> = bot.st().effects.keys().cloned().collect();
+        v.sort();
+        v.join(",")
+    };
+    for (tag, gm, item, effects, hold_ticks) in [
+        ("milk_short", "survival", "milk_bucket", "speed", 20u32),
+        ("milk", "survival", "milk_bucket", "speed+poison", 40),
+        (
+            "potion",
+            "survival",
+            "potion[potion_contents={potion:\"minecraft:swiftness\"}]",
+            "",
+            40,
+        ),
+        ("honey", "survival", "honey_bottle", "poison", 50),
+        ("milk_creative", "creative", "milk_bucket", "speed", 40),
+    ] {
+        ctx.gamemode(&bot, gm)?;
+        bot.cmd_reply("clear @s")?;
+        bot.cmd_reply("effect clear @s")?;
+        bot.cmd_reply("effect give @s minecraft:hunger 2 255 true")?;
+        bot.wait_ticks(45);
+        bot.cmd_reply("effect clear @s")?;
+        bot.wait_ticks(4);
+        for e in effects.split('+').filter(|e| !e.is_empty()) {
+            bot.cmd_reply(&format!("effect give @s minecraft:{e} 60 0"))?;
+        }
+        bot.cmd_reply(&format!("give @s minecraft:{item} 1"))?;
+        let base = item.split('[').next().unwrap_or(item).to_string();
+        bot.wait_until(Duration::from_secs(3), |s| s.count(&base) > 0);
+        bot.wait_ticks(3);
+        hold(&bot, &base)?;
+        let food0 = bot.st().food;
+        let before = fx(&bot);
+        bot.use_item();
+        bot.wait_ticks(hold_ticks);
+        bot.release_use();
+        bot.wait_ticks(4);
+        let after = fx(&bot);
+        let held = bot.st().held_stack().clone();
+        ctx.note(format!(
+            "{tag}: effects {before:?} -> {after:?}, held {} x{}, food {food0} -> {}",
+            held.name(),
+            held.count,
+            bot.st().food
+        ));
+        ctx.metric(
+            &format!("{tag}_effects_left"),
+            after.split(',').filter(|s| !s.is_empty()).count() as f64,
+            0.0,
+        );
+        ctx.metric(
+            &format!("{tag}_has_speed"),
+            after.contains("speed") as u8 as f64,
+            0.0,
+        );
+        ctx.metric(
+            &format!("{tag}_has_poison"),
+            after.contains("poison") as u8 as f64,
+            0.0,
+        );
+        let speed_dur = bot
+            .st()
+            .effects
+            .get("speed")
+            .map(|e| e.1 as f64)
+            .unwrap_or(0.0);
+        ctx.metric(&format!("{tag}_speed_duration"), speed_dur, 60.0);
+        for want in [
+            "milk_bucket",
+            "bucket",
+            "potion",
+            "glass_bottle",
+            "honey_bottle",
+        ] {
+            ctx.metric(
+                &format!("{tag}_holds_{want}"),
+                (held.count > 0 && held.name() == want) as u8 as f64,
+                0.0,
+            );
+        }
+        ctx.metric(
+            &format!("{tag}_food_gain"),
+            (bot.st().food - food0) as f64,
+            0.0,
+        );
+    }
+    Ok(())
+}

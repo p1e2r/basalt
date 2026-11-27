@@ -508,6 +508,33 @@ pub fn block_boxes(state: u32, out: &mut Vec<[f64; 6]>) {
             Some("bottom") => out.push([0.0, 0.0, 0.0, 1.0, 0.5, 1.0]),
             _ => out.push([0.0, 0.0, 0.0, 1.0, 1.0, 1.0]),
         },
+        "stair" => {
+            let top = st.get("half") == Some("top");
+            out.push(if top {
+                [0.0, 0.5, 0.0, 1.0, 1.0, 1.0]
+            } else {
+                [0.0, 0.0, 0.0, 1.0, 0.5, 1.0]
+            });
+            let (y0, y1) = if top { (0.0, 0.5) } else { (0.5, 1.0) };
+            // the step in facing-north coordinates (x 0..1 west->east, z 0..1 north->south), then rotated
+            let parts: &[[f64; 4]] = match st.get("shape") {
+                Some("outer_left") => &[[0.0, 0.0, 0.5, 0.5]],
+                Some("outer_right") => &[[0.5, 0.0, 1.0, 0.5]],
+                Some("inner_left") => &[[0.0, 0.0, 1.0, 0.5], [0.0, 0.5, 0.5, 1.0]],
+                Some("inner_right") => &[[0.0, 0.0, 1.0, 0.5], [0.5, 0.5, 1.0, 1.0]],
+                _ => &[[0.0, 0.0, 1.0, 0.5]],
+            };
+            for &[x0, z0, x1, z1] in parts {
+                // rotate clockwise from north: north (x,z) -> east (1-z,x) -> south (1-x,1-z) -> west (z,1-x)
+                let (a, b, c, d) = match st.get("facing") {
+                    Some("east") => (1.0 - z1, x0, 1.0 - z0, x1),
+                    Some("south") => (1.0 - x1, 1.0 - z1, 1.0 - x0, 1.0 - z0),
+                    Some("west") => (z0, 1.0 - x1, z1, 1.0 - x0),
+                    _ => (x0, z0, x1, z1),
+                };
+                out.push([a, y0, b, c, y1, d]);
+            }
+        }
         "fence" | "wall" => out.push([0.25, 0.0, 0.25, 0.75, 1.5, 0.75]),
         "fence_gate" => {
             if st.get("open") != Some("true") {

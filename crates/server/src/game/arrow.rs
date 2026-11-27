@@ -415,9 +415,7 @@ impl Game {
                     // Piercing: keep flying through (measured: Piercing II goes through a cow into a second one)
                     a.pierced.push(target);
                     if (a.pierced.len() as u8) <= a.pierce {
-                        for k in 0..3 {
-                            a.pos[k] += d[k];
-                        }
+                        a.pos = [a.pos[0] + d[0], a.pos[1] + d[1], a.pos[2] + d[2]];
                         a.vel[1] -= 0.05;
                         self.arrows.insert(id, a);
                         continue;

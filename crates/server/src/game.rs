@@ -737,9 +737,6 @@ impl Game {
         let changed = self.world.set_block(x, y, z, state);
         self.be_block_changed([x, y, z], state);
         self.schedule_gravity([x, y, z]);
-        if old != state {
-            self.fluid_block_changed([x, y, z]);
-        }
         self.broadcast_chunk((x >> 4, z >> 4), None, || {
             let mut w = Writer::with_id(cb::BLOCK_UPDATE);
             w.position(x, y, z).varint(state as i32);
@@ -764,6 +761,11 @@ impl Game {
                 self.portal_registry([x, y, z], state);
             }
             self.portal_block_changed([x, y, z], old, state);
+        }
+        // last: fluid reactions may replace this very block (lava -> basalt / cobblestone) and must be
+        // broadcast after the update above, or viewers keep the stale state
+        if old != state {
+            self.fluid_block_changed([x, y, z]);
         }
     }
 

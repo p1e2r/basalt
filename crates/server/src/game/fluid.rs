@@ -128,6 +128,18 @@ impl Game {
         }
     }
 
+    /// Fluid can pass between `p` and its neighbour in direction `d` unless either block's shape covers
+    /// the shared face (measured: waterlogged stairs facing north keep the water in on the north side).
+    fn face_open(&self, p: [i32; 3], d: usize) -> bool {
+        let q = step(p, d);
+        let (a, b) = (
+            self.world.get_block(p[0], p[1], p[2]),
+            self.world.get_block(q[0], q[1], q[2]),
+        );
+        let shaped = |s: u32| BlockState(s).get("waterlogged").is_some();
+        !(shaped(a) && face_full(a, d) || shaped(b) && face_full(b, opposite(d)))
+    }
+
     fn fcell(&self, p: [i32; 3]) -> Option<Cell> {
         cell_of(BlockState(self.world.get_block(p[0], p[1], p[2])))
     }
@@ -154,6 +166,23 @@ impl Game {
 
     /// Lava with water beside or above it hardens: source -> obsidian, flowing -> cobblestone.
     fn lava_meets_water(&mut self, p: [i32; 3], c: Cell) {
+        // basalt generator: lava over soul soil touching blue ice (measured: m6_fluids lava_basalt, the
+        // flowing cell becomes basalt[axis=y] on the tick it fills)
+        let below = step(p, 0);
+        if BlockState(self.world.get_block(below[0], below[1], below[2])).name() == "soul_soil"
+            && (1..6).any(|d| {
+                let q = step(p, d);
+                BlockState(self.world.get_block(q[0], q[1], q[2])).name() == "blue_ice"
+            })
+        {
+            // the default basalt state is axis=y
+            let Some(st) = BlockState::from_name("basalt").map(|s| s.0) else {
+                return;
+            };
+            self.set_block(p[0], p[1], p[2], st);
+            self.level_event_data(1501, p, 0, None);
+            return;
+        }
         let touching = (1..6).any(|d| self.fcell(step(p, d)).is_some_and(|n| n.f == Fluid::Water));
         if !touching {
             return;
@@ -214,6 +243,9 @@ impl Game {
         let mut best = 0;
         let mut sources = 0;
         for d in HORIZ {
+            if !self.face_open(p, d) {
+                continue;
+            }
             if let Some(n) = self.fcell(step(p, d)) {
                 if n.f == f {
                     if n.source {
@@ -236,7 +268,7 @@ impl Game {
                 });
             }
         }
-        if self.fcell(step(p, 1)).is_some_and(|a| a.f == f) {
+        if self.face_open(p, 1) && self.fcell(step(p, 1)).is_some_and(|a| a.f == f) {
             return Some(Cell {
                 f,
                 amount: 8,
@@ -287,7 +319,7 @@ impl Game {
     fn spread(&mut self, p: [i32; 3], c: Cell) {
         let f = c.f;
         let below = step(p, 0);
-        if self.accepts(below, f, 8, true) {
+        if self.face_open(p, 0) && self.accepts(below, f, 8, true) {
             self.flow_into(below, f, 8, true);
             let srcs = HORIZ
                 .iter()
@@ -308,6 +340,9 @@ impl Game {
         let mut best = i32::MAX;
         let mut dirs: Vec<(usize, i32)> = Vec::new();
         for d in HORIZ {
+            if !self.face_open(p, d) {
+                continue;
+            }
             let q = step(p, d);
             // directions: cells it can flow into, or already holding the same flowing fluid (a
             // filled path towards a hole keeps the other directions dry: water_hole)
@@ -369,6 +404,47 @@ impl Game {
         }
         self.set_block(q[0], q[1], q[2], state_for(f, a, falling));
     }
+}
+
+/// Does the collision shape of `state` fully cover its face towards direction `d` (0 down 1 up 2 north
+/// 3 south 4 west 5 east)? Sampled on an 8x8 grid (shapes here sit on 1/4 boundaries).
+fn face_full(state: u32, d: usize) -> bool {
+    if state == 0 {
+        return false;
+    }
+    let mut boxes = Vec::new();
+    super::mob::block_boxes(state, &mut boxes);
+    if boxes.is_empty() {
+        return false;
+    }
+    let (axis, at_max) = match d {
+        0 => (1, false),
+        1 => (1, true),
+        2 => (2, false),
+        3 => (2, true),
+        4 => (0, false),
+        _ => (0, true),
+    };
+    let (u, v) = match axis {
+        0 => (1, 2),
+        1 => (0, 2),
+        _ => (0, 1),
+    };
+    let touches = |b: &[f64; 6]| {
+        if at_max {
+            b[axis + 3] >= 1.0 - 1e-6
+        } else {
+            b[axis] <= 1e-6
+        }
+    };
+    (0..8).all(|i| {
+        (0..8).all(|j| {
+            let (pu, pv) = ((i as f64 + 0.5) / 8.0, (j as f64 + 0.5) / 8.0);
+            boxes
+                .iter()
+                .any(|b| touches(b) && b[u] <= pu && pu <= b[u + 3] && b[v] <= pv && pv <= b[v + 3])
+        })
+    })
 }
 
 fn step(p: [i32; 3], d: usize) -> [i32; 3] {
