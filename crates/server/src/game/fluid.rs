@@ -147,6 +147,9 @@ impl Game {
     /// A block changed at `p` (old -> new): schedule fluid ticks around it, convert lava touching
     /// water. Called from set_block.
     pub(super) fn fluid_block_changed(&mut self, p: [i32; 3]) {
+        // bubble columns: the cell itself and the one above may start / stop a column
+        self.update_bubble_column(p);
+        self.update_bubble_column(step(p, 1));
         for q in std::iter::once(p).chain((0..6).map(|d| step(p, d))) {
             if let Some(c) = self.fcell(q) {
                 self.schedule_fluid(q, c.f);
@@ -154,6 +157,51 @@ impl Game {
                     self.lava_meets_water(q, c);
                 }
             }
+        }
+    }
+
+    /// What a water source / bubble column at `p` should be given the block below: soul sand -> column
+    /// pushing up (drag=false), magma -> pulling down (drag=true), another column -> the same, else water.
+    /// The whole contiguous run of water sources / columns above is converted at once (measured:
+    /// m6_fluids bubble_soul_sand / bubble_magma / bubble_removed).
+    fn update_bubble_column(&mut self, start: [i32; 3]) {
+        let water_src = BlockState::from_name("water").map(|s| s.0).unwrap_or(0);
+        let col = |drag: bool| {
+            BlockState::from_name("bubble_column")
+                .and_then(|s| s.with("drag", if drag { "true" } else { "false" }))
+                .map(|s| s.0)
+                .unwrap_or(0)
+        };
+        let mut p = start;
+        for _ in 0..512 {
+            if !self.world.layout.contains_y(p[1]) {
+                return;
+            }
+            let here = BlockState(self.world.get_block(p[0], p[1], p[2]));
+            let is_src = here.name() == "water" && here.get("level") == Some("0");
+            if !is_src && here.name() != "bubble_column" {
+                return;
+            }
+            let b = step(p, 0);
+            let below = BlockState(self.world.get_block(b[0], b[1], b[2]));
+            let want = match below.name() {
+                "soul_sand" => col(false),
+                "magma_block" => col(true),
+                "bubble_column" => col(below.get("drag") == Some("true")),
+                _ => water_src,
+            };
+            if want == here.0 {
+                return;
+            }
+            // write directly (set_block would recurse into this walk); viewers get the update
+            self.world.set_block(p[0], p[1], p[2], want);
+            let (x, y, z) = (p[0], p[1], p[2]);
+            self.broadcast_chunk((x >> 4, z >> 4), None, || {
+                let mut w = Writer::with_id(cb::BLOCK_UPDATE);
+                w.position(x, y, z).varint(want as i32);
+                w
+            });
+            p = step(p, 1);
         }
     }
 

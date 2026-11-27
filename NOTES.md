@@ -841,13 +841,17 @@ Measured with the oracle mod's fx log (FxParticleMixin / FxSoundMixin: the clien
 - Lava with water beside or above turns into obsidian (source) / cobblestone (flowing) at once; lava falling onto water
   makes stone. Basalt sends level_event 1501 (fizz) for these (not compared).
 - Basalt: game/fluid.rs, scheduled per-dimension fluid ticks queued by set_block for the changed cell and its 6 neighbours.
-  Not done: bubble columns, lava fire spread, nether lava speed (10 ticks, drop-off 1, slope 4: set from the vanilla
+  Not done: bubble columns pushing entities, lava fire spread, nether lava speed (10 ticks, drop-off 1, slope 4: set from the vanilla
   dimension rules, not measured), lava's occasional slower tick, fluid pushing entities, fluid ticks saved in chunks
   (pending ticks are lost on restart).
 - Waterlogged blocks (2026-11-27, cases waterlogged_slab / waterlogged_stairs_pillar): a waterlogged block set by
   /setblock spreads like a source at the same timing. Fluid never passes a face that the block's collision shape covers
   completely (waterlogged stairs facing north keep the water in on the north side; a bottom slab can't drain downwards).
   Basalt: fluid.rs face_open (collision boxes sampled on an 8x8 grid; stair shapes added to mob::block_boxes).
+- Bubble columns (2026-11-27, cases bubble_soul_sand / bubble_magma / bubble_removed): water sources over soul sand become
+  bubble_column[drag=false], over magma drag=true, a column continues upward through every water source above it;
+  replacing the base turns the whole column back into water sources. Basalt converts the contiguous run at once
+  (fluid.rs update_bubble_column); the timing of the change is not measured (only final states), entity push not done.
 - Basalt generator (case lava_basalt): lava entering a cell over soul soil with blue ice beside it becomes basalt
   (axis=y) on the tick it fills. Basalt's set_block now runs the fluid reactions after broadcasting the update — before,
   a reaction replacing the very block (lava -> basalt) left viewers with the stale lava state.
