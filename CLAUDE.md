@@ -11,7 +11,7 @@ of light levels — ARE allowed, each with a comment saying where/how it was mea
 
 Read NOTES.md for verified packet formats.
 
-## Status (updated 2026-11-26, daily cloud run)
+## Status (updated 2026-11-27, daily cloud run)
 - Done & working: crates/nbt, crates/data (tables generated from ./data at build time),
   crates/protocol (framing, compression, varints, NBT, text), crates/probe (joins a server and
   dumps packets; `basalt-probe proxy LISTEN TARGET DUMPDIR` logs both directions).
@@ -129,15 +129,17 @@ Next steps for a fresh session, in order (updated 2026-11-26 by the daily cloud 
    items_tracking pos_packets_60t, m4_double_block_break (vanilla chickens lay eggs into the cells). Re-run alone before believing.
 1. (done 2026-11-24 cloud session) agent branches merged.
 2. use_item: DONE for hoe/shovel/axe/shears/honeycomb/bone meal (tool_actions), buckets (tool_buckets), crossbow, fishing rod
-   (2026-11-26). Remaining: crossbow Multishot/Quick Charge/Piercing + firework rockets, trident Loyalty/Riptide/Channeling,
-   endermites from pearls, egg variants, tipped/spectral arrows, bow Infinity/Power, fishing hooks on entities + Luck of the
-   Sea, bone meal on other plants (other saplings, flowers, stems' fruit, berries, cocoa, kelp, moss), milk buckets/fish buckets.
+   (2026-11-26); bow Power/Punch/Flame/Infinity, spectral + tipped arrows, crossbow Quick Charge/Multishot/Piercing, trident
+   Loyalty, milk/potion/honey drinking (2026-11-27: bow_enchants, crossbow_enchants, trident_loyalty, drink). Remaining:
+   firework rockets, trident Riptide/Channeling, endermites from pearls, egg variants, fishing hooks on entities + Luck of the
+   Sea, bone meal on other plants (other saplings, flowers, stems' fruit, berries, cocoa, kelp, moss), fish buckets, tipped
+   arrows kept in loaded crossbows (charged_projectiles stores only the item id).
 3. Water effects (client): splash/bubbles/sounds, lava, currents, Depth Strider, Dolphin's Grace, swim pose — needs the real
    client + oracle (extend `basalt-check client-water`); server: onlooker entity.player.splash not sent yet.
 4. Ask the user to play-test the fixes above (grass, pickups, chat, water, landing) in the real game — and now flowing water/lava.
-5. Remaining plan: M6 fluids follow-ups (waterlogged blocks spreading, bubble columns, pending fluid ticks saved in chunks,
-   mobs/players pushed by currents server-side, the source-start item drift case), other scheduled block ticks, M8 End +
-   exit-portal build rule, M9 redstone (Fable after Thu 26 Nov 6 pm WIB), M3c woodland mansions, M11-M14.
+5. Remaining plan: M6 fluids follow-ups (pending fluid ticks saved in chunks, mobs/players/items pushed by currents and
+   bubble columns server-side, the source-start item drift case, lava fire spread), other scheduled block ticks, M8 End +
+   exit-portal build rule, M9 redstone (left for a Fable session), M3c woodland mansions, M11-M14.
 6. Disk: keep ~/Downloads/rustcraft under 20 GB with `cargo xtask clean-disk`; enable the shared worktree build folder (.claude/worktrees/.cargo/config.toml.off -> config.toml) only when no agent is running.
 
 - Throwables (2026-11-24): use_item for snowball, egg, ender pearl, xp bottle, splash/lingering potions (+ area effect cloud), wind charge, player bow, trident throw/pickup done and diffed vs vanilla (scenarios throw_*, bow_shoot, trident_throw, wind_charge). basalt-client: item-sprite billboards, own flight prediction, break/splash particles, sends use_item for throwables (PARTIAL: client scenario not written, untested in a real window, trident drawn as a sprite). Remaining: crossbow, trident Loyalty/Riptide/Channeling, endermite from pearls, egg chicken variants (blue/brown egg), wind charge damage on entity hit, tipped/spectral arrows, bow Infinity/Power, potion effects on mobs, buckets, flint and steel, bonemeal, shears, hoe/shovel/axe, fishing rod, client scenario for projectiles.
@@ -204,7 +206,7 @@ Next steps for a fresh session, in order (updated 2026-11-26 by the daily cloud 
       /kill @e[type=..], /mobs [r] (debug). Mobs persist in <world>/entities.json. --no-spawning.
       XP orbs + /xp done (game/xporb.rs: mob kills by players and ores drop orbs that drift and are collected; vanilla XP model — level, float progress, gained-points counter; m5_xp_orbs + m5_xp_command match vanilla; client XP bar M7/xp_bar). Breeding done (game/breed.rs; m5_breeding matches vanilla: baby 3.3 s after feeding, 1-7 xp). Sheep eat grass (regrow wool; m5_sheep_eat_grass). Land animals avoid water (land-only wander targets, water path cost 8) and swim back to shore (float goal); m5_animals_avoid_water 0 % of samples in a lake vs vanilla 2.4 %, m5_animal_float, m5_chicken_fall match vanilla (2026-11-24). Missing: zombie reinforcements/drowned conversion,
       mob-vs-mob pushing, swimming AI beyond buoyancy, peaceful natural regen. /difficulty done (saved per world; mob/arrow/explosion damage scaling, starvation floor, peaceful removes + refuses monsters; m5_difficulty matches vanilla).
-- [~] M6 world logic (weather done: /weather + cycle + rain/thunder levels, scenario m6_weather matches vanilla; containers done: chests (single/double/trapped), barrels, furnace/blast furnace/smoker as block entities (server game/container.rs; Anvil-persisted, windows + click modes + lid events + smelting + XP; scenarios m6_chest_*, m6_double_chest, m6_barrel, m6_break_contents, m6_furnace_*, m6_blast_smoker, m6_container_persistence all match vanilla; client screens M7/chest + M7/furnace; falling blocks done (server game/falling.rs: sand/gravel/powder/anvils as falling_block entities, columns, torch → item, powder hardens; m6_falling_blocks matches vanilla incl. 24-tick 10-block drop; client draws them, M7/falling_block); random ticks done (server game/randomtick.rs + /gamerule random_tick_speed: crops, grass spread/decay, leaf decay, sugar cane, cactus, farmland, oak saplings; m6_random_ticks matches vanilla outcomes); ender chests done (per-player EnderItems, scenario m6_ender_chest); fluids done (2026-11-26, game/fluid.rs: scheduled water/lava ticks, levels/falling/slope finding/infinite sources/draining, washing away, obsidian/cobblestone/stone; items drift in currents; scenarios m6_fluids + m6_item_drift = vanilla; rules + gaps in NOTES.md 'Fluids'); todo: chest/furnace models in the client, waterlogged spreading, bubble columns, other block ticks, other sapling/tree kinds, stems, berries, ice/snow melt)
+- [~] M6 world logic (weather done: /weather + cycle + rain/thunder levels, scenario m6_weather matches vanilla; containers done: chests (single/double/trapped), barrels, furnace/blast furnace/smoker as block entities (server game/container.rs; Anvil-persisted, windows + click modes + lid events + smelting + XP; scenarios m6_chest_*, m6_double_chest, m6_barrel, m6_break_contents, m6_furnace_*, m6_blast_smoker, m6_container_persistence all match vanilla; client screens M7/chest + M7/furnace; falling blocks done (server game/falling.rs: sand/gravel/powder/anvils as falling_block entities, columns, torch → item, powder hardens; m6_falling_blocks matches vanilla incl. 24-tick 10-block drop; client draws them, M7/falling_block); random ticks done (server game/randomtick.rs + /gamerule random_tick_speed: crops, grass spread/decay, leaf decay, sugar cane, cactus, farmland, oak saplings; m6_random_ticks matches vanilla outcomes); ender chests done (per-player EnderItems, scenario m6_ender_chest); fluids done (2026-11-26, game/fluid.rs: scheduled water/lava ticks, levels/falling/slope finding/infinite sources/draining, washing away, obsidian/cobblestone/stone; items drift in currents; scenarios m6_fluids + m6_item_drift = vanilla; 2026-11-27: waterlogged blocks spread with face occlusion, bubble columns (block states), basalt generator; rules + gaps in NOTES.md 'Fluids'); todo: chest/furnace models in the client, bubble column / current entity push, fluid ticks in chunks, other block ticks, other sapling/tree kinds, stems, berries, ice/snow melt)
 - [~] M7 client parity (19/19 tools/client-scenarios.sh, 2026-11-23; asset grid 0 problems; input parity vs the real client:
       `basalt-check client-input` 0 divergences (oracle scripted-input channel, tools/oracle-mod Control.java, port 25789);
       done: held item + equip anim, item name above hotbar, break/dig particles, menus like vanilla (blurred world /
@@ -405,3 +407,29 @@ The old `tools/*.sh` scripts are thin wrappers around the same tasks, so existin
   the flowing-cell drift case is compared (source-start case noted); fluid ticks are not persisted across restarts yet;
   M9 redstone left for the planned Fable session.
 - Open: see "Next steps" (updated today) — use_item enchant variants, client water effects, fluid follow-ups, End, redstone.
+
+### 2026-11-27 (Fri) — daily cloud run (scheduled; owner away until Mon 30 Nov)
+- Setup as in "Daily cloud runs" (Java 25 installed, extract-data, vanilla/srv recreated, started with setsid).
+- Merged to main (all new scenarios pass --diff vs vanilla 26.2):
+  - 0de8c36 bow enchantments (Power/Punch/Flame/Infinity), spectral + tipped arrows, status effects on mobs (game/mobfx.rs;
+    splash/lingering potions now affect mobs too), the vanilla "bigger hit during the hurt cooldown" rule in damage_mob,
+    crossbow Quick Charge / Multishot / Piercing, creative crossbows loading intangible arrows. Scenarios bow_enchants,
+    crossbow_enchants.
+  - 0881d61 + 9e45a14 drinking (milk clears effects -> bucket, potions -> glass bottle, honey cures poison; eating/drinking
+    finishes in creative too; stews leave bowls), fluids blocked by full collision faces (waterlogged stairs), stair
+    collision shapes, basalt generator, set_block runs fluid reactions after its broadcast (viewers kept a stale state when
+    a reaction replaced the same block). Scenario drink; m6_fluids cases waterlogged_slab / waterlogged_stairs_pillar / lava_basalt.
+  - a924ae8 bubble columns (soul sand / magma, whole column at once, revert when the base goes; m6_fluids bubble_* cases).
+  - 47bf1fa trident Loyalty (spawn data 11/12, homing return fitted to vanilla return times; scenario trident_loyalty).
+- Check-bot fix: intangible_projectile is sent as an empty NBT compound; the bot failed to parse it, which had hidden
+  vanilla's creative crossbow load (yesterday's "creative needs an arrow" note was wrong; Basalt now = vanilla).
+- Gates: pr_ready on 0de8c36 — fmt pass, cargo test 132 pass, clippy 2 "new" lints only in untouched client files
+  (toolchain differences vs the Mac baseline), 114 affected harnesses: 106 pass, 8 failed under load, all 8 pass when re-run
+  alone (m3_locate_structure, m8_portal_travel, m6_chest_close_cursor, m5_animals_avoid_water, m5_animal_float, throw_pearl,
+  m1_chunk_streaming, m5_cow_loot vanilla side). For the later commits: --diff of M4/M6/M8/Items/Env (195 results, 4 failed:
+  m6_random_ticks vanilla side, env_fire, tool_actions — all pass alone), m6_fluids 16 cases, projectile set 27/27.
+- Decisions made on the owner's behalf: mob effect rules for undead (immune to poison/regeneration, harming/healing swapped)
+  follow the game's documented behaviour and are not diffed yet; Loyalty homing constants (0.95 damping, 0.05 x level pull,
+  4 ticks stuck) are fitted to measured return times, not observed per tick; bubble column timing is not measured (final
+  states only) and Basalt converts instantly; multishot side-arrow shot pitches are a guess (not compared).
+- Open: entity push by currents/bubble columns, fluid ticks in chunks, End, redstone (Fable), villagers; see "Next steps".
