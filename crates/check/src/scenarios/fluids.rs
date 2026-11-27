@@ -219,6 +219,33 @@ static CASES: &[Case] = &[
         acts: &[(0, [0, 2, 0], "lava")],
         ticks: 100,
     },
+    // a waterlogged slab set directly, then a neighbour placed next to it (block update)
+    Case {
+        name: "waterlogged_slab",
+        setup: &[],
+        acts: &[
+            (0, SRC, "oak_slab[type=bottom,waterlogged=true]"),
+            (30, [0, 0, 3], "stone"),
+        ],
+        ticks: 70,
+    },
+    // waterlogged stairs on a pillar: water falls down the side
+    Case {
+        name: "waterlogged_stairs_pillar",
+        setup: &[(0, 0, 0, "stone")],
+        acts: &[
+            (0, [0, 1, 0], "oak_stairs[facing=north,waterlogged=true]"),
+            (5, [0, 1, 3], "stone"),
+        ],
+        ticks: 60,
+    },
+    // basalt generator: lava flowing over soul soil next to blue ice
+    Case {
+        name: "lava_basalt",
+        setup: &[(1, -1, 0, "soul_soil"), (1, 0, 1, "blue_ice")],
+        acts: &[(0, SRC, "lava")],
+        ticks: 80,
+    },
 ];
 
 pub fn fluids(ctx: &mut Ctx) -> Result<()> {
