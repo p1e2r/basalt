@@ -177,8 +177,26 @@ impl Game {
                     Self::send_window(p);
                     item = Some(thrown);
                 }
-                let id =
-                    self.shoot_projectile(eid, from, dir, 2.5, 1.0, 8.0, "trident", false, item);
+                let loyalty = self
+                    .ench_id("loyalty")
+                    .map(|id| s.ench.level_of(id))
+                    .unwrap_or(0);
+                let foil = !s.ench.list().is_empty();
+                let id = self.shoot_projectile_with(
+                    eid,
+                    from,
+                    dir,
+                    2.5,
+                    1.0,
+                    8.0,
+                    "trident",
+                    false,
+                    item,
+                    |a| {
+                        a.loyalty = loyalty;
+                        a.foil = foil;
+                    },
+                );
                 let sid = Self::sound_id("item.trident.throw");
                 let seed: i64 = self.rng.gen();
                 let mut w = Writer::with_id(cb::SOUND_ENTITY);

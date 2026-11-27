@@ -34,6 +34,10 @@ pub struct Arrow {
     /// Piercing level (entity data 9) and the entities already passed through
     pub pierce: u8,
     pub pierced: Vec<i32>,
+    /// trident Loyalty level (entity data 11) and enchanted glint (data 12); returning to the owner
+    pub loyalty: u8,
+    pub foil: bool,
+    pub returning: bool,
 }
 
 impl Arrow {
@@ -71,6 +75,8 @@ impl Arrow {
             || self.fire
             || self.color.is_some()
             || self.pierce > 0
+            || self.loyalty > 0
+            || self.foil
         {
             let mut d = Writer::with_id(cb::SET_ENTITY_DATA);
             d.varint(self.eid);
@@ -85,6 +91,12 @@ impl Arrow {
             }
             if let Some(c) = self.color {
                 d.u8(11).varint(1).varint(c);
+            }
+            if self.loyalty > 0 {
+                d.u8(11).varint(0).u8(self.loyalty);
+            }
+            if self.foil {
+                d.u8(12).varint(8).bool(true);
             }
             if self.in_ground.is_some() {
                 d.u8(10).varint(8).bool(true);
@@ -213,6 +225,9 @@ impl Game {
             color: None,
             pierce: 0,
             pierced: Vec::new(),
+            loyalty: 0,
+            foil: false,
+            returning: false,
         };
         cfg(&mut arrow);
         self.arrows.insert(eid, arrow);
@@ -238,6 +253,13 @@ impl Game {
                 continue;
             }
             a.life += 1;
+            if a.loyalty > 0 && (a.returning || a.in_ground.is_some() && a.life > 4) {
+                if self.loyal_return(&mut a) {
+                    continue;
+                }
+                self.arrows.insert(id, a);
+                continue;
+            }
             if let Some(b) = a.in_ground {
                 // stuck: fall out if the block is gone, despawn after a minute
                 if !basalt_world::props::props(self.world.get_block(b[0], b[1], b[2]))
@@ -403,6 +425,13 @@ impl Game {
                     );
                 }
                 self.arrow_hit_effects(&a, target, is_player, d);
+                if a.kind == "trident" && a.loyalty > 0 {
+                    self.play_sound("item.trident.hit", 7, p, 1.0, 1.0);
+                    a.returning = true;
+                    a.vel = [d[0] * -0.01, d[1] * -0.1, d[2] * -0.01];
+                    self.arrows.insert(id, a);
+                    continue;
+                }
                 if a.kind == "trident" {
                     // bounces off the target and falls (measured: it ends up lying on the ground, collectable)
                     self.play_sound("item.trident.hit", 7, p, 1.0, 1.0);
@@ -500,6 +529,86 @@ impl Game {
 }
 
 impl Game {
+    /// One tick of a Loyalty trident flying back (no block collisions): velocity x 0.95 plus 0.05 x level
+    /// towards the owner's eyes, collected within reach. Constants fitted to vanilla 26.2 return times
+    /// (trident_loyalty: ~27 / ~19 ticks after release for Loyalty I / III from a wall 7 blocks away, starting
+    /// once it has been stuck for 4 ticks). Returns true when the trident is gone.
+    fn loyal_return(&mut self, a: &mut Arrow) -> bool {
+        let owner = a
+            .owner
+            .and_then(|o| self.players.get(&o))
+            .filter(|p| !p.dead);
+        let Some(o) = owner else {
+            // owner gone: drop where it is
+            a.returning = false;
+            a.loyalty = 0;
+            return false;
+        };
+        let (oe, opos, gm) = (o.eid, o.pos, o.gamemode);
+        let eye = [opos[0], opos[1] + 1.62, opos[2]];
+        if !a.returning {
+            a.returning = true;
+            a.in_ground = None;
+            let mut m = Writer::with_id(cb::SET_ENTITY_DATA);
+            m.varint(a.eid)
+                .u8(8)
+                .varint(0)
+                .u8(0x02)
+                .u8(10)
+                .varint(8)
+                .bool(false)
+                .u8(0xff);
+            self.send_to_viewers(a.eid, &m);
+            self.play_sound("item.trident.return", 7, a.pos, 10.0, 1.0);
+        }
+        let to = [eye[0] - a.pos[0], eye[1] - a.pos[1], eye[2] - a.pos[2]];
+        let dist = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2])
+            .sqrt()
+            .max(1e-6);
+        let k = 0.05 * a.loyalty as f64;
+        a.vel = [
+            a.vel[0] * 0.95 + to[0] / dist * k,
+            a.vel[1] * 0.95 + to[1] / dist * k,
+            a.vel[2] * 0.95 + to[2] / dist * k,
+        ];
+        a.pos = [
+            a.pos[0] + a.vel[0],
+            a.pos[1] + a.vel[1],
+            a.pos[2] + a.vel[2],
+        ];
+        let near = (opos[0] - a.pos[0]).abs() < 1.3
+            && (opos[2] - a.pos[2]).abs() < 1.3
+            && a.pos[1] > opos[1] - 0.8
+            && a.pos[1] < opos[1] + 2.6;
+        if near {
+            let ok = gm == 1
+                || a.item
+                    .map(|it| self.give_stack(oe, it) == 0)
+                    .unwrap_or(true);
+            if ok {
+                let mut w = Writer::with_id(cb::TAKE_ITEM_ENTITY);
+                w.varint(a.eid).varint(oe).varint(1);
+                self.broadcast(None, || Writer { buf: w.buf.clone() });
+                self.untrack(a.eid);
+                return true;
+            }
+        }
+        let (yaw, pitch) = a.rot();
+        let mut w = Writer::with_id(cb::ENTITY_POSITION_SYNC);
+        w.varint(a.eid)
+            .f64(a.pos[0])
+            .f64(a.pos[1])
+            .f64(a.pos[2])
+            .f64(a.vel[0])
+            .f64(a.vel[1])
+            .f64(a.vel[2])
+            .f32(yaw)
+            .f32(pitch)
+            .bool(false);
+        self.send_to_viewers(a.eid, &w);
+        false
+    }
+
     /// Flame, Punch, spectral glowing and tipped-arrow effects on the entity an arrow just hit.
     fn arrow_hit_effects(&mut self, a: &Arrow, target: i32, is_player: bool, d: [f64; 3]) {
         if a.fire {

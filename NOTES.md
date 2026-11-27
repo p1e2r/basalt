@@ -792,6 +792,10 @@ Bow / crossbow enchantments, special arrows, mob effects (2026-11-27, scenarios 
   3 durability; only the middle arrow can be picked up. Piercing: entity data 9 (byte) = level while flying, reset to 0
   when it sticks; Piercing II went through a cow into the next one. Creative crossbows load without arrows (an
   intangible arrow); the 2026-11-26 note "creative needs an arrow" was the check bot failing to parse that component.
+Trident Loyalty (2026-11-27, scenario trident_loyalty, = vanilla): spawn entity data 11 = loyalty level (byte), 12 = glint
+(bool, any enchantment); thrown at a wall 7 blocks away it is back in the inventory ~27 ticks (Loyalty I) / ~19 ticks (III)
+after release. Basalt (arrow.rs loyal_return): stuck for 4 ticks, then no-clip homing v = 0.95 v + 0.05 x level towards the
+owner's eyes (fitted: 40.7 / 32.2 vs vanilla 41.4 / 34.2 ticks from the start of the draw); also returns after hitting a mob.
 Drinking (2026-11-27, scenario drink, = vanilla): milk clears every effect -> bucket; potions give their effects at full
 duration -> glass bottle; honey cures poison, +6 food -> glass bottle; 32-tick use, releasing at 20 ticks drinks nothing;
 creative drinks too (keeps the item). Stews leave a bowl (not measured).

@@ -1578,3 +1578,45 @@ pub fn drink(ctx: &mut Ctx) -> Result<()> {
     }
     Ok(())
 }
+
+/// Trident Loyalty: the thrown trident flies back to its owner after hitting the wall and returns to the
+/// inventory; metadata at spawn (loyalty level, enchanted glint), return time per level.
+pub fn trident_loyalty(ctx: &mut Ctx) -> Result<()> {
+    let (bot, _o) = box_arena(ctx, 8, "survival")?;
+    for (tag, lvl) in [("loyalty1", 1), ("loyalty3", 3)] {
+        bot.cmd_reply("clear @s")?;
+        bot.wait_ticks(2);
+        bot.cmd_reply(&format!(
+            "give @s minecraft:trident[enchantments={{loyalty:{lvl}}}] 1"
+        ))?;
+        bot.wait_until(Duration::from_secs(3), |s| s.count("trident") > 0);
+        hold(&bot, "trident")?;
+        bot.look(0.0, 0.0);
+        bot.wait_ticks(2);
+        let t0 = Instant::now();
+        bot.use_item();
+        bot.wait_ticks(15);
+        bot.release_use();
+        bot.wait_ticks(3);
+        let e = spawned(&bot, "trident", t0);
+        ctx.metric(&format!("{tag}_thrown"), e.is_some() as u8 as f64, 0.0);
+        if let Some(e) = &e {
+            ctx.note(format!("{tag}: spawn meta {:?}", e.meta));
+            for idx in [11u8, 12] {
+                let v = match e.meta.get(&idx) {
+                    Some(Meta::Byte(b)) => *b as f64,
+                    Some(Meta::Bool(b)) => *b as u8 as f64,
+                    _ => -1.0,
+                };
+                ctx.metric(&format!("{tag}_meta_{idx}"), v, 0.0);
+            }
+        }
+        let back = bot.wait_until(Duration::from_secs(8), |s| s.count("trident") > 0);
+        let secs = t0.elapsed().as_secs_f64();
+        ctx.metric(&format!("{tag}_returned"), back as u8 as f64, 0.0);
+        ctx.metric(&format!("{tag}_return_ticks"), (secs * 20.0).round(), 5.0);
+        ctx.note(format!("{tag}: back {back} after {:.1} ticks", secs * 20.0));
+        bot.wait_ticks(5);
+    }
+    Ok(())
+}
