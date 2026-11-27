@@ -18,6 +18,7 @@ mod health;
 mod inv;
 mod items;
 mod mob;
+mod mobfx;
 mod path;
 mod place;
 mod playerdat;
@@ -2273,15 +2274,26 @@ pub(crate) fn write_slot(w: &mut Writer, s: Stack) {
     if x.charged != 0 {
         w.varint(comp_id("charged_projectiles"))
             .varint(x.charged_n.max(1) as i32);
-        for _ in 0..x.charged_n.max(1) {
-            write_slot(
-                w,
-                Stack {
-                    item: x.charged as i32 - 1,
-                    count: 1,
-                    ..Stack::default()
-                },
-            );
+        for i in 0..x.charged_n.max(1) {
+            if i == 0 && !x.charged_free {
+                write_slot(
+                    w,
+                    Stack {
+                        item: x.charged as i32 - 1,
+                        count: 1,
+                        ..Stack::default()
+                    },
+                );
+            } else {
+                // multishot copies carry intangible_projectile, an empty NBT compound (measured on vanilla 26.2)
+                w.varint(1)
+                    .varint(x.charged as i32 - 1)
+                    .varint(1)
+                    .varint(0)
+                    .varint(comp_id("intangible_projectile"))
+                    .u8(0x0a)
+                    .u8(0x00);
+            }
         }
     }
 }

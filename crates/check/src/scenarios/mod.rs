@@ -140,4 +140,6 @@ pub static ALL: &[Spec] = &[
     spec!("Items", "crossbow", throw::crossbow, Flat, Both, true, "crossbow: charge time, loading on release, charged_projectiles, arrow used, firing speed/sound/durability, creative loading"),
     spec!("Items", "fishing", throw::fishing, Flat, Both, true, "fishing rod: cast (bobber spawn/owner/speed/sound), floating, reeling in empty and from the ground (durability), a Lure III catch: bite, loot item, xp"),
     spec!("M6", "m6_item_drift", fluids::item_drift, Flat, Both, true, "items carried by flowing water in a channel (displacement after 20/40 ticks) and resting in a source"),
+    spec!("Items", "bow_enchants", throw::bow_enchants, Flat, Both, true, "bow Power/Punch/Flame/Infinity, spectral + tipped arrows at a NoAI cow: damage, knockback, burning, glowing, consumption, projectile metadata"),
+    spec!("Items", "crossbow_enchants", throw::crossbow_enchants, Flat, Both, true, "crossbow Quick Charge / Multishot / Piercing: charge time + sounds, loaded count, arrows fired + spread, pierce metadata, cows hit, durability"),
 ];

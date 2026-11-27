@@ -101,42 +101,37 @@ impl Game {
     ) {
         for &(name, amp, ticks) in effects {
             match name {
+                "instant_health" | "instant_damage" if !is_player => {
+                    let harm = name == "instant_damage";
+                    self.instant_on_mob(eid, harm, amp, strength, Some(owner), Some(direct));
+                }
                 "instant_health" => {
-                    if is_player {
-                        let heal = (strength * (4u32 << amp) as f64 + 0.5) as i32 as f32;
-                        if let Some(p) = self.players.get_mut(&eid) {
-                            if !p.dead {
-                                p.health = (p.health + heal).min(20.0);
-                            }
+                    let heal = (strength * (4u32 << amp) as f64 + 0.5) as i32 as f32;
+                    if let Some(p) = self.players.get_mut(&eid) {
+                        if !p.dead {
+                            p.health = (p.health + heal).min(20.0);
                         }
-                        self.send_health(eid);
                     }
+                    self.send_health(eid);
                 }
                 "instant_damage" => {
                     let dmg = (strength * (6u32 << amp) as f64 + 0.5) as i32 as f32;
-                    if is_player {
-                        let src = super::health::DamageSource {
-                            cause: Some(owner),
-                            direct: Some(direct),
-                            killer: self.players.get(&owner).map(|p| p.name.clone()),
-                            hurt_yaw: None,
-                        };
-                        self.hurt_by(eid, dmg, "indirect_magic", src);
-                    } else {
-                        self.damage_mob(
-                            eid,
-                            dmg,
-                            "indirect_magic",
-                            Some(owner),
-                            Some(direct),
-                            None,
-                        );
-                    }
+                    let src = super::health::DamageSource {
+                        cause: Some(owner),
+                        direct: Some(direct),
+                        killer: self.players.get(&owner).map(|p| p.name.clone()),
+                        hurt_yaw: None,
+                    };
+                    self.hurt_by(eid, dmg, "indirect_magic", src);
                 }
                 _ => {
                     let t = (strength * ticks as f64 * dur_scale + 0.5) as i32;
-                    if is_player && t > 20 {
-                        self.add_effect(eid, name, amp, t, true);
+                    if t > 20 {
+                        if is_player {
+                            self.add_effect(eid, name, amp, t, true);
+                        } else {
+                            self.add_mob_effect(eid, name, amp, t);
+                        }
                     }
                 }
             }

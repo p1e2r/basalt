@@ -82,7 +82,7 @@ impl Game {
         true
     }
 
-    fn ench_id(&self, name: &str) -> Option<u16> {
+    pub(super) fn ench_id(&self, name: &str) -> Option<u16> {
         self.sh
             .registries
             .entries("minecraft:enchantment")

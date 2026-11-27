@@ -27,6 +27,8 @@ pub struct Ench {
     /// how many copies (multishot loads 3).
     pub charged: u16,
     pub charged_n: u8,
+    /// every loaded copy is intangible_projectile (loaded in creative: no arrow was used)
+    pub charged_free: bool,
 }
 
 pub const NO_ENCH: Ench = Ench {
@@ -39,6 +41,7 @@ pub const NO_ENCH: Ench = Ench {
     trim_pat: 0,
     charged: 0,
     charged_n: 0,
+    charged_free: false,
 };
 
 impl Deref for Ench {

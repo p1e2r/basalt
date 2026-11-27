@@ -55,11 +55,24 @@ impl Game {
         if !m.alive() || amount <= 0.0 {
             return false;
         }
+        // during the hurt cooldown only a bigger hit lands, dealing the difference, without the hurt
+        // animation, knockback or sound (measured: a tipped harming arrow = arrow 3 + harming 6 -> 6 in total)
+        let mut toward = toward;
+        let mut quiet = false;
         if m.hurt_cooldown > 0 && !matches!(kind, "on_fire" | "out_of_world" | "generic_kill") {
-            return false;
+            if amount <= m.last_hurt {
+                return false;
+            }
+            let extra = amount - m.last_hurt;
+            m.last_hurt = amount;
+            m.health = (m.health - extra).max(0.0);
+            toward = None;
+            quiet = true;
+        } else {
+            m.hurt_cooldown = 10;
+            m.last_hurt = amount;
+            m.health = (m.health - amount).max(0.0);
         }
-        m.hurt_cooldown = 10;
-        m.health = (m.health - amount).max(0.0);
         if let Some(p) = by_player {
             m.last_player_hit = Some((p, tick));
         }
@@ -83,9 +96,11 @@ impl Game {
         let (pos, health, vel, kindm) = (m.pos, m.health, m.vel, m.kind);
         let c = cause.map(|e| e + 1).unwrap_or(0);
         let d = direct.or(cause).map(|e| e + 1).unwrap_or(0);
-        let mut w = Writer::with_id(cb::DAMAGE_EVENT);
-        w.varint(eid).varint(dt).varint(c).varint(d).bool(false);
-        self.send_to_viewers(eid, &w);
+        if !quiet {
+            let mut w = Writer::with_id(cb::DAMAGE_EVENT);
+            w.varint(eid).varint(dt).varint(c).varint(d).bool(false);
+            self.send_to_viewers(eid, &w);
+        }
         self.send_mob_data(eid, |w| {
             w.u8(9).varint(3).f32(health);
         });
@@ -99,7 +114,7 @@ impl Game {
         if health <= 0.0 {
             self.kill_mob(eid, kind);
             true
-        } else {
+        } else if !quiet {
             self.play_sound(
                 &kindm.sound("hurt"),
                 kindm.sound_category(),
@@ -107,6 +122,8 @@ impl Game {
                 1.0,
                 pitch,
             );
+            false
+        } else {
             false
         }
     }

@@ -211,8 +211,13 @@ pub struct Mob {
     // what viewers last saw
     pub sent_pos: [f64; 3],
     pub sent_rot: (u8, u8, u8),
-    pub sent_fire: bool,
+    /// shared flags (index 0: 0x01 burning, 0x40 glowing) viewers last saw
+    pub sent_flags: u8,
     pub since_sync: u32,
+    /// active effects: (MOB_EFFECT id, amplifier, ticks left)
+    pub effects: Vec<(i32, u8, i32)>,
+    /// damage of the hit that started the current hurt cooldown (a bigger hit during it deals the difference)
+    pub last_hurt: f32,
 }
 
 pub const SHEEP_COLORS: [&str; 16] = [
@@ -279,9 +284,18 @@ impl Mob {
             step_dist: 0.0,
             sent_pos: pos,
             sent_rot: (angle(yaw), 0, angle(yaw)),
-            sent_fire: false,
+            sent_flags: 0,
             since_sync: 0,
+            effects: Vec::new(),
+            last_hurt: 0.0,
         }
+    }
+    /// Shared entity flags: 0x01 burning, 0x40 glowing.
+    pub fn shared_flags(&self) -> u8 {
+        let glow = super::env::effect_id("glowing")
+            .map(|g| self.effects.iter().any(|e| e.0 == g))
+            .unwrap_or(false);
+        (self.fire_ticks > 0) as u8 | (glow as u8) << 6
     }
     pub fn scale(&self) -> f64 {
         if self.baby {
@@ -353,8 +367,8 @@ impl Mob {
     pub fn data_packet(&self) -> Writer {
         let mut w = Writer::with_id(cb::SET_ENTITY_DATA);
         w.varint(self.eid);
-        if self.fire_ticks > 0 {
-            w.u8(0).varint(0).u8(0x01);
+        if self.shared_flags() != 0 {
+            w.u8(0).varint(0).u8(self.shared_flags());
         }
         w.u8(9).varint(3).f32(self.health);
         let flags = self.no_ai as u8 | (self.ai.aggressive as u8) << 2;

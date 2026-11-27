@@ -112,6 +112,8 @@ pub struct Stack {
     pub trim: (i32, i32),
     /// charged_projectiles (loaded crossbow): item ids
     pub charged: Vec<i32>,
+    /// intangible_projectile (multishot side arrows: only creative players can pick them up)
+    pub intangible: bool,
 }
 
 impl Stack {
@@ -192,6 +194,10 @@ pub fn read_slot(r: &mut Reader) -> Result<Stack> {
                 s.charged.push(c.item);
             }
         } else if ty == component_id("unbreakable") || ty == component_id("glider") {
+        } else if ty == component_id("intangible_projectile") {
+            // measured on vanilla 26.2 (multishot side arrows): an empty NBT compound, not a bare unit
+            r.nbt()?;
+            s.intangible = true;
         } else {
             bail!("unknown component type {ty} on {}", s.name());
         }

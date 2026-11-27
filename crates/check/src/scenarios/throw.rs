@@ -1138,3 +1138,347 @@ pub fn fishing(ctx: &mut Ctx) -> Result<()> {
     ctx.note(format!("bite waits {waits:?}"));
     Ok(())
 }
+
+/// One shot at a fresh NoAI cow 5.5 blocks ahead: (cow damage, cow horizontal speed after the hit, cow
+/// shared flags, the projectile entity, arrows used, sounds).
+struct CowShot {
+    damage: f64,
+    kb: f64,
+    cow_flags: u8,
+    cow_fire_after_40: u8,
+    damage_40: f64,
+    proj: Option<crate::bot::Entity>,
+    used: i32,
+}
+
+fn shoot_cow(bot: &Bot, bow: &str, arrow: &str, ticks: u32) -> Result<CowShot> {
+    bot.cmd_reply("clear @s")?;
+    bot.wait_ticks(2);
+    bot.cmd_reply(&format!("give @s minecraft:{bow} 1"))?;
+    bot.cmd_reply(&format!("give @s minecraft:{arrow} 4"))?;
+    let base = |s: &str| s.split('[').next().unwrap_or(s).to_string();
+    let (bow_n, arrow_n) = (base(bow), base(arrow));
+    bot.wait_until(Duration::from_secs(3), |s| {
+        s.count(&bow_n) > 0 && s.count(&arrow_n) >= 4
+    });
+    hold(bot, &bow_n)?;
+    let me = bot.st().pos();
+    let t0 = Instant::now();
+    bot.cmd_reply(&format!(
+        "summon minecraft:cow {:.2} {} {:.2} {{NoAI:1b,PersistenceRequired:1b}}",
+        me[0],
+        Y,
+        me[2] + 5.0
+    ))?;
+    if !bot.wait_until(Duration::from_secs(3), |s| {
+        s.entities
+            .values()
+            .any(|e| e.kind == "cow" && e.added >= t0)
+    }) {
+        bail!("cow never appeared");
+    }
+    let cow = bot
+        .st()
+        .entities
+        .iter()
+        .find(|(_, e)| e.kind == "cow" && e.added >= t0)
+        .map(|(k, _)| *k)
+        .unwrap();
+    bot.wait_ticks(4);
+    let before = bot.st().count(&arrow_n);
+    let t1 = Instant::now();
+    bot.look(0.0, 0.0);
+    bot.wait_ticks(2);
+    bot.use_item();
+    bot.wait_ticks(ticks);
+    bot.release_use();
+    bot.wait_until(Duration::from_secs(2), |s| {
+        s.damage_events.iter().any(|d| d.0 >= t1 && d.1 == cow)
+    });
+    bot.wait_ticks(2);
+    let (health, vel, flags) = {
+        let s = bot.st();
+        let e = s.entities.get(&cow);
+        (
+            e.and_then(|e| e.health).unwrap_or(10.0),
+            e.map(|e| e.vel).unwrap_or([0.0; 3]),
+            e.map(|e| e.flags).unwrap_or(0),
+        )
+    };
+    bot.wait_ticks(40);
+    let (fire40, health40) = {
+        let s = bot.st();
+        let e = s.entities.get(&cow);
+        (
+            e.map(|e| e.flags & 1).unwrap_or(9),
+            e.and_then(|e| e.health).unwrap_or(0.0),
+        )
+    };
+    let used = before - bot.st().count(&arrow_n);
+    let proj = ["arrow", "spectral_arrow"]
+        .iter()
+        .find_map(|k| spawned(bot, k, t1));
+    bot.cmd_reply(&format!(
+        "kill @e[type=minecraft:cow,x={},y={},z={},distance=..8]",
+        me[0],
+        Y,
+        me[2] + 5.0
+    ))?;
+    bot.wait_ticks(25);
+    Ok(CowShot {
+        damage: 10.0 - health as f64,
+        kb: (vel[0] * vel[0] + vel[2] * vel[2]).sqrt(),
+        cow_flags: flags,
+        cow_fire_after_40: fire40,
+        damage_40: (health - health40) as f64,
+        proj,
+        used,
+    })
+}
+
+/// Bow enchantments (Power, Punch, Flame, Infinity) and special arrows (spectral, tipped) shot at a NoAI cow
+/// with a half draw (no critical randomness).
+pub fn bow_enchants(ctx: &mut Ctx) -> Result<()> {
+    let (bot, _o) = box_arena(ctx, 10, "survival")?;
+    for (tag, bow, arrow) in [
+        ("plain", "bow", "arrow"),
+        ("power1", "bow[enchantments={power:1}]", "arrow"),
+        ("power5", "bow[enchantments={power:5}]", "arrow"),
+        ("punch2", "bow[enchantments={punch:2}]", "arrow"),
+        ("flame", "bow[enchantments={flame:1}]", "arrow"),
+        ("infinity", "bow[enchantments={infinity:1}]", "arrow"),
+        (
+            "inf_spectral",
+            "bow[enchantments={infinity:1}]",
+            "spectral_arrow",
+        ),
+        ("spectral", "bow", "spectral_arrow"),
+        (
+            "tipped_poison",
+            "bow",
+            "tipped_arrow[potion_contents={potion:\"minecraft:poison\"}]",
+        ),
+        (
+            "tipped_harming",
+            "bow",
+            "tipped_arrow[potion_contents={potion:\"minecraft:harming\"}]",
+        ),
+    ] {
+        let r = shoot_cow(&bot, bow, arrow, 10)?;
+        ctx.note(format!(
+            "{tag}: damage {} kb {:.3} cow flags {:#x} fire40 {} used {} proj {:?}",
+            r.damage,
+            r.kb,
+            r.cow_flags,
+            r.cow_fire_after_40,
+            r.used,
+            r.proj.as_ref().map(|e| (e.kind, &e.meta, e.flags))
+        ));
+        ctx.metric(&format!("{tag}_damage"), r.damage, 0.5);
+        ctx.metric(&format!("{tag}_kb"), r.kb, 0.08);
+        ctx.metric(&format!("{tag}_damage_next_40t"), r.damage_40, 1.0);
+        ctx.metric(&format!("{tag}_cow_burning"), (r.cow_flags & 1) as f64, 0.0);
+        ctx.metric(
+            &format!("{tag}_cow_glowing"),
+            (r.cow_flags >> 6 & 1) as f64,
+            0.0,
+        );
+        ctx.metric(
+            &format!("{tag}_cow_burning_40t"),
+            r.cow_fire_after_40 as f64,
+            0.0,
+        );
+        ctx.metric(&format!("{tag}_arrows_used"), r.used as f64, 0.0);
+        let p = r.proj.as_ref();
+        ctx.metric(
+            &format!("{tag}_proj_kind_spectral"),
+            p.map(|e| (e.kind == "spectral_arrow") as u8 as f64)
+                .unwrap_or(-1.0),
+            0.0,
+        );
+        ctx.metric(
+            &format!("{tag}_proj_burning"),
+            p.map(|e| (e.flags & 1) as f64).unwrap_or(-1.0),
+            0.0,
+        );
+        let color = p.and_then(|e| match e.meta.get(&11) {
+            Some(Meta::Int(c)) => Some(*c as f64),
+            _ => None,
+        });
+        ctx.metric(&format!("{tag}_proj_color"), color.unwrap_or(-1.0), 0.0);
+    }
+    // Infinity without any arrow: no shot
+    bot.cmd_reply("clear @s")?;
+    bot.cmd_reply("give @s minecraft:bow[enchantments={infinity:1}] 1")?;
+    bot.wait_until(Duration::from_secs(3), |s| s.count("bow") > 0);
+    hold(&bot, "bow")?;
+    let t0 = Instant::now();
+    bot.use_item();
+    bot.wait_ticks(22);
+    bot.release_use();
+    bot.wait_ticks(4);
+    ctx.metric(
+        "infinity_no_arrow_shot",
+        spawned(&bot, "arrow", t0).is_some() as u8 as f64,
+        0.0,
+    );
+    Ok(())
+}
+
+/// Crossbow enchantments: Quick Charge (charge time + loading sounds), Multishot (3 arrows loaded from 1, spread,
+/// durability), Piercing (pierce level metadata, passing through a cow into a second one).
+pub fn crossbow_enchants(ctx: &mut Ctx) -> Result<()> {
+    let (bot, _o) = box_arena(ctx, 12, "survival")?;
+    let charged = |bot: &Bot| bot.st().held_stack().charged.len() as f64;
+    for (tag, ench, ticks) in [
+        ("qc1_short", "quick_charge:1", 18u32),
+        ("qc3_short", "quick_charge:3", 9),
+        ("qc3", "quick_charge:3", 13),
+        ("multishot", "multishot:1", 30),
+        ("piercing", "piercing:2", 30),
+    ] {
+        bot.cmd_reply("clear @s")?;
+        bot.wait_ticks(2);
+        bot.cmd_reply(&format!(
+            "give @s minecraft:crossbow[enchantments={{{ench}}}] 1"
+        ))?;
+        bot.cmd_reply("give @s minecraft:arrow 8")?;
+        bot.wait_until(Duration::from_secs(3), |s| {
+            s.count("crossbow") > 0 && s.count("arrow") >= 8
+        });
+        hold(&bot, "crossbow")?;
+        let me = bot.st().pos();
+        let t0 = Instant::now();
+        bot.look(0.0, 0.0);
+        bot.wait_ticks(2);
+        bot.use_item();
+        bot.wait_ticks(ticks);
+        bot.release_use();
+        bot.wait_ticks(4);
+        ctx.metric(&format!("{tag}_charged"), charged(&bot), 0.0);
+        ctx.metric(
+            &format!("{tag}_arrows_used"),
+            (8 - bot.st().count("arrow")) as f64,
+            0.0,
+        );
+        let snd: Vec<(String, u32)> = bot
+            .st()
+            .sound_detail
+            .iter()
+            .filter(|s| s.0 >= t0)
+            .map(|s| {
+                (
+                    sound_name(s.1),
+                    (s.0.duration_since(t0).as_secs_f64() * 20.0).round() as u32,
+                )
+            })
+            .collect();
+        ctx.note(format!("{tag}: sounds {snd:?}"));
+        for (n, t) in &snd {
+            if let Some(k) = n.strip_prefix("item.crossbow.") {
+                ctx.metric(&format!("{tag}_sound_{k}_tick"), *t as f64, 3.0);
+            }
+        }
+        if !tag.ends_with("_short") || charged(&bot) > 0.0 {
+            // cows in the line of fire (piercing goes through the first)
+            let tc = Instant::now();
+            for dz in [4.0, 6.0] {
+                bot.cmd_reply(&format!(
+                    "summon minecraft:cow {:.2} {} {:.2} {{NoAI:1b,PersistenceRequired:1b}}",
+                    me[0],
+                    Y,
+                    me[2] + dz
+                ))?;
+            }
+            bot.wait_until(Duration::from_secs(3), |s| {
+                s.entities
+                    .values()
+                    .filter(|e| e.kind == "cow" && e.added >= tc)
+                    .count()
+                    >= 2
+            });
+            bot.wait_ticks(4);
+            bot.look(0.0, 6.0);
+            bot.wait_ticks(2);
+            let t1 = Instant::now();
+            bot.use_item();
+            bot.wait_ticks(2);
+            // pierce level as sent while flying (vanilla clears it when the arrow sticks)
+            let pierce = {
+                let s = bot.st();
+                s.entities
+                    .values()
+                    .chain(s.removed.iter())
+                    .filter(|e| e.kind == "arrow" && e.added >= t1)
+                    .find_map(|e| match e.meta.get(&9) {
+                        Some(Meta::Byte(b)) => Some(*b as f64),
+                        _ => None,
+                    })
+                    .unwrap_or(0.0)
+            };
+            bot.wait_ticks(8);
+            let (arrows, hurt, meta): (Vec<[f64; 3]>, usize, Vec<String>) = {
+                let s = bot.st();
+                let arrows: Vec<&crate::bot::Entity> = s
+                    .entities
+                    .values()
+                    .chain(s.removed.iter())
+                    .filter(|e| e.kind == "arrow" && e.added >= t1)
+                    .collect();
+                let cows: Vec<i32> = s
+                    .entities
+                    .iter()
+                    .filter(|(_, e)| e.kind == "cow" && e.added >= tc)
+                    .map(|(k, _)| *k)
+                    .collect();
+                let hurt = cows
+                    .iter()
+                    .filter(|c| s.damage_events.iter().any(|d| d.0 >= t1 && d.1 == **c))
+                    .count();
+                (
+                    arrows.iter().map(|e| e.spawn_vel).collect(),
+                    hurt,
+                    arrows.iter().map(|e| format!("{:?}", e.meta)).collect(),
+                )
+            };
+            ctx.note(format!(
+                "{tag}: fired {arrows:?} meta {meta:?} cows hurt {hurt}"
+            ));
+            ctx.metric(&format!("{tag}_fired"), arrows.len() as f64, 0.0);
+            ctx.metric(&format!("{tag}_cows_hurt"), hurt as f64, 0.0);
+            // horizontal spread between the outermost arrows, in degrees
+            let yaws: Vec<f64> = arrows
+                .iter()
+                .map(|v| v[0].atan2(v[2]).to_degrees())
+                .collect();
+            let spread = yaws.iter().cloned().fold(f64::MIN, f64::max)
+                - yaws.iter().cloned().fold(f64::MAX, f64::min);
+            ctx.metric(
+                &format!("{tag}_spread_deg"),
+                if yaws.is_empty() { -1.0 } else { spread },
+                3.0,
+            );
+            ctx.metric(&format!("{tag}_pierce_meta"), pierce, 0.0);
+            ctx.metric(
+                &format!("{tag}_durability_used"),
+                bot.st().held_stack().damage as f64,
+                0.0,
+            );
+            bot.cmd_reply(&format!(
+                "kill @e[type=minecraft:cow,x={},y={},z={},distance=..10]",
+                me[0],
+                Y,
+                me[2] + 5.0
+            ))?;
+            bot.cmd_reply(&format!(
+                "kill @e[type=minecraft:arrow,x={},y={},z={},distance=..14]",
+                me[0],
+                Y,
+                me[2] + 5.0
+            ))?;
+            bot.wait_ticks(25);
+            bot.look(0.0, 0.0);
+        }
+    }
+    Ok(())
+}

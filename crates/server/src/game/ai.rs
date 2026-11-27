@@ -257,12 +257,15 @@ impl Game {
                 }
             }
         }
-        let fire = m.fire_ticks > 0;
-        if fire != m.sent_fire {
-            m.sent_fire = fire;
+        if self.tick_mob_effects(m) {
+            return true;
+        }
+        let flags = m.shared_flags();
+        if flags != m.sent_flags {
+            m.sent_flags = flags;
             let eid = m.eid;
             self.send_mob_data(eid, |w| {
-                w.u8(0).varint(0).u8(fire as u8);
+                w.u8(0).varint(0).u8(flags);
             });
         }
         // ---- AI
@@ -440,7 +443,7 @@ impl Game {
     }
 
     /// Damage the mob currently being ticked (it's out of the map): reinsert, damage, take back.
-    fn hurt_held_mob(&mut self, m: &mut Mob, amount: f32, kind: &str) {
+    pub(super) fn hurt_held_mob(&mut self, m: &mut Mob, amount: f32, kind: &str) {
         let eid = m.eid;
         let placeholder = Mob::new(eid, m.kind, m.pos, 0.0);
         self.mobs.insert(eid, std::mem::replace(m, placeholder));
