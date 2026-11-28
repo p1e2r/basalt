@@ -81,6 +81,8 @@ pub enum Node {
     BlendDensity(NodeId),
     Spline(Box<Spline>),
     OldBlendedNoise(u32),
+    /// `minecraft:end_islands` (uses [`Graph::island`]).
+    EndIslands,
     FindTopSurface {
         density: NodeId,
         upper: NodeId,
@@ -95,6 +97,8 @@ pub struct Graph {
     pub noises: Vec<NormalNoise>,
     pub noise_names: Vec<String>,
     pub blended: Vec<BlendedNoise>,
+    /// Island noise of the End (only when an `end_islands` node exists).
+    pub island: Option<crate::noise::SimplexNoise>,
     pub n_interp: u32,
     pub n_once: u32,
 }
@@ -110,6 +114,7 @@ pub struct GraphBuilder<'a> {
     noises: Vec<NormalNoise>,
     noise_names: Vec<String>,
     blended: Vec<BlendedNoise>,
+    island: Option<crate::noise::SimplexNoise>,
     n_interp: u32,
     n_once: u32,
     consts: HashMap<u64, NodeId>,
@@ -156,6 +161,7 @@ impl<'a> GraphBuilder<'a> {
             noises: Vec::new(),
             noise_names: Vec::new(),
             blended: Vec::new(),
+            island: None,
             n_interp: 0,
             n_once: 0,
             consts: HashMap::new(),
@@ -352,6 +358,12 @@ impl<'a> GraphBuilder<'a> {
                         self.blended.push(b);
                         Node::OldBlendedNoise((self.blended.len() - 1) as u32)
                     }
+                    "end_islands" => {
+                        if self.island.is_none() {
+                            self.island = Some(crate::end::island_noise(self.world_seed));
+                        }
+                        Node::EndIslands
+                    }
                     "find_top_surface" => Node::FindTopSurface {
                         density: arg(self, "density")?,
                         upper: arg(self, "upper_bound")?,
@@ -416,6 +428,7 @@ impl<'a> GraphBuilder<'a> {
             noises: self.noises,
             noise_names: self.noise_names,
             blended: self.blended,
+            island: self.island,
             n_interp: self.n_interp,
             n_once: self.n_once,
         }
@@ -610,6 +623,7 @@ impl<'g> Eval<'g> {
             Node::BlendDensity(a) => self.eval(*a, x, y, z),
             Node::Spline(s) => self.spline(s, x, y, z) as f64,
             Node::OldBlendedNoise(b) => g.blended[*b as usize].get(x as f64, y as f64, z as f64),
+            Node::EndIslands => crate::end::density(g.island.as_ref().unwrap(), x, z),
             Node::FindTopSurface {
                 density,
                 upper,

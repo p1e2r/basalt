@@ -578,12 +578,18 @@ pub fn try_main() -> Option<i32> {
         .filter(|e| e.kind == HKind::Script && !e.id.starts_with("client_ui_"))
     {
         let t = Instant::now();
-        if e.id == "fuzz_worldgen" || e.id == "worldgen_nether" {
+        if e.id == "fuzz_worldgen" || e.id == "worldgen_nether" || e.id == "worldgen_end" {
             let nether = e.id == "worldgen_nether";
+            let end = e.id == "worldgen_end";
             let (seeds, path) = if nether {
                 (
                     vec![12345i64, 42],
                     std::path::PathBuf::from("vanilla/parity-nether"),
+                )
+            } else if end {
+                (
+                    vec![12345i64, 42],
+                    std::path::PathBuf::from("vanilla/parity-end"),
                 )
             } else {
                 worldgen_cases(&a)
@@ -592,6 +598,9 @@ pub fn try_main() -> Option<i32> {
             c.arg("tools/parity.sh").arg("--out").arg(&out);
             if nether {
                 c.arg("--nether");
+            }
+            if end {
+                c.arg("--end");
             }
             for s in &seeds {
                 c.arg(s.to_string());

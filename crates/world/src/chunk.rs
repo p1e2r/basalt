@@ -245,6 +245,12 @@ impl Layout {
         count: 16,
         sky: false,
     };
+    /// The End: y 0..256 like the nether, but with sky light.
+    pub const END: Layout = Layout {
+        first: 4,
+        count: 16,
+        sky: true,
+    };
     /// World y of the dimension's bottom.
     pub fn min_y(&self) -> i32 {
         MIN_Y + self.first as i32 * 16

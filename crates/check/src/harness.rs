@@ -152,6 +152,7 @@ pub fn all() -> Vec<Entry> {
         desc: "worldgen parity vs vanilla over N seeds x several sites (tools/parity.sh)".into(),
     });
     v.push(Entry { id: "worldgen_nether".into(), kind: HKind::Script, group: "M8".into(), paths: ["crates/worldgen/**", "crates/data/**", "crates/nbt/**", "tools/parity.sh", "crates/check/src/driver.rs"].map(String::from).to_vec(), desc: "nether worldgen parity vs vanilla (seeds 12345, 42 x 5 sites; tools/parity.sh --nether)".into() });
+    v.push(Entry { id: "worldgen_end".into(), kind: HKind::Script, group: "M8".into(), paths: ["crates/worldgen/**", "crates/data/**", "crates/nbt/**", "tools/parity.sh", "crates/check/src/driver.rs"].map(String::from).to_vec(), desc: "End worldgen parity vs vanilla (seeds 12345, 42 x 5 sites incl. outer islands; tools/parity.sh --end)".into() });
     v.push(Entry { id: "worldgen_structures".into(), kind: HKind::Script, group: "M3".into(), paths: ["crates/worldgen/**", "crates/data/**", "crates/nbt/**", "tools/structure-parity.sh", "tools/structure-world.sh", "tools/structure-sites.sh", "crates/check/src/driver.rs", "crates/check/known-divergences.txt"].map(String::from).to_vec(), desc: "structure parity vs vanilla worlds (starts per type, jigsaw pieces, block-exact % in piece boxes; tools/structure-parity.sh)".into() });
     // the client oracle's block-meshing parity (crates/check/src/client): `basalt-check client-mesh`
     let mut client_paths: Vec<String> = crate::client::MESH_AFFECTED

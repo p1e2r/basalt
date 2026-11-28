@@ -446,8 +446,9 @@ impl<'g> Region<'g> {
             return *b;
         }
         self.e.set_mode(crate::density::Mode::Direct);
-        let t = self.g.climate(&mut self.e, qx * 4, qy * 4, qz * 4);
-        let (b, leaf) = self.g.biomes.search(&t, self.last_leaf);
+        let (b, leaf) = self
+            .g
+            .search_biome(&mut self.e, qx * 4, qy * 4, qz * 4, self.last_leaf);
         self.last_leaf = Some(leaf);
         self.biome_cache.insert((qx, qy, qz), b);
         b

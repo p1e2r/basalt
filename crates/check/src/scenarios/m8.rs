@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 const NETHER: &str = "minecraft:the_nether";
 const OVERWORLD: &str = "minecraft:overworld";
+const END: &str = "minecraft:the_end";
 
 fn wait_dim(bot: &Bot, dim: &str, secs: u64) -> bool {
     bot.wait_until(Duration::from_secs(secs), |s| s.dim == dim)
@@ -121,6 +122,60 @@ pub fn execute_in(ctx: &mut Ctx) -> Result<()> {
                 .count()
         };
         ctx.metric(&format!("col_{x}_{z}_above_roof"), above as f64, 0.0);
+    }
+    bot.cmd_reply("execute in minecraft:overworld run tp @s 0.5 220 0.5")?;
+    ctx.check(
+        wait_dim(&bot, OVERWORLD, 10),
+        format!("never came back to the overworld (dim {})", bot.st().dim),
+    );
+    ctx.metric("respawns_total", (bot.st().respawns - r0) as f64, 0.0);
+    bot.set_frozen(false);
+    Ok(())
+}
+
+/// `execute in minecraft:the_end run tp`: respawn into the End (layout 0..256) and seed-12345 End
+/// terrain over the wire: block counts of main-island columns and of a spike column (obsidian
+/// pillar with bedrock on top), nothing below the island, and back.
+pub fn end_execute_in(ctx: &mut Ctx) -> Result<()> {
+    let bot = ctx.bot()?;
+    ctx.gamemode(&bot, "creative")?;
+    bot.fly(true);
+    bot.set_frozen(true);
+    let r0 = bot.st().respawns;
+    bot.cmd_reply("execute in minecraft:the_end run tp @s 20.5 120 20.5")?;
+    ctx.check(
+        wait_dim(&bot, END, 10),
+        format!("never moved to the end (dim {})", bot.st().dim),
+    );
+    ctx.metric("respawns_to_end", (bot.st().respawns - r0) as f64, 0.0);
+    ctx.check(
+        bot.wait_until(Duration::from_secs(10), |s| {
+            (s.body.pos[0] - 20.5).abs() < 0.01 && (s.body.pos[1] - 120.0).abs() < 0.01
+        }),
+        format!("end position {:?}", bot.st().body.pos),
+    );
+    bot.wait_chunks(2, Duration::from_secs(30))?;
+    // (42, 0): the first spike's centre for every seed; the others: main island ground
+    for (x, z) in [(20, 20), (-30, 7), (42, 0), (60, -45)] {
+        if !bot.wait_until(Duration::from_secs(20), |s| s.world.loaded(x, z)) {
+            bail!("end chunk at {x},{z} not loaded");
+        }
+        let names: Vec<&str> = {
+            let s = bot.st();
+            (0..256).map(|y| s.world.name(x, y, z)).collect()
+        };
+        for b in ["end_stone", "obsidian", "bedrock", "air"] {
+            ctx.metric(
+                &format!("col_{x}_{z}_{b}"),
+                names.iter().filter(|n| **n == b).count() as f64,
+                0.0,
+            );
+        }
+        let top = names
+            .iter()
+            .rposition(|n| *n != "air" && *n != "fire")
+            .unwrap_or(0);
+        ctx.metric(&format!("col_{x}_{z}_top"), top as f64, 0.0);
     }
     bot.cmd_reply("execute in minecraft:overworld run tp @s 0.5 220 0.5")?;
     ctx.check(

@@ -301,6 +301,15 @@ impl BiomeSource {
     }
 
     /// Distinct biomes in the order the parameter list first mentions them.
+    /// A source with no climate entries (dimensions whose biomes are not multi-noise, e.g. the End).
+    pub fn empty() -> BiomeSource {
+        BiomeSource {
+            entries: Vec::new(),
+            tree: Vec::new(),
+            root: 0,
+        }
+    }
+
     pub fn possible_biomes(&self) -> Vec<u8> {
         let mut v: Vec<u8> = Vec::new();
         for e in &self.entries {

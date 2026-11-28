@@ -19,7 +19,7 @@ use basalt_nbt::Tag;
 use basalt_worldgen::{Dimension, GeneratedChunk, Generator};
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 
-// Dimension layout of the compared world (set from the region path: `.../the_nether/region` = nether).
+// Dimension layout of the compared world (set from the region path: `.../the_nether/region` = nether, `the_end` = End).
 static DIM_MIN_Y: AtomicI32 = AtomicI32::new(-64);
 static DIM_SECTIONS: AtomicUsize = AtomicUsize::new(24);
 #[allow(non_snake_case)]
@@ -239,6 +239,8 @@ fn terrain(id: u16) -> bool {
         | "diamond_ore" | "deepslate_diamond_ore" | "lapis_ore" | "deepslate_lapis_ore" | "emerald_ore" | "deepslate_emerald_ore"
         // nether noise + surface rules
         | "netherrack" | "soul_sand" | "soul_soil" | "basalt" | "blackstone" | "crimson_nylium" | "warped_nylium"
+        // the End
+        | "end_stone"
     )
 }
 
@@ -254,6 +256,8 @@ fn main() -> Result<()> {
     let t = Instant::now();
     let dim = if dir.to_string_lossy().contains("the_nether") {
         Dimension::Nether
+    } else if dir.to_string_lossy().contains("the_end") {
+        Dimension::End
     } else {
         Dimension::Overworld
     };

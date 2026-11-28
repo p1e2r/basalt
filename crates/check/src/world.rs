@@ -58,7 +58,7 @@ impl World {
     /// Empty world with the layout of a dimension id (`minecraft:the_nether`: y 0..256).
     pub fn for_dim(dim: &str) -> World {
         match dim.trim_start_matches("minecraft:") {
-            "the_nether" => World {
+            "the_nether" | "the_end" => World {
                 min_y: 0,
                 sections: 16,
                 ..Default::default()

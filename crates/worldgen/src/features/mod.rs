@@ -4,6 +4,7 @@
 //! topological merge of each biome's feature lists), and every placed feature gets its
 //! own random seeded from the chunk's decoration seed, its global index and its step.
 
+pub mod end;
 pub mod kinds;
 pub mod misc;
 pub mod nether;

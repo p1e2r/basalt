@@ -10,6 +10,7 @@ use basalt_world::Layout;
 
 pub(super) const OVERWORLD: usize = 0;
 pub(super) const NETHER: usize = 1;
+pub(super) const END: usize = 2;
 
 /// Static description of a dimension Basalt runs.
 pub(super) struct DimInfo {
@@ -31,7 +32,7 @@ pub(super) struct DimInfo {
     pub portals: &'static str,
 }
 
-pub(super) const DIMS: [DimInfo; 2] = [
+pub(super) const DIMS: [DimInfo; 3] = [
     DimInfo {
         id: "minecraft:overworld",
         ty: "minecraft:overworld",
@@ -51,6 +52,17 @@ pub(super) const DIMS: [DimInfo; 2] = [
         region: "dimensions/minecraft/the_nether/region",
         entities: "dimensions/minecraft/the_nether/basalt-entities.json",
         portals: "dimensions/minecraft/the_nether/basalt-portals.json",
+    },
+    DimInfo {
+        id: "minecraft:the_end",
+        ty: "minecraft:the_end",
+        layout: Layout::END,
+        // noise_settings/end.json sea_level
+        sea_level: 0,
+        scale: 1.0,
+        region: "dimensions/minecraft/the_end/region",
+        entities: "dimensions/minecraft/the_end/basalt-entities.json",
+        portals: "dimensions/minecraft/the_end/basalt-portals.json",
     },
 ];
 
@@ -81,6 +93,7 @@ pub(super) fn dim_index(name: &str) -> Option<usize> {
     match name.trim_start_matches("minecraft:") {
         "overworld" => Some(OVERWORLD),
         "the_nether" | "nether" => Some(NETHER),
+        "the_end" | "end" => Some(END),
         _ => None,
     }
 }
@@ -373,7 +386,9 @@ mod tests {
     fn dim_names() {
         assert_eq!(dim_index("minecraft:the_nether"), Some(NETHER));
         assert_eq!(dim_index("overworld"), Some(OVERWORLD));
-        assert_eq!(dim_index("minecraft:the_end"), None);
+        assert_eq!(dim_index("minecraft:the_end"), Some(END));
+        assert_eq!(dim_index("minecraft:the_moon"), None);
+        assert!(DIMS[END].layout.sky);
         assert_eq!(DIMS[NETHER].layout.min_y(), 0);
         assert_eq!(DIMS[NETHER].layout.max_y(), 256);
     }

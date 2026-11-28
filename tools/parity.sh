@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Worldgen parity of Basalt vs real vanilla worlds: N seeds x several sites per seed.
 #
-# usage: tools/parity.sh [--out DIR] [--nether] SEED...
+# usage: tools/parity.sh [--out DIR] [--nether | --end] SEED...
 #   Vanilla reference worlds are generated headless with the official server jar (vanilla/server.jar)
 #   and cached in vanilla/parity/<seed> (marker done-26.2; shared with tools/check-all.sh), so only the
 #   first run of a seed is slow. Each seed is compared at the sites below (centre chunk + radius, all
@@ -20,6 +20,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --out) OUT=$2; shift 2 ;;
     --nether) DIM=nether; shift ;;
+    --end) DIM=end; shift ;;
     *) break ;;
   esac
 done
@@ -27,14 +28,15 @@ SEEDS=("$@")
 [ ${#SEEDS[@]} -gt 0 ] || SEEDS=(12345 42 1 7 2026 99999)
 JAVA=${JAVA:-java}
 SITES=("0 0 3" "-3 -3 2" "2 2 2" "-3 2 2" "2 -3 2")
+[ $DIM = end ] && SITES=("0 0 3" "-3 -3 2" "2 2 2" "104 104 3" "102 107 2")
 mkdir -p "$OUT"
 
 echo "note: building the worldgen compare example"
 cargo build --release -p basalt-worldgen --example compare -q 2>&1 | tail -5
 [ -x target/release/examples/compare ] || { echo "RESULT fuzz=worldgen cases=0 mismatches=0 new=0 info=0 errors=1 skipped=1 secs=0"; exit 1; }
 
-pdir() { if [ $DIM = nether ]; then echo vanilla/parity-nether/$1; else echo vanilla/parity/$1; fi; }
-dimdir() { if [ $DIM = nether ]; then echo the_nether; else echo overworld; fi; }
+pdir() { case $DIM in nether) echo vanilla/parity-nether/$1 ;; end) echo vanilla/parity-end/$1 ;; *) echo vanilla/parity/$1 ;; esac; }
+dimdir() { case $DIM in nether) echo the_nether ;; end) echo the_end ;; *) echo overworld ;; esac; }
 
 free_port() { python3 - "${PARITY_PORT_BASE:-25700}" <<'EOF'
 import socket, sys
@@ -76,7 +78,13 @@ EOF
   exec 7> "$dir/console.fifo"
   local t=0
   until grep -q "Done (" "$dir/server.log" 2>/dev/null; do sleep 1; t=$((t+1)); [ $t -gt 300 ] && { echo "vanilla server for seed $seed didn't start"; kill $pid; exec 7>&-; return 1; }; done
-  if [ $DIM = nether ]; then echo "execute in minecraft:the_nether run forceload add -80 -80 79 79" >&7; else echo "forceload add -80 -80 79 79" >&7; fi
+  case $DIM in
+    nether) echo "execute in minecraft:the_nether run forceload add -80 -80 79 79" >&7 ;;
+    # the End: the main island plus an outer-islands square (chunks 100..109) for the end_islands noise / outer biomes
+    end) echo "execute in minecraft:the_end run forceload add -80 -80 79 79" >&7
+         echo "execute in minecraft:the_end run forceload add 1600 1600 1759 1759" >&7 ;;
+    *) echo "forceload add -80 -80 79 79" >&7 ;;
+  esac
   local region=$dir/world/dimensions/minecraft/$(dimdir)/region ok=0
   for _ in $(seq 1 40); do
     sleep 5

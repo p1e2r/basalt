@@ -15,6 +15,7 @@ pub mod aquifer;
 pub mod biome;
 pub mod carver;
 pub mod density;
+pub mod end;
 pub mod features;
 pub mod noise;
 pub mod random;
@@ -40,6 +41,7 @@ pub const SECTIONS: usize = 24;
 pub enum Dimension {
     Overworld,
     Nether,
+    End,
 }
 
 impl Dimension {
@@ -48,20 +50,21 @@ impl Dimension {
         match self {
             Dimension::Overworld => "overworld",
             Dimension::Nether => "nether",
+            Dimension::End => "end",
         }
     }
     /// Dimension-type world bottom.
     pub fn min_y(self) -> i32 {
         match self {
             Dimension::Overworld => -64,
-            Dimension::Nether => 0,
+            Dimension::Nether | Dimension::End => 0,
         }
     }
     /// Number of 16-block sections of the dimension type (overworld 384 / nether 256 blocks).
     pub fn sections(self) -> usize {
         match self {
             Dimension::Overworld => 24,
-            Dimension::Nether => 16,
+            Dimension::Nether | Dimension::End => 16,
         }
     }
     /// Registry id (`minecraft:...`).
@@ -69,12 +72,14 @@ impl Dimension {
         match self {
             Dimension::Overworld => "minecraft:overworld",
             Dimension::Nether => "minecraft:the_nether",
+            Dimension::End => "minecraft:the_end",
         }
     }
     pub fn from_id(s: &str) -> Option<Dimension> {
         match s.trim_start_matches("minecraft:") {
             "overworld" => Some(Dimension::Overworld),
             "the_nether" | "nether" => Some(Dimension::Nether),
+            "the_end" | "end" => Some(Dimension::End),
             _ => None,
         }
     }
@@ -197,6 +202,8 @@ pub struct Generator {
     pub dim: Dimension,
     gen_min_y: i32,
     gen_height: i32,
+    /// Noise cell width and height in blocks (`size_horizontal * 4`, `size_vertical * 4`).
+    cell: (i32, i32),
     graph: Graph,
     router: Router,
     aquifer_rand: PosFactory,
@@ -210,6 +217,8 @@ pub struct Generator {
     interp_args: Vec<NodeId>,
     pub biome_names: Vec<String>,
     biomes: biome::BiomeSource,
+    /// The End's biome ids in [`end::BIOMES`] order (the End biome source instead of multi-noise).
+    end_biomes: Option<[u8; 5]>,
     surface: surface::SurfaceSystem,
     carvers: Vec<Option<carver::Carver>>,
     /// Per biome: indices into `carvers`.
@@ -284,8 +293,9 @@ impl surface::SurfaceEnv for Env<'_, '_> {
             return *b;
         }
         self.e.set_mode(Mode::Direct);
-        let t = self.g.climate(self.e, qx * 4, qy * 4, qz * 4);
-        let (b, leaf) = self.g.biomes.search(&t, self.last);
+        let (b, leaf) = self
+            .g
+            .search_biome(self.e, qx * 4, qy * 4, qz * 4, self.last);
         self.last = Some(leaf);
         self.cache.insert((qx, qy, qz), b);
         b
@@ -387,7 +397,26 @@ impl Generator {
             tuff: state("tuff")?,
         };
         let biome_names = biome_names(data_dir)?;
-        let biomes = biome::BiomeSource::load_preset(data_dir, &biome_names, dim.settings())?;
+        let (biomes, end_biomes) = if dim == Dimension::End {
+            let mut ids = [0u8; 5];
+            for (i, n) in end::BIOMES.iter().enumerate() {
+                ids[i] = biome_names
+                    .iter()
+                    .position(|b| b == n)
+                    .ok_or_else(|| anyhow::anyhow!("unknown biome {n}"))?
+                    as u8;
+            }
+            (biome::BiomeSource::empty(), Some(ids))
+        } else {
+            (
+                biome::BiomeSource::load_preset(data_dir, &biome_names, dim.settings())?,
+                None,
+            )
+        };
+        let possible = match end_biomes {
+            Some(ids) => ids.to_vec(),
+            None => biomes.possible_biomes(),
+        };
         let default_block = state_from_json(&settings["default_block"])?;
         let sea_level = settings["sea_level"].as_i64().unwrap_or(63) as i32;
         let mut carvers = Vec::new();
@@ -429,11 +458,8 @@ impl Generator {
             biome_carvers.push(idx);
         }
         features::GEN_RANGE.with(|r| r.set((gen_min_y, gen_height)));
-        let features = features::Features::load(
-            &data_dir.join("data/minecraft"),
-            &biome_names,
-            &biomes.possible_biomes(),
-        );
+        let features =
+            features::Features::load(&data_dir.join("data/minecraft"), &biome_names, &possible);
         features::GEN_RANGE.with(|r| r.set((MIN_Y, HEIGHT)));
         let mut features = features?;
         let surface = surface::SurfaceSystem::load(
@@ -461,8 +487,13 @@ impl Generator {
             dim,
             gen_min_y,
             gen_height,
+            cell: (
+                settings["noise"]["size_horizontal"].as_i64().unwrap_or(1) as i32 * 4,
+                settings["noise"]["size_vertical"].as_i64().unwrap_or(2) as i32 * 4,
+            ),
             biome_names,
             biomes,
+            end_biomes,
             surface,
             carvers,
             biome_carvers,
@@ -710,6 +741,23 @@ impl Generator {
         }
     }
 
+    /// Biome at block position (x, y, z) of a quart cell, with the multi-noise warm start `last`.
+    pub(crate) fn search_biome(
+        &self,
+        e: &mut Eval,
+        x: i32,
+        y: i32,
+        z: i32,
+        last: Option<u32>,
+    ) -> (u8, u32) {
+        if let Some(ids) = &self.end_biomes {
+            let n = self.graph.island.as_ref().expect("end island noise");
+            return (ids[end::biome(n, x >> 2, z >> 2)], 0);
+        }
+        let t = self.climate(e, x, y, z);
+        self.biomes.search(&t, last)
+    }
+
     fn climate(&self, e: &mut Eval, x: i32, y: i32, z: i32) -> biome::Target {
         let r = &self.router;
         let q = |e: &mut Eval, n: NodeId| biome::quantize(e.eval(n, x, y, z));
@@ -726,14 +774,27 @@ impl Generator {
     /// Biome at a quart position (block coordinates / 4).
     pub fn noise_biome(&self, e: &mut Eval, qx: i32, qy: i32, qz: i32) -> u8 {
         e.set_mode(Mode::Direct);
-        let t = self.climate(e, qx * 4, qy * 4, qz * 4);
-        self.biomes.search(&t, None).0
+        self.search_biome(e, qx * 4, qy * 4, qz * 4, None).0
     }
 
     /// Biome stage: 4×4×4 cells for the whole chunk.
     pub fn fill_biomes(&self, e: &mut Eval, cx: i32, cz: i32) -> Vec<[u8; 64]> {
         e.set_mode(Mode::Direct);
         let mut out = vec![[0u8; 64]; SECTIONS];
+        if self.end_biomes.is_some() {
+            for qx in 0..4 {
+                for qz in 0..4 {
+                    let (x, z) = (cx * 16 + qx * 4, cz * 16 + qz * 4);
+                    let b = self.search_biome(e, x, 0, z, None).0;
+                    for sec in out.iter_mut() {
+                        for qyl in 0..4 {
+                            sec[((qyl << 4) | (qz << 2) | qx) as usize] = b;
+                        }
+                    }
+                }
+            }
+            return out;
+        }
         let mut cols = [[0i64; 6]; 16];
         for qx in 0..4 {
             for qz in 0..4 {
@@ -794,9 +855,13 @@ impl Generator {
     ) -> Vec<[u16; 4096]> {
         let x0 = cx * 16;
         let z0 = cz * 16;
-        const CW: i32 = 4;
-        const CH: i32 = 8;
-        const NX: usize = 5;
+        // Cell size from the noise settings (overworld/nether 4x8, End 8x4).
+        let (cw, ch) = self.cell;
+        #[allow(non_snake_case)]
+        let (CW, CH) = (cw, ch);
+        let nx: usize = (16 / CW) as usize + 1;
+        #[allow(non_snake_case)]
+        let NX = nx;
         let ny: usize = (self.gen_height / CH) as usize + 1;
         let ns = self.interp_args.len();
         // corners[slot][ix][iz][iy]

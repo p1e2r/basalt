@@ -225,7 +225,20 @@ fn main() -> Result<()> {
         basalt_worldgen::Dimension::Nether,
     )
     .context("loading nether worldgen settings")?;
-    let game = game::Game::new(sh.clone(), vec![generator, Arc::new(gen::Vanilla(nether))]);
+    let end = basalt_worldgen::Generator::try_new_dim(
+        sh.cfg.seed,
+        &sh.cfg.data_dir,
+        basalt_worldgen::Dimension::End,
+    )
+    .context("loading end worldgen settings")?;
+    let game = game::Game::new(
+        sh.clone(),
+        vec![
+            generator,
+            Arc::new(gen::Vanilla(nether)),
+            Arc::new(gen::Vanilla(end)),
+        ],
+    );
     let stop2 = stop.clone();
     let game_thread = std::thread::Builder::new()
         .name("game".into())

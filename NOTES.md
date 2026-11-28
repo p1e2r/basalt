@@ -507,6 +507,28 @@ Measured from the vanilla client's own model parts / PoseStacks (exact fits; for
   arrival x and y identical; the exit is centred across the portal (vanilla drops the across-axis offset).
 - Known gap (2026-11-24): exit-portal placement search. For the m8_portal_travel arena, vanilla built the new Nether portal at y 89 / z 38.5, Basalt at y 113 / z 43.5 Vanilla's own arrival position varies between runs on the shared world; arrival x/y/z are notes, travel time and dimension are compared.
 
+## The End (M8, 2026-11-28) — vanilla End worlds from the server jar (`tools/parity.sh --end`, harness worldgen_end)
+- Parity: seeds 12345 and 42, sites (0,0,r3) (-3,-3,r2) (2,2,r2) (104,104,r3) (102,107,r2): biomes, shape, exact terrain
+  and features all 100.000 % (spikes with crystal bedrock + fire, iron-bar cages, small islands, chorus plants).
+  Vanilla worlds: force-load `execute in minecraft:the_end run forceload add -80 -80 79 79` + `... 1600 1600 1759 1759`
+  (cached in vanilla/parity-end/<seed>). The exit portal and dragon are not in those worlds (no player entered).
+- noise_settings/end.json: legacy random source, noise 0..128, **size_horizontal 2** (8-block noise cells, first dimension
+  that needs it; Basalt's fill_noise had 4x8 hard-coded) and size_vertical 1 (4-block cells), aquifers/ore veins off.
+- end_islands density = (height(x/8, z/8) - 8) / 128 (Java integer division), height = max of the main island
+  `100 - 8*sqrt(i²+j²)` and outer islands on cells (k, l) = (i/2 + dx, j/2 + dz), |dx|,|dz| <= 12, more than 64 cells
+  from the origin where a 2D simplex noise (JavaRandom(seed) after 17292 nextInt calls) is < -0.9, each
+  `100 - sqrt(h²+s²) * ((|k|*3439 + |l|*147) % 13 + 9)`; all in float, clamped to -100..80 (crates/worldgen/src/end.rs).
+- Biomes: the_end within 64 chunks of the origin (cx²+cz² <= 4096), else by the island density at the chunk centre
+  ((cx*2+1)*8, (cz*2+1)*8): > 0.25 end_highlands, >= -0.0625 end_midlands, < -0.21875 small_end_islands, else end_barrens.
+- Spikes: 10 on a circle of radius 42 at angle 2(-pi + pi/10 i), floor(42 cos), floor(42 sin); sizes k = a shuffle of 0..9
+  with JavaRandom(JavaRandom(seed).nextLong() & 0xffff) (swap i-1 with nextInt(i) from the top), radius 2 + k/3,
+  height 76 + 3k, cages on k = 1, 2. Column: obsidian where dx²+dz² <= r²+1 below the height, air above y 65 up to
+  height+10; bedrock at the top with fire above (lit by the crystal entity in vanilla; Basalt places it directly).
+- Server (game/dim.rs END = 2, Layout::END: y 0..256 with sky light, sea level 0): `execute in minecraft:the_end`,
+  region in world/dimensions/minecraft/the_end/region. Scenario m8_end_execute_in = vanilla (column counts + tops).
+  Not done: dragon fight (dragon, exit portal, gateways after kills), end crystals as entities, end portals/eyes of ender,
+  end cities, endermen, the arrival platform rebuilt on travel.
+
 ## Enchanting / anvil / grindstone / smithing / brewing (M10) — measured on vanilla 26.2 with scenarios m10_*
 - Menus (open_screen): enchantment (13, title `container.enchant`, 2 + 36 slots: item, lapis), anvil (8, `container.repair`, 3: two inputs, result), grindstone (15,
   `container.grindstone_title`, 3), smithing (21, `container.upgrade`, 4: template, base, addition, result), brewing_stand (11, `container.brewing`, 5: bottles 0-2,
