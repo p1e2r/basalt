@@ -187,6 +187,163 @@ pub fn end_execute_in(ctx: &mut Ctx) -> Result<()> {
     Ok(())
 }
 
+/// The 12 frame positions around a 3x3 hole centred on `c`, with the facing that points into the
+/// hole (`inward`) or away from it.
+fn end_ring(c: [i32; 3], inward: bool) -> Vec<([i32; 3], &'static str)> {
+    let mut v = Vec::new();
+    for i in -1..=1 {
+        let (n, s, w, e) = if inward {
+            ("south", "north", "east", "west")
+        } else {
+            ("north", "south", "west", "east")
+        };
+        v.push(([c[0] + i, c[1], c[2] - 2], n));
+        v.push(([c[0] + i, c[1], c[2] + 2], s));
+        v.push(([c[0] - 2, c[1], c[2] + i], w));
+        v.push(([c[0] + 2, c[1], c[2] + i], e));
+    }
+    v
+}
+
+fn count_name(bot: &Bot, a: [i32; 3], b: [i32; 3], name: &str) -> i32 {
+    let s = bot.st();
+    let mut n = 0;
+    for x in a[0]..=b[0] {
+        for y in a[1]..=b[1] {
+            for z in a[2]..=b[2] {
+                if s.world.name(x, y, z) == name {
+                    n += 1;
+                }
+            }
+        }
+    }
+    n
+}
+
+/// End portal frames + eyes of ender, travel to the End and back: an eye used on the last empty
+/// frame of an inward-facing ring fills the 3x3 hole with end_portal (survival: the eye is used
+/// up); a complete ring facing outward stays empty; stepping into the portal moves to the End's
+/// arrival platform (position, rotation, 5x5 obsidian at y 48 with air above); an end portal in
+/// the End brings the player back to the overworld (credits game event noted).
+pub fn end_portal(ctx: &mut Ctx) -> Result<()> {
+    let bot = ctx.bot()?;
+    let o = ctx.arena(&bot, 16, 16, 6)?;
+    ctx.stand(&bot, o[0] + 1, o[2] + 1, "creative")?;
+    let y = ARENA_Y + 1;
+    let rings = [
+        ([o[0] + 4, y, o[2] + 4], true),
+        ([o[0] + 11, y, o[2] + 11], false),
+    ];
+    for (ri, (c, inward)) in rings.iter().enumerate() {
+        let ring = end_ring(*c, *inward);
+        // all but the first frame get their eye by setblock (that alone never makes a portal)
+        for (i, (p, f)) in ring.iter().enumerate() {
+            bot.cmd_reply(&format!(
+                "setblock {} {} {} minecraft:end_portal_frame[facing={f},eye={}]",
+                p[0],
+                p[1],
+                p[2],
+                i != 0
+            ))?;
+        }
+        let p0 = ring[0].0;
+        if !bot.wait_until(Duration::from_secs(3), |s| {
+            s.world.name(p0[0], p0[1], p0[2]) == "end_portal_frame"
+        }) {
+            bail!("ring {ri} not seen");
+        }
+        ctx.gamemode(&bot, "survival")?;
+        give(&bot, "ender_eye", 2)?;
+        hold(&bot, "ender_eye")?;
+        bot.tp([p0[0] as f64 + 0.5, y as f64, p0[2] as f64 - 1.5])?;
+        bot.wait_on_ground(Duration::from_secs(3));
+        bot.look_at([p0[0] as f64 + 0.5, y as f64 + 0.8, p0[2] as f64 + 0.5]);
+        bot.wait_ticks(2);
+        bot.place_at(p0, 1, [0.5, 0.8125, 0.5]);
+        bot.wait_until(Duration::from_secs(3), |s| {
+            s.world
+                .state_string(p0[0], p0[1], p0[2])
+                .contains("eye=true")
+        });
+        bot.wait_ticks(10);
+        let st = bot.st().world.state_string(p0[0], p0[1], p0[2]);
+        ctx.metric(
+            &format!("ring{ri}_frame_eye"),
+            st.contains("eye=true") as u8 as f64,
+            0.0,
+        );
+        ctx.metric(
+            &format!("ring{ri}_eyes_left"),
+            bot.st().count("ender_eye") as f64,
+            0.0,
+        );
+        let n = count_name(
+            &bot,
+            [c[0] - 1, y, c[2] - 1],
+            [c[0] + 1, y, c[2] + 1],
+            "end_portal",
+        );
+        ctx.metric(&format!("ring{ri}_portal_blocks"), n as f64, 0.0);
+        bot.cmd_reply("clear @s minecraft:ender_eye")?;
+        ctx.gamemode(&bot, "creative")?;
+    }
+    // into the portal of the first ring
+    let c = rings[0].0;
+    if bot.st().world.name(c[0], y, c[2]) != "end_portal" {
+        ctx.check(false, "no portal to travel through");
+        return Ok(());
+    }
+    let ev0 = bot.st().game_events.len();
+    bot.tp([c[0] as f64 + 0.5, y as f64 + 0.1, c[2] as f64 + 0.5])?;
+    ctx.check(
+        wait_dim(&bot, END, 10),
+        format!("never reached the end (dim {})", bot.st().dim),
+    );
+    bot.wait_until(Duration::from_secs(5), |s| {
+        (s.body.pos[0] - 100.5).abs() < 2.0
+    });
+    bot.wait_ticks(5);
+    let (pos, yaw, pitch) = {
+        let s = bot.st();
+        (s.body.pos, s.body.yaw, s.body.pitch)
+    };
+    for (i, k) in ["x", "y", "z"].iter().enumerate() {
+        ctx.metric(&format!("arrival_{k}"), pos[i], 0.01);
+    }
+    ctx.metric("arrival_yaw", yaw as f64, 0.5);
+    ctx.metric("arrival_pitch", pitch as f64, 0.5);
+    if !bot.wait_until(Duration::from_secs(10), |s| s.world.loaded(100, 0)) {
+        bail!("arrival chunk not loaded");
+    }
+    ctx.metric(
+        "platform_obsidian",
+        count_name(&bot, [98, 48, -2], [102, 48, 2], "obsidian") as f64,
+        0.0,
+    );
+    ctx.metric(
+        "platform_air",
+        count_name(&bot, [98, 49, -2], [102, 51, 2], "air") as f64,
+        0.0,
+    );
+    // back: an end portal next to the platform
+    bot.cmd_reply("setblock 98 49 0 minecraft:end_portal")?;
+    bot.wait_until(Duration::from_secs(3), |s| {
+        s.world.name(98, 49, 0) == "end_portal"
+    });
+    bot.tp([98.5, 49.1, 0.5])?;
+    let mut back = wait_dim(&bot, OVERWORLD, 5);
+    let win = bot.st().game_events[ev0..].iter().any(|e| e.0 == 4);
+    if !back && win {
+        // credits: the client answers with "perform respawn"
+        bot.respawn();
+        back = wait_dim(&bot, OVERWORLD, 10);
+    }
+    ctx.check(back, format!("never came back (dim {})", bot.st().dim));
+    ctx.note(format!("win-game event on leaving the end: {win}"));
+    bot.cmd_reply("execute in minecraft:the_end run setblock 98 49 0 air")?;
+    Ok(())
+}
+
 /// Obsidian frames: fire lights an empty frame (axis x and z, with and without corners, 2x3 up to
 /// 21 wide; 22 wide and incomplete frames don't light), flint and steel lights one, breaking a frame
 /// block removes the whole portal.

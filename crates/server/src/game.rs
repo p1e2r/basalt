@@ -9,6 +9,7 @@ mod combat;
 mod container;
 mod debug;
 pub(crate) mod dim;
+mod endportal;
 mod env;
 mod explosion;
 mod falling;
@@ -160,6 +161,10 @@ struct Player {
     portal_ticks: i32,
     portal_cooldown: i32,
     portal_entry: Option<[i32; 3]>,
+    /// Left the End through its portal; waiting for the client's respawn command.
+    won_game: bool,
+    /// The credits were shown once (player data `seenCredits`).
+    seen_credits: bool,
     /// item cooldown groups ("ender_pearl") -> game tick they end
     cooldowns: HashMap<String, u64>,
     /// bow / trident draw in progress: (inventory slot, start tick)
@@ -1032,6 +1037,8 @@ impl Game {
             portal_ticks: 0,
             portal_cooldown: 0,
             portal_entry: None,
+            won_game: false,
+            seen_credits: false,
             cooldowns: HashMap::new(),
             draw: None,
         };
@@ -1417,7 +1424,7 @@ impl Game {
                 }
             }
             sb::CLIENT_COMMAND => {
-                if r.varint()? == 0 {
+                if r.varint()? == 0 && !self.finish_win(eid) {
                     self.respawn(eid);
                 }
             }
@@ -1919,6 +1926,9 @@ impl Game {
             self.use_flint_and_steel(eid, b, face);
             return;
         }
+        if *item_name == "ender_eye" && self.use_ender_eye(eid, b) {
+            return;
+        }
         let item_name: &'static str = item_name;
         if self.use_tool_on(eid, b, face, item_name) {
             return;
@@ -2093,6 +2103,7 @@ impl Game {
             self.tick_weather();
         }
         self.tick_portals();
+        self.tick_end_portals();
         let ids: Vec<i32> = self.players.keys().copied().collect();
         for &eid in &ids {
             self.stream_chunks(eid);

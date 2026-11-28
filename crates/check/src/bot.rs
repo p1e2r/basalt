@@ -85,6 +85,8 @@ pub struct PacketLog {
 }
 
 pub struct State {
+    /// every game_event received: (event id, value)
+    pub game_events: Vec<(u8, f32)>,
     /// game_event weather: (event id, value) log (1 begin rain, 2 end rain, 7 rain level, 8 thunder level) + latest levels
     pub weather_events: Vec<(u8, f32)>,
     pub rain: f32,
@@ -345,6 +347,7 @@ impl Bot {
         let (otx, mut orx) = unbounded_channel::<Vec<u8>>();
         let st = Arc::new(Mutex::new(State {
             weather_events: Vec::new(),
+            game_events: Vec::new(),
             rain: 0.0,
             thunder: 0.0,
             name: name.to_string(),
@@ -1304,6 +1307,7 @@ fn handle(s: &mut State, id: i32, data: &[u8]) -> Result<()> {
         cb::GAME_EVENT => {
             let e = r.u8()?;
             let v = r.f32()?;
+            s.game_events.push((e, v));
             match e {
                 3 => s.gamemode = v as u8,
                 1 | 2 | 7 | 8 => {

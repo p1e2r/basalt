@@ -101,7 +101,7 @@ impl Game {
     }
 
     /// Use one of the held stack (survival / adventure).
-    fn consume_held(&mut self, eid: i32) {
+    pub(super) fn consume_held(&mut self, eid: i32) {
         let Some(p) = self.players.get_mut(&eid) else {
             return;
         };

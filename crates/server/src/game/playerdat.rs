@@ -106,6 +106,7 @@ impl Game {
             }),
         );
         ins("XpLevel", Tag::Int(p.xp_level));
+        ins("seenCredits", Tag::Byte(p.seen_credits as i8));
         ins("XpP", Tag::Float(p.xp_progress));
         ins("XpTotal", Tag::Int(p.xp));
         let mut inv = Vec::new();
@@ -213,6 +214,9 @@ impl Game {
         }
         if let Some(v) = f("Fire") {
             p.fire_ticks = (v as i32).max(0);
+        }
+        if let Some(v) = f("seenCredits") {
+            p.seen_credits = v != 0.0;
         }
         if let Some(v) = f("XpLevel") {
             p.xp_level = v as i32;
