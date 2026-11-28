@@ -1045,6 +1045,7 @@ impl Game {
         self.load_player(&mut p);
         let d = self.saved_dim(p.uuid);
         self.enter(d);
+        self.ensure_end_podium();
         if d != dim::OVERWORLD && p.pos == self.spawn {
             p.pos = [0.5, 64.0, 0.5];
         }

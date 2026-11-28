@@ -344,6 +344,81 @@ pub fn end_portal(ctx: &mut Ctx) -> Result<()> {
     Ok(())
 }
 
+/// The exit portal ("podium") the dragon fight builds at the top of the main island: layout of
+/// the 7x7 columns around (0, 0) (block counts per layer relative to the bedrock pillar's top,
+/// the pillar top y itself) and the torches around the pillar. Vanilla shows it with the
+/// portal inactive (dragon alive); Basalt builds it on first entry.
+pub fn end_podium(ctx: &mut Ctx) -> Result<()> {
+    let bot = ctx.bot()?;
+    ctx.gamemode(&bot, "creative")?;
+    bot.fly(true);
+    bot.set_frozen(true);
+    bot.cmd_reply("execute in minecraft:the_end run tp @s 0.5 110 12.5")?;
+    ctx.check(
+        wait_dim(&bot, END, 10),
+        format!("never moved to the end (dim {})", bot.st().dim),
+    );
+    if !bot.wait_until(Duration::from_secs(20), |s| {
+        s.world.loaded(0, 0) && s.world.loaded(-4, -4) && s.world.loaded(3, 3)
+    }) {
+        bail!("centre chunks not loaded");
+    }
+    bot.wait_ticks(20);
+    // the pillar: the highest bedrock in column (0, 0)
+    let top = {
+        let s = bot.st();
+        (0..256).rev().find(|&y| s.world.name(0, y, 0) == "bedrock")
+    };
+    let Some(top) = top else {
+        ctx.check(false, "no bedrock pillar at 0,0");
+        return Ok(());
+    };
+    ctx.metric("pillar_top_y", top as f64, 0.0);
+    let mut legend: Vec<String> = Vec::new();
+    for dy in -6..=1 {
+        let y = top + dy;
+        let mut rows = Vec::new();
+        let mut counts: std::collections::BTreeMap<String, i32> = Default::default();
+        for z in -4..=4 {
+            let mut row = String::new();
+            for x in -4..=4 {
+                let st = bot.st().world.state_string(x, y, z);
+                let n = st.trim_start_matches("minecraft:").to_string();
+                let base = n.split('[').next().unwrap_or("").to_string();
+                *counts.entry(base.clone()).or_default() += 1;
+                let i = match legend.iter().position(|l| *l == n) {
+                    Some(i) => i,
+                    None => {
+                        legend.push(n.clone());
+                        legend.len() - 1
+                    }
+                };
+                row.push(char::from(b'a' + i as u8));
+            }
+            rows.push(row);
+        }
+        for (k, v) in &counts {
+            if k != "air" {
+                ctx.metric(&format!("layer{dy}_{k}"), *v as f64, 0.0);
+            }
+        }
+        ctx.note(format!("dy {dy}: {}", rows.join(" ")));
+    }
+    ctx.note(format!(
+        "legend: {}",
+        legend
+            .iter()
+            .enumerate()
+            .map(|(i, l)| format!("{}={l}", char::from(b'a' + i as u8)))
+            .collect::<Vec<_>>()
+            .join(" ")
+    ));
+    bot.cmd_reply("execute in minecraft:overworld run tp @s 0.5 220 0.5")?;
+    wait_dim(&bot, OVERWORLD, 10);
+    bot.set_frozen(false);
+    Ok(())
+}
+
 /// Obsidian frames: fire lights an empty frame (axis x and z, with and without corners, 2x3 up to
 /// 21 wide; 22 wide and incomplete frames don't light), flint and steel lights one, breaking a frame
 /// block removes the whole portal.
@@ -644,29 +719,68 @@ pub fn portal_travel(ctx: &mut Ctx) -> Result<()> {
 /// A player in the nether and a block placed there survive a restart; the nether is saved in
 /// vanilla's folder layout (world/dimensions/minecraft/the_nether/region).
 pub fn nether_persistence(ctx: &mut Ctx) -> Result<()> {
+    dim_persistence(ctx, NETHER, "the_nether", [8.5, 110.0, 8.5], [9, 112, 9])
+}
+
+/// A player + block in the End survive a restart (region in dimensions/minecraft/the_end), and the
+/// exit podium is built once (its pillar top stays the highest bedrock of column 0,0).
+pub fn end_persistence(ctx: &mut Ctx) -> Result<()> {
+    dim_persistence(ctx, END, "the_end", [8.5, 90.0, 8.5], [9, 92, 9])?;
+    let bot = Bot::connect(&ctx.addr(), "EndCheck")?;
+    ctx.gamemode(&bot, "creative")?;
+    bot.fly(true);
+    bot.cmd_reply("execute in minecraft:the_end run tp @s 0.5 100 6.5")?;
+    if !wait_dim(&bot, END, 10)
+        || !bot.wait_until(Duration::from_secs(20), |s| s.world.loaded(0, 0))
+    {
+        bail!("second visit failed");
+    }
+    let tops: Vec<i32> = {
+        let s = bot.st();
+        (0..256)
+            .filter(|&y| s.world.name(0, y, 0) == "bedrock")
+            .collect()
+    };
+    // disc below + 4-high pillar on seed 12345's surface (y 64), as measured in m8_end_podium
+    ctx.check(
+        tops == (63..=67).collect::<Vec<_>>(),
+        format!("pillar bedrock at {tops:?}"),
+    );
+    Ok(())
+}
+
+fn dim_persistence(
+    ctx: &mut Ctx,
+    dim: &str,
+    folder: &str,
+    at: [f64; 3],
+    b: [i32; 3],
+) -> Result<()> {
     let bot = ctx.bot()?;
     let name = bot.name.clone();
     ctx.gamemode(&bot, "creative")?;
     bot.fly(true);
-    bot.cmd_reply("execute in minecraft:the_nether run tp @s 8.5 110 8.5")?;
-    if !wait_dim(&bot, NETHER, 10) {
-        bail!("not in the nether");
+    bot.cmd_reply(&format!(
+        "execute in {dim} run tp @s {} {} {}",
+        at[0], at[1], at[2]
+    ))?;
+    if !wait_dim(&bot, dim, 10) {
+        bail!("not in {dim}");
     }
     bot.wait_chunks(1, Duration::from_secs(20))?;
-    let b = [9, 112, 9];
     setblock(&bot, b, "minecraft:gold_block")?;
     bot.quit();
     std::thread::sleep(Duration::from_millis(300));
     ctx.restart()?;
     let bot = Bot::connect(&ctx.addr(), &name)?;
     ctx.check(
-        wait_dim(&bot, NETHER, 10),
+        wait_dim(&bot, dim, 10),
         format!("after restart in {}", bot.st().dim),
     );
     bot.wait_chunks(1, Duration::from_secs(20))?;
     let p = bot.st().pos();
     ctx.check(
-        (p[0] - 8.5).abs() < 0.5 && (p[2] - 8.5).abs() < 0.5,
+        (p[0] - at[0]).abs() < 0.5 && (p[2] - at[2]).abs() < 0.5,
         format!("position after restart {p:?}"),
     );
     ctx.check(
@@ -689,7 +803,8 @@ pub fn nether_persistence(ctx: &mut Ctx) -> Result<()> {
         .and_then(|i| region.get(i + 1))
         .cloned()
         .unwrap_or_default();
-    let path = std::path::Path::new(&dir).join("dimensions/minecraft/the_nether/region/r.0.0.mca");
+    let path =
+        std::path::Path::new(&dir).join(format!("dimensions/minecraft/{folder}/region/r.0.0.mca"));
     ctx.check(path.exists(), format!("{} missing", path.display()));
     Ok(())
 }

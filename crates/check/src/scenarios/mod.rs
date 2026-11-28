@@ -147,4 +147,6 @@ pub static ALL: &[Spec] = &[
     // appended at the end: arena origins follow the list index, keep the others where they are
     spec!("M8", "m8_end_execute_in", m8::end_execute_in, Flat, Both, true, "execute in the_end run tp: respawn into the End, seed-12345 main island + spike columns over the wire (block counts, top), and back"),
     spec!("M8", "m8_end_portal", m8::end_portal, Flat, Both, true, "eyes of ender on end portal frames (inward ring fills the 3x3 portal, survival uses the eye, outward ring stays empty), travel to the End platform (pos/rotation, obsidian 5x5) and back"),
+    spec!("M8", "m8_end_podium", m8::end_podium, Flat, Both, true, "exit portal podium built at the top of the main island on first entry: pillar top y and per-layer block counts of the 9x9 around (0,0)"),
+    spec!("M8", "m8_end_persistence", m8::end_persistence, FlatOnDisk, BasaltOnly, false, "player + block in the End survive a restart (world/dimensions/minecraft/the_end/region); the exit podium is built once"),
 ];

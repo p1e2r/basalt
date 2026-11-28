@@ -81,6 +81,74 @@ impl Game {
         true
     }
 
+    /// The exit portal ("podium") at the top of the main island, built the first time a player
+    /// enters the End (current dimension = the End). Inactive form (the dragon fight isn't run yet):
+    /// measured on vanilla 26.2 (scenario m8_end_podium, seed 12345: surface y 64 -> ring at 64,
+    /// pillar top 67). Origin = the top solid block of column (0, 0); with d the horizontal
+    /// distance from the origin column: bedrock where d <= 2.5 one below the origin, end stone
+    /// out to 3.5 there; at the origin a bedrock ring 2.5 < d <= 3.5 around an air basin; air
+    /// above out to 3.5; a 4-high bedrock pillar from the origin with wall torches facing
+    /// outward on its four sides 2 above the origin.
+    pub(super) fn ensure_end_podium(&mut self) {
+        if self.cur != END {
+            return;
+        }
+        self.ensure_chunk(-1, -1);
+        self.ensure_chunk(-1, 0);
+        self.ensure_chunk(0, -1);
+        self.ensure_chunk(0, 0);
+        let l = self.world.layout;
+        let Some(top) = (l.min_y()..l.max_y())
+            .rev()
+            .find(|&y| self.world.get_block(0, y, 0) != 0)
+        else {
+            return;
+        };
+        if BlockState(self.world.get_block(0, top, 0)).name() == "bedrock" {
+            return; // already there
+        }
+        let y0 = top;
+        let (bedrock, end_stone) = (st("bedrock"), st("end_stone"));
+        for dy in -1..=32 {
+            for dx in -4i32..=4 {
+                for dz in -4i32..=4 {
+                    let d = ((dx * dx + dz * dz) as f64).sqrt();
+                    if d > 3.5 {
+                        continue;
+                    }
+                    let s = if dy < 0 {
+                        if d <= 2.5 {
+                            bedrock
+                        } else {
+                            end_stone
+                        }
+                    } else if dy > 0 {
+                        0
+                    } else if d > 2.5 {
+                        bedrock
+                    } else {
+                        0
+                    };
+                    let (x, y, z) = (dx, y0 + dy, dz);
+                    if y < l.max_y() && self.world.get_block(x, y, z) != s {
+                        self.set_block(x, y, z, s);
+                    }
+                }
+            }
+        }
+        for dy in 0..4 {
+            self.set_block(0, y0 + dy, 0, bedrock);
+        }
+        for (dx, dz, f) in [
+            (0, -1, "north"),
+            (-1, 0, "west"),
+            (1, 0, "east"),
+            (0, 1, "south"),
+        ] {
+            self.set_block(dx, y0 + 2, dz, st(&format!("wall_torch[facing={f}]")));
+        }
+    }
+
     /// The 12 frames around the 3x3 hole centred on `c` all hold eyes and face the hole.
     fn end_ring_complete(&self, c: [i32; 3]) -> bool {
         for i in -1..=1 {

@@ -286,6 +286,7 @@ impl Game {
             o.send(w);
         }
         self.enter(to);
+        self.ensure_end_podium();
         p.pos = pos;
         p.yaw = yaw;
         p.pitch = pitch;
