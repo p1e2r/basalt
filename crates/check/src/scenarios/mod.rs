@@ -150,4 +150,5 @@ pub static ALL: &[Spec] = &[
     spec!("M8", "m8_end_podium", m8::end_podium, Flat, Both, true, "exit portal podium built at the top of the main island on first entry: pillar top y and per-layer block counts of the 9x9 around (0,0)"),
     spec!("M8", "m8_end_persistence", m8::end_persistence, FlatOnDisk, BasaltOnly, false, "player + block in the End survive a restart (world/dimensions/minecraft/the_end/region); the exit podium is built once"),
     spec!("M6", "m6_fluid_ticks_persist", fluids::fluid_ticks_persist, FlatOnDisk, BasaltOnly, false, "pending fluid ticks survive a restart (chunk fluid_ticks): lava set just before stopping and water mid-spread keep spreading"),
+    spec!("M6", "m6_bubble_push", fluids::bubble_push, Flat, Both, true, "items in bubble columns: pushed up to the surface over soul sand, dragged to the floor over magma (positions after 20/40 ticks)"),
 ];

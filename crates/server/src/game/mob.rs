@@ -911,6 +911,16 @@ impl Game {
             v[1] = 0.0;
         }
         m.h_collision = r.h_collision;
+        // bubble columns act after the move, before the water drag (same rule as items; not
+        // measured on mobs)
+        let feet = [
+            m.pos[0].floor() as i32,
+            (m.pos[1] + 0.1).floor() as i32,
+            m.pos[2].floor() as i32,
+        ];
+        if let Some(vy) = self.bubble_push(feet, v[1]) {
+            v[1] = vy;
+        }
         let was_ground = m.on_ground;
         m.on_ground = r.on_ground;
         let mut fall_damage = 0.0;

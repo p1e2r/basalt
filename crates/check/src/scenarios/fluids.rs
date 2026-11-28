@@ -478,3 +478,90 @@ pub fn fluid_ticks_persist(ctx: &mut Ctx) -> Result<()> {
     ctx.check(ok, "water didn't keep spreading after the restart");
     Ok(())
 }
+
+/// Items in bubble columns (1x1 water columns 12 high in stone): over soul sand an item summoned at
+/// the bottom is pushed up to the surface, over magma one summoned at the top is dragged down to
+/// the floor. Item positions (vanilla's 20-tick item updates) after 20 and 40 ticks.
+pub fn bubble_push(ctx: &mut Ctx) -> Result<()> {
+    let bot = ctx.bot()?;
+    let o = ctx.arena(&bot, 12, 8, 16)?;
+    ctx.stand(&bot, o[0] + 1, o[2] + 1, "creative")?;
+    const H: i32 = 12;
+    for (k, (base, tag)) in [("soul_sand", "up"), ("magma_block", "down")]
+        .iter()
+        .enumerate()
+    {
+        let (x, z) = (o[0] + 3 + 5 * k as i32, o[2] + 4);
+        bot.cmd_reply(&format!(
+            "fill {} {} {} {} {} {} stone",
+            x - 1,
+            Y,
+            z - 1,
+            x + 1,
+            Y + H,
+            z + 1
+        ))?;
+        bot.cmd_reply(&format!("setblock {x} {Y} {z} {base}"))?;
+        bot.cmd_reply(&format!("fill {x} {} {z} {x} {} {z} water", Y + 1, Y + H))?;
+        let top = [x, Y + H, z];
+        if !bot.wait_until(Duration::from_secs(5), |s| {
+            s.world.name(top[0], top[1], top[2]) == "bubble_column"
+        }) {
+            ctx.check(false, format!("{tag}: no bubble column"));
+            continue;
+        }
+        bot.wait_ticks(10);
+        let t0 = Instant::now();
+        let sy = if *tag == "up" {
+            Y as f64 + 1.2
+        } else {
+            (Y + H) as f64 + 0.3
+        };
+        bot.cmd_reply(&format!(
+            "summon minecraft:item {}.5 {sy:.2} {}.5 {{Item:{{id:\"minecraft:stone\",count:1}},Motion:[0.0,0.0,0.0],PickupDelay:32767}}",
+            x, z
+        ))?;
+        bot.wait_until(Duration::from_secs(3), |s| {
+            s.entities
+                .values()
+                .any(|e| e.kind == "item" && e.added >= t0)
+        });
+        let id = {
+            let s = bot.st();
+            s.entities
+                .iter()
+                .filter(|(_, e)| e.kind == "item" && e.added >= t0)
+                .max_by_key(|(_, e)| e.added)
+                .map(|(k, _)| *k)
+        };
+        let Some(id) = id else {
+            ctx.check(false, format!("{tag}: item never appeared"));
+            continue;
+        };
+        let mut at = Vec::new();
+        for t in [20u32, 40] {
+            bot.wait_ticks(20);
+            let Some(p) = bot.st().entities.get(&id).map(|e| e.pos) else {
+                continue;
+            };
+            at.push(format!("t{t} y{:.2}", p[1]));
+            // relative to the start; once at the surface the item bobs (vanilla threw it 6 blocks
+            // above the column), so the up case only checks it got out at t40
+            if *tag == "up" && t == 40 {
+                ctx.metric(
+                    "up_out_40",
+                    (p[1] >= (Y + H) as f64 - 1.0) as u8 as f64,
+                    0.0,
+                );
+            } else {
+                ctx.metric(&format!("{tag}_dy_{t}"), p[1] - sy, 1.0);
+            }
+        }
+        ctx.note(format!("{tag}: {}", at.join(" ")));
+        bot.cmd(&format!(
+            "kill @e[type=minecraft:item,x={x},y={Y},z={z},distance=..20]"
+        ));
+        bot.wait_ticks(4);
+    }
+    Ok(())
+}

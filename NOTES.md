@@ -882,7 +882,12 @@ Measured with the oracle mod's fx log (FxParticleMixin / FxSoundMixin: the clien
 - Bubble columns (2026-11-27, cases bubble_soul_sand / bubble_magma / bubble_removed): water sources over soul sand become
   bubble_column[drag=false], over magma drag=true, a column continues upward through every water source above it;
   replacing the base turns the whole column back into water sources. Basalt converts the contiguous run at once
-  (fluid.rs update_bubble_column); the timing of the change is not measured (only final states), entity push not done.
+  (fluid.rs update_bubble_column); the timing of the change is not measured (only final states).
+- Bubble column push (2026-11-28, scenario m6_bubble_push, 1x1 columns 12 high): vanilla items summoned at the bottom
+  of a soul-sand column rise ~9.7 blocks in 20 ticks and get thrown ~6 blocks above the surface; at the top of a magma
+  column they sink 4.3 blocks in 20 ticks, 10.1 in 40. Basalt (items.rs bubble_push, also used by mob_physics): per
+  tick in a bubble_column cell, soul sand +0.06 up to 0.7 (+0.1 up to 1.8 when the cell above is air), magma -0.03
+  down to -0.3 (to -0.9 under air): within 0.25 / 0.5 blocks of vanilla at 20 / 40 ticks. Mobs: same rule, not measured.
 - Basalt generator (case lava_basalt): lava entering a cell over soul soil with blue ice beside it becomes basalt
   (axis=y) on the tick it fills. Basalt's set_block now runs the fluid reactions after broadcasting the update — before,
   a reaction replacing the very block (lava -> basalt) left viewers with the stale lava state.

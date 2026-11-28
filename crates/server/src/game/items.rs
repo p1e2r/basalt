@@ -269,6 +269,9 @@ impl Game {
                 // shallow flowing water does not hold items up (m6_item_drift: they settle on the floor)
                 v[1] -= 0.04;
             }
+            if let Some(dv) = self.bubble_push(cell, v[1]) {
+                v[1] = dv;
+            }
             if in_water {
                 // current: fitted to m6_item_drift (vanilla 26.2: ~4.5 blocks in the first 20 ticks)
                 let f = self.flow_at(cell);
@@ -521,5 +524,26 @@ impl Game {
         if self.tick % 10 == 0 {
             self.sync_item_viewers();
         }
+    }
+}
+
+impl Game {
+    /// Vertical velocity of an entity in the bubble column cell `c` (None: not in a column).
+    /// Over soul sand the column pushes up (+0.06 a tick up to 0.7; +0.1 up to 1.8 in the top cell
+    /// under air), over magma it drags down (-0.03 a tick down to -0.3; to -0.9 under air).
+    /// Matches vanilla's item motion in m6_bubble_push.
+    pub(super) fn bubble_push(&self, c: [i32; 3], vy: f64) -> Option<f64> {
+        let s = basalt_data::BlockState(self.world.get_block(c[0], c[1], c[2]));
+        if s.name() != "bubble_column" {
+            return None;
+        }
+        let drag = s.get("drag") == Some("true");
+        let open = basalt_data::BlockState(self.world.get_block(c[0], c[1] + 1, c[2])).is_air();
+        Some(match (drag, open) {
+            (false, false) => (vy + 0.06).min(0.7),
+            (false, true) => (vy + 0.1).min(1.8),
+            (true, false) => (vy - 0.03).max(-0.3),
+            (true, true) => (vy - 0.03).max(-0.9),
+        })
     }
 }
