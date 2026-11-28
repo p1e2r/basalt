@@ -247,8 +247,17 @@ impl Game {
             return;
         }
         let mut due = Vec::new();
+        // a tick waits until the 3x3 chunks around it are loaded (it reads neighbours up to 4 blocks
+        // away; right after a restart a chunk's saved ticks would otherwise see unloaded neighbours
+        // as air and drain)
+        let world = &self.world;
+        let ready = |p: &[i32; 3]| {
+            (-1..=1).all(|dx| {
+                (-1..=1).all(|dz| world.chunk((p[0] >> 4) + dx, (p[2] >> 4) + dz).is_some())
+            })
+        };
         self.fluid_ticks.retain(|(t, p)| {
-            if *t <= now {
+            if *t <= now && ready(p) {
                 due.push(*p);
                 false
             } else {
@@ -560,5 +569,93 @@ impl Game {
             return [0.0; 3];
         }
         [v[0] / l, 0.0, v[2] / l]
+    }
+}
+
+/// Fluid id of a scheduled tick in chunk NBT (vanilla's `fluid_ticks` entries).
+fn tick_fluid_id(c: &Cell) -> &'static str {
+    match (c.f, c.source) {
+        (Fluid::Water, true) => "minecraft:water",
+        (Fluid::Water, false) => "minecraft:flowing_water",
+        (Fluid::Lava, true) => "minecraft:lava",
+        (Fluid::Lava, false) => "minecraft:flowing_lava",
+    }
+}
+
+impl Game {
+    /// Write the pending fluid ticks into the loaded chunks' `fluid_ticks` lists (vanilla's chunk
+    /// format: `i` fluid id, absolute `x` `y` `z`, `t` ticks left, `p` priority) so they survive
+    /// saving; `only` limits it to one chunk (before unloading it, whose ticks then leave the queue).
+    pub(super) fn fluid_ticks_to_chunks(&mut self, only: Option<(i32, i32)>) {
+        use basalt_nbt::Tag;
+        let now = self.tick;
+        let mut per: HashMap<(i32, i32), Vec<Tag>> = HashMap::new();
+        for (due, p) in &self.fluid_ticks {
+            let key = (p[0] >> 4, p[2] >> 4);
+            if only.is_some_and(|o| o != key) {
+                continue;
+            }
+            let Some(c) = self.fcell(*p) else {
+                continue;
+            };
+            per.entry(key).or_default().push(basalt_nbt::compound([
+                ("i", Tag::String(tick_fluid_id(&c).into())),
+                ("x", Tag::Int(p[0])),
+                ("y", Tag::Int(p[1])),
+                ("z", Tag::Int(p[2])),
+                ("t", Tag::Int(due.saturating_sub(now) as i32)),
+                ("p", Tag::Int(0)),
+            ]));
+        }
+        let keys: Vec<(i32, i32)> = match only {
+            Some(k) => vec![k],
+            None => self.world.loaded_chunks(),
+        };
+        for k in keys {
+            let list = Tag::List(per.remove(&k).unwrap_or_default());
+            let Some(ch) = self.world.chunk_mut(k.0, k.1) else {
+                continue;
+            };
+            let empty = matches!(&list, Tag::List(v) if v.is_empty());
+            let same = match ch.extra.get("fluid_ticks") {
+                Some(old) => *old == list,
+                None => empty,
+            };
+            if !same {
+                ch.extra.insert("fluid_ticks".into(), list);
+                ch.dirty = true;
+            }
+        }
+        if let Some(k) = only {
+            let keep = |p: &[i32; 3]| (p[0] >> 4, p[2] >> 4) != k;
+            self.fluid_ticks.retain(|(_, p)| keep(p));
+            self.fluid_pending.retain(keep);
+        }
+    }
+
+    /// Queue the fluid ticks a chunk loaded from disk carries (Basalt's or vanilla's saves).
+    pub(super) fn fluid_ticks_from_chunk(&mut self, cx: i32, cz: i32) {
+        use basalt_nbt::Tag;
+        let Some(ch) = self.world.chunk(cx, cz) else {
+            return;
+        };
+        let Some(Tag::List(list)) = ch.extra.get("fluid_ticks") else {
+            return;
+        };
+        let mut found = Vec::new();
+        for t in list {
+            let g = |k: &str| t.get(k).and_then(|v| v.as_i64());
+            if let (Some(x), Some(y), Some(z)) = (g("x"), g("y"), g("z")) {
+                found.push((
+                    [x as i32, y as i32, z as i32],
+                    g("t").unwrap_or(0).max(0) as u64,
+                ));
+            }
+        }
+        for (p, t) in found {
+            if self.fluid_pending.insert(p) {
+                self.fluid_ticks.push((self.tick + t, p));
+            }
+        }
     }
 }

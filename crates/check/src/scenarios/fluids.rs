@@ -6,9 +6,10 @@
 //! servers). Compared against vanilla 26.2 with --diff. `FLUID_CASE=<substring>` filters cases.
 use crate::bot::Bot;
 use crate::runner::{Ctx, ARENA_Y};
+use crate::scenarios::util::setblock;
 use anyhow::Result;
 use std::collections::BTreeMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const Y: i32 = ARENA_Y + 1;
 const R: i32 = 7;
@@ -420,5 +421,60 @@ pub fn item_drift(ctx: &mut Ctx) -> Result<()> {
         ));
         bot.wait_ticks(4);
     }
+    Ok(())
+}
+
+/// Pending fluid ticks survive a restart (saved in the chunks' `fluid_ticks`, vanilla's format): a
+/// lava source set just before stopping (its first spread is due 30 ticks later) still spreads to
+/// its four neighbours after the restart, and a water source mid-spread keeps spreading.
+pub fn fluid_ticks_persist(ctx: &mut Ctx) -> Result<()> {
+    let bot = ctx.bot()?;
+    let name = bot.name.clone();
+    // sources 6+ blocks from the arena edges (water flows only towards a drop within 4)
+    let o = ctx.arena(&bot, 24, 13, 4)?;
+    ctx.stand(&bot, o[0] + 1, o[2] + 1, "creative")?;
+    let y = crate::runner::ARENA_Y + 1;
+    let lava = [o[0] + 6, y, o[2] + 6];
+    let water = [o[0] + 17, y, o[2] + 6];
+    setblock(&bot, water, "minecraft:water")?;
+    bot.wait_ticks(7);
+    setblock(&bot, lava, "minecraft:lava")?;
+    bot.quit();
+    ctx.restart()?;
+    let bot = Bot::connect(&ctx.addr(), &name)?;
+    bot.wait_chunks(1, Duration::from_secs(10))?;
+    let around = |p: [i32; 3], r: i32| -> Vec<[i32; 3]> {
+        let mut v = Vec::new();
+        for dx in -r..=r {
+            for dz in -r..=r {
+                if dx.abs() + dz.abs() == r {
+                    v.push([p[0] + dx, p[1], p[2] + dz]);
+                }
+            }
+        }
+        v
+    };
+    let ok = bot.wait_until(Duration::from_secs(6), |s| {
+        around(lava, 1)
+            .iter()
+            .all(|q| s.world.name(q[0], q[1], q[2]) == "lava")
+    });
+    ctx.check(ok, "lava didn't spread after the restart");
+    let ok = bot.wait_until(Duration::from_secs(6), |s| {
+        around(water, 3)
+            .iter()
+            .all(|q| s.world.name(q[0], q[1], q[2]) == "water")
+    });
+    if !ok {
+        let s = bot.st();
+        for r in 0..=3 {
+            let names: Vec<String> = around(water, r)
+                .iter()
+                .map(|q| s.world.state_string(q[0], q[1], q[2]))
+                .collect();
+            ctx.note(format!("water r{r}: {names:?}"));
+        }
+    }
+    ctx.check(ok, "water didn't keep spreading after the restart");
     Ok(())
 }

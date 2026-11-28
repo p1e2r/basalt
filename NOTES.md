@@ -868,8 +868,13 @@ Measured with the oracle mod's fx log (FxParticleMixin / FxSoundMixin: the clien
   makes stone. Basalt sends level_event 1501 (fizz) for these (not compared).
 - Basalt: game/fluid.rs, scheduled per-dimension fluid ticks queued by set_block for the changed cell and its 6 neighbours.
   Not done: bubble columns pushing entities, lava fire spread, nether lava speed (10 ticks, drop-off 1, slope 4: set from the vanilla
-  dimension rules, not measured), lava's occasional slower tick, fluid pushing entities, fluid ticks saved in chunks
-  (pending ticks are lost on restart).
+  dimension rules, not measured), lava's occasional slower tick, fluid pushing entities.
+- Pending fluid ticks persist (2026-11-28, scenario m6_fluid_ticks_persist): before every save (and before a chunk
+  unloads) Basalt writes the chunk's queued ticks into its `fluid_ticks` list in vanilla's form (`i` =
+  minecraft:water / flowing_water / lava / flowing_lava from the current block, absolute `x` `y` `z`, `t` ticks left,
+  `p` 0); loading a chunk queues the ticks it carries (also from vanilla-saved worlds, which Basalt used to carry along
+  untouched). A due tick waits until the 3x3 chunks around it are loaded (otherwise freshly loaded flowing cells saw
+  their source's unloaded chunk as air and drained). block_ticks are still only carried along.
 - Waterlogged blocks (2026-11-27, cases waterlogged_slab / waterlogged_stairs_pillar): a waterlogged block set by
   /setblock spreads like a source at the same timing. Fluid never passes a face that the block's collision shape covers
   completely (waterlogged stairs facing north keep the water in on the north side; a bottom slab can't drain downwards).

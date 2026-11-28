@@ -420,6 +420,7 @@ impl Game {
         let back = self.cur;
         for d in 0..self.parked.len() {
             self.enter(d);
+            self.fluid_ticks_to_chunks(None);
             if let Err(e) = self.world.save_all() {
                 log::error!("saving {}: {e:#}", dim::DIMS[d].id);
             }
@@ -612,6 +613,7 @@ impl Game {
         match self.world.load(cx, cz) {
             Ok(true) => {
                 self.be_adopt_chunk(cx, cz);
+                self.fluid_ticks_from_chunk(cx, cz);
                 return true;
             }
             Ok(false) => {}
@@ -2141,6 +2143,7 @@ impl Game {
             let keep_spawn = self.cur == dim::OVERWORLD;
             for c in self.world.loaded_chunks() {
                 if !seen.contains(&c) && (!keep_spawn || c.0.abs() > 2 || c.1.abs() > 2) {
+                    self.fluid_ticks_to_chunks(Some(c));
                     let _ = self.world.unload(c.0, c.1);
                     self.be_drop_chunk(c.0, c.1);
                 }
