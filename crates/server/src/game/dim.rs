@@ -114,6 +114,7 @@ pub(super) struct DimState {
     pub orbs: HashMap<i32, xporb::Orb>,
     pub bes: HashMap<[i32; 3], container::Be>,
     pub portals: HashSet<[i32; 3]>,
+    pub crystals: HashMap<i32, crystal::Crystal>,
 }
 
 impl DimState {
@@ -134,6 +135,7 @@ impl DimState {
             orbs: HashMap::new(),
             bes: HashMap::new(),
             portals: HashSet::new(),
+            crystals: HashMap::new(),
         }
     }
 }
@@ -154,6 +156,7 @@ impl Game {
         std::mem::swap(&mut self.orbs, &mut s.orbs);
         std::mem::swap(&mut self.bes, &mut s.bes);
         std::mem::swap(&mut self.portals, &mut s.portals);
+        std::mem::swap(&mut self.crystals, &mut s.crystals);
     }
 
     /// Make dimension `d` the current one.

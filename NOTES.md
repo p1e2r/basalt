@@ -526,8 +526,23 @@ Measured from the vanilla client's own model parts / PoseStacks (exact fits; for
   height+10; bedrock at the top with fire above (lit by the crystal entity in vanilla; Basalt places it directly).
 - Server (game/dim.rs END = 2, Layout::END: y 0..256 with sky light, sea level 0): `execute in minecraft:the_end`,
   region in world/dimensions/minecraft/the_end/region. Scenario m8_end_execute_in = vanilla (column counts + tops).
-  Not done: dragon fight (dragon, exit portal, gateways after kills), end crystals as entities, end portals/eyes of ender,
-  end cities, endermen, the arrival platform rebuilt on travel.
+- End portals (scenario m8_end_portal = vanilla): an eye on an empty frame sets eye=true (survival uses it up); the 12
+  frames around a 3x3 hole, all with eyes and facing the hole, fill it with end_portal (world event 1038); a complete
+  ring facing outward stays empty; /setblock never opens one. Touching an end portal outside the End: to 100.5 49 0.5,
+  yaw 90, pitch kept, 5x5 obsidian platform at y 48 with 5x5x3 air above rebuilt. Touching one in the End: game_event 4
+  (1 = credits the first time, player data seenCredits) and nothing else until the client's "perform respawn", then the
+  overworld spawn keeping everything.
+- Exit podium (m8_end_podium, block for block = vanilla): built on the first entry at the top solid block y0 of column
+  (0,0) (seed 12345: 64): d <= 2.5 bedrock at y0-1 (end stone out to 3.5), bedrock ring 2.5 < d <= 3.5 at y0 around an
+  air basin (end_portal once the dragon is dead), air above, bedrock pillar y0..y0+3, wall torches facing out at y0+2.
+- End crystals (m8_end_crystals = vanilla): one per spike at (x+.5, height+1, z+.5) with default show_bottom (no data
+  sent); the end_crystal item on obsidian/bedrock with air above spawns one at the top centre with show_bottom false
+  (entity data index 9, boolean); nothing on stone. A hit removes it and explodes (power 6) at its feet: standing on
+  obsidian the blast is shadowed (every downward ray enters the obsidian first), so the floor around stays intact in
+  both servers, while TNT in the same spot makes ~30 holes (Basalt: no primed TNT entity yet). Explosions remove crystals
+  without a second blast (not measured); arrows/projectiles don't hit crystals yet; no beams (dragon).
+  Not done: dragon fight (dragon, active exit portal, gateways after kills, crystal respawning), end cities, endermen,
+  eye of ender flight to strongholds, chorus fruit teleport.
 
 ## Enchanting / anvil / grindstone / smithing / brewing (M10) — measured on vanilla 26.2 with scenarios m10_*
 - Menus (open_screen): enchantment (13, title `container.enchant`, 2 + 36 slots: item, lapis), anvil (8, `container.repair`, 3: two inputs, result), grindstone (15,

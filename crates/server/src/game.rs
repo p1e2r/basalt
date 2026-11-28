@@ -7,6 +7,7 @@ mod bucket;
 mod cmd;
 mod combat;
 mod container;
+mod crystal;
 mod debug;
 pub(crate) mod dim;
 mod endportal;
@@ -248,6 +249,8 @@ pub struct Game {
     cmd_dim: Option<usize>,
     /// nether portal blocks of the current dimension (vanilla keeps them as POIs)
     portals: HashSet<[i32; 3]>,
+    /// End crystals of the current dimension.
+    crystals: HashMap<i32, crystal::Crystal>,
     /// set while portal blocks are placed / removed in bulk (no frame re-checks)
     portal_quiet: bool,
 }
@@ -359,6 +362,7 @@ impl Game {
             parked: states,
             cmd_dim: None,
             portals: s.portals,
+            crystals: s.crystals,
             portal_quiet: false,
         };
         g.no_spawning = g.sh.cfg.no_spawning;
@@ -629,6 +633,7 @@ impl Game {
         }
         self.world.insert(c);
         self.be_adopt_chunk(cx, cz);
+        self.crystals_for_new_chunk(cx, cz);
         // neighbours that players already have may get new light across the border
         for (nx, nz) in self.world.light_chunk_changed(cx, cz) {
             if (nx, nz) == (cx, cz) {
@@ -1930,6 +1935,10 @@ impl Game {
             return;
         }
         if *item_name == "ender_eye" && self.use_ender_eye(eid, b) {
+            return;
+        }
+        if *item_name == "end_crystal" {
+            self.use_end_crystal(eid, b);
             return;
         }
         let item_name: &'static str = item_name;

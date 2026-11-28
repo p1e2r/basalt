@@ -19,6 +19,7 @@ impl Game {
             .chain(self.projs.values().map(|a| (a.eid, a.pos)))
             .chain(self.fallers.values().map(|f| (f.eid, f.pos)))
             .chain(self.orbs.values().map(|o| (o.eid, o.pos)))
+            .chain(self.crystals.values().map(|c| (c.eid, c.pos)))
     }
 
     fn spawn_packets_for(&self, eid: i32) -> Vec<Writer> {
@@ -36,6 +37,9 @@ impl Game {
         }
         if let Some(o) = self.orbs.get(&eid) {
             return o.spawn_packets();
+        }
+        if let Some(c) = self.crystals.get(&eid) {
+            return c.spawn_packets();
         }
         Vec::new()
     }

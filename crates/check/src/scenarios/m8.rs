@@ -3,6 +3,7 @@
 //! the portals they create in the Nether afterwards (the vanilla server is shared).
 use super::util::*;
 use crate::bot::Bot;
+use crate::proto::Meta;
 use crate::runner::{Ctx, ARENA_Y};
 use anyhow::{bail, Result};
 use std::time::{Duration, Instant};
@@ -416,6 +417,174 @@ pub fn end_podium(ctx: &mut Ctx) -> Result<()> {
     bot.cmd_reply("execute in minecraft:overworld run tp @s 0.5 220 0.5")?;
     wait_dim(&bot, OVERWORLD, 10);
     bot.set_frozen(false);
+    Ok(())
+}
+
+/// End crystals: one on every spike top (positions + show_bottom metadata seen over the wire), an
+/// end_crystal item used on obsidian spawns one on top (not on stone), and hitting it blows it up
+/// (power 6: crater in the arena floor).
+pub fn end_crystals(ctx: &mut Ctx) -> Result<()> {
+    let bot = ctx.bot()?;
+    let o = ctx.arena(&bot, 16, 16, 8)?;
+    ctx.stand(&bot, o[0] + 2, o[2] + 2, "creative")?;
+    let y = ARENA_Y + 1;
+    // ---- placing
+    let obs = [o[0] + 8, y, o[2] + 8];
+    let stone = [o[0] + 4, y, o[2] + 8];
+    setblock(&bot, obs, "minecraft:obsidian")?;
+    setblock(&bot, stone, "minecraft:stone")?;
+    ctx.gamemode(&bot, "survival")?;
+    give(&bot, "end_crystal", 2)?;
+    hold(&bot, "end_crystal")?;
+    bot.tp([o[0] as f64 + 6.5, y as f64, o[2] as f64 + 5.5])?;
+    bot.wait_on_ground(Duration::from_secs(3));
+    let t0 = Instant::now();
+    for b in [stone, obs] {
+        bot.look_at([b[0] as f64 + 0.5, b[1] as f64 + 1.0, b[2] as f64 + 0.5]);
+        bot.wait_ticks(2);
+        bot.place(b, 1);
+        bot.wait_ticks(10);
+    }
+    let placed: Vec<(i32, [f64; 3])> = {
+        let s = bot.st();
+        s.entities
+            .iter()
+            .filter(|(_, e)| e.kind == "end_crystal" && e.added >= t0)
+            .map(|(k, e)| (*k, e.pos))
+            .collect()
+    };
+    ctx.metric("placed_crystals", placed.len() as f64, 0.0);
+    ctx.metric(
+        "crystals_left_in_hand",
+        bot.st().count("end_crystal") as f64,
+        0.0,
+    );
+    if let Some((id, p)) = placed.first().copied() {
+        ctx.metric("placed_dx", p[0] - obs[0] as f64, 0.01);
+        ctx.metric("placed_dy", p[1] - obs[1] as f64, 0.01);
+        ctx.metric("placed_dz", p[2] - obs[2] as f64, 0.01);
+        let bottom = bot
+            .st()
+            .entities
+            .get(&id)
+            .and_then(|e| e.meta.get(&9).cloned());
+        ctx.note(format!("placed crystal meta 9 (show_bottom): {bottom:?}"));
+        // ---- hit it
+        bot.look_at([p[0], p[1] + 1.0, p[2]]);
+        bot.wait_ticks(2);
+        bot.attack(id);
+        let gone = bot.wait_until(Duration::from_secs(3), |s| !s.entities.contains_key(&id));
+        ctx.metric("crystal_gone_after_hit", gone as u8 as f64, 0.0);
+        bot.wait_ticks(10);
+        // floor blocks blown away around it (the obsidian survives)
+        let mut air = 0;
+        {
+            let s = bot.st();
+            for x in obs[0] - 6..=obs[0] + 6 {
+                for z in obs[2] - 6..=obs[2] + 6 {
+                    if s.world.name(x, ARENA_Y, z) == "air" {
+                        air += 1;
+                    }
+                }
+            }
+        }
+        ctx.metric("floor_holes", air as f64, 15.0);
+        let mut box_air = 0;
+        {
+            let s = bot.st();
+            for x in obs[0] - 6..=obs[0] + 6 {
+                for z in obs[2] - 6..=obs[2] + 6 {
+                    for yy in ARENA_Y - 2..ARENA_Y {
+                        if s.world.name(x, yy, z) == "air" {
+                            box_air += 1;
+                        }
+                    }
+                }
+            }
+        }
+        let (side, exps) = {
+            let s = bot.st();
+            (
+                s.world.name(stone[0], stone[1], stone[2]).to_string(),
+                s.explosions
+                    .iter()
+                    .map(|e| (e.pos, e.radius, e.blocks))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        ctx.note(format!("air below the floor after the blast: {box_air}; side stone {side}; explosions {exps:?}"));
+        ctx.metric(
+            "obsidian_kept",
+            (bot.st().world.name(obs[0], obs[1], obs[2]) == "obsidian") as u8 as f64,
+            0.0,
+        );
+    }
+    // control: TNT in the same geometry (obsidian on the floor) blows holes in the floor
+    ctx.gamemode(&bot, "creative")?;
+    bot.fly(true);
+    let t = [o[0] + 3, y, o[2] + 3];
+    setblock(&bot, t, "minecraft:obsidian")?;
+    bot.cmd_reply(&format!(
+        "summon minecraft:tnt {}.5 {} {}.5 {{fuse:0}}",
+        t[0],
+        t[1] + 1,
+        t[2]
+    ))?;
+    bot.wait_ticks(10);
+    let holes = {
+        let s = bot.st();
+        let mut n = 0;
+        for x in t[0] - 3..=t[0] + 3 {
+            for z in t[2] - 3..=t[2] + 3 {
+                if s.world.name(x, ARENA_Y, z) == "air" {
+                    n += 1;
+                }
+            }
+        }
+        n
+    };
+    ctx.note(format!("tnt control: {holes} floor holes"));
+    // ---- spikes
+    bot.cmd_reply("execute in minecraft:the_end run tp @s 0.5 125 0.5")?;
+    if !wait_dim(&bot, END, 10) {
+        bail!("not in the end");
+    }
+    bot.set_frozen(true);
+    bot.wait_until(Duration::from_secs(20), |s| {
+        s.entities
+            .values()
+            .filter(|e| e.kind == "end_crystal")
+            .count()
+            >= 10
+    });
+    let mut cs: Vec<([f64; 3], Option<Meta>)> = {
+        let s = bot.st();
+        s.entities
+            .values()
+            .filter(|e| {
+                e.kind == "end_crystal" && (e.pos[0].powi(2) + e.pos[2].powi(2)).sqrt() < 60.0
+            })
+            .map(|e| (e.pos, e.meta.get(&9).cloned()))
+            .collect()
+    };
+    cs.sort_by(|a, b| {
+        a.0[2]
+            .atan2(a.0[0])
+            .partial_cmp(&b.0[2].atan2(b.0[0]))
+            .unwrap()
+    });
+    ctx.metric("spike_crystals", cs.len() as f64, 0.0);
+    for (i, (p, m)) in cs.iter().enumerate() {
+        ctx.metric(&format!("spike{i}_x"), p[0], 0.01);
+        ctx.metric(&format!("spike{i}_y"), p[1], 0.01);
+        ctx.metric(&format!("spike{i}_z"), p[2], 0.01);
+        if i == 0 {
+            ctx.note(format!("spike crystal meta 9 (show_bottom): {m:?}"));
+        }
+    }
+    bot.set_frozen(false);
+    bot.cmd_reply("execute in minecraft:overworld run tp @s 0.5 220 0.5")?;
+    wait_dim(&bot, OVERWORLD, 10);
     Ok(())
 }
 

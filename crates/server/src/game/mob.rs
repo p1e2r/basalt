@@ -972,6 +972,7 @@ impl Game {
             .values()
             .filter(|m| m.alive())
             .map(|m| m.to_json())
+            .chain(self.crystals.values().map(|c| c.to_json()))
             .collect();
         let path = d.join(super::dim::DIMS[self.cur].entities);
         if let Some(p) = path.parent() {
@@ -994,6 +995,8 @@ impl Game {
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if let Some(m) = Mob::from_json(eid, &v) {
                 self.mobs.insert(eid, m);
+            } else if let Some(c) = super::crystal::Crystal::from_json(eid, &v) {
+                self.crystals.insert(eid, c);
             }
         }
         log::info!("loaded {} mobs", self.mobs.len());

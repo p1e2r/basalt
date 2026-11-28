@@ -209,6 +209,10 @@ impl Game {
         if p.dead || p.gamemode == 3 || target == eid {
             return;
         }
+        if self.hit_crystal(eid, target) {
+            return;
+        }
+        let p = &self.players[&eid];
         let eye = [p.pos[0], p.pos[1] + 1.62, p.pos[2]];
         let tpos = if let Some(m) = self.mobs.get(&target) {
             if !m.alive() {

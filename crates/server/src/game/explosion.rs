@@ -52,6 +52,7 @@ impl Game {
         destroy_blocks: bool,
     ) {
         let r = radius as f64;
+        self.crystals_in_blast(c, r);
         // ---- blocks: 16×16×16 rays from the cube surface
         let mut touched: HashSet<[i32; 3]> = HashSet::new();
         let mut destroyed: HashSet<[i32; 3]> = HashSet::new();
